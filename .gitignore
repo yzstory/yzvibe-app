@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+*.tgz
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+*.xcuserstate
+ios/YzVibe.xcodeproj/
+ios/App/YzVibe/Info.plist
+
+# 设计画布：已组装的可打开文件体积 2.6MB，由 design/canvas/build.py + seed 脚本重新生成
+design/canvas/yzvibe-app-design.html
+
+# 本地运行数据
+.yzvibe/
+*.log
+.env

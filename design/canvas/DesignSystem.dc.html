@@ -1,0 +1,155 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+  :root { 
+  --brand: oklch(0.64 0.17 40); --brand-soft: oklch(0.94 0.04 45); --brand-ink: oklch(0.99 0.01 80);
+  --sage: oklch(0.60 0.09 165); --sage-soft: oklch(0.93 0.035 165);
+  --amber: oklch(0.82 0.13 80); --amber-text: oklch(0.58 0.12 70); --amber-soft: oklch(0.96 0.05 85);
+  --danger: oklch(0.60 0.20 25); --danger-soft: oklch(0.95 0.04 25);
+  --purple: oklch(0.55 0.15 310); --purple-soft: oklch(0.94 0.04 310);
+  --blue: oklch(0.58 0.13 235); --blue-soft: oklch(0.94 0.04 235);
+  --surface: oklch(0.975 0.009 80); --elev: oklch(0.995 0.004 85);
+  --fill: oklch(0.935 0.012 75); --fill2: oklch(0.958 0.01 78);
+  --border: oklch(0.90 0.014 70);
+  --label: oklch(0.22 0.02 45); --label2: oklch(0.50 0.02 55); --label3: oklch(0.68 0.018 60);
+  --glass-bg: oklch(0.995 0.004 85 / 0.62); --glass-hi: rgba(255,255,255,0.65); --glass-hi2: rgba(255,255,255,0.32);
+  --shadow-card: 0 1px 2px oklch(0.3 0.03 50 / 0.05), 0 6px 20px oklch(0.3 0.03 50 / 0.07);
+  --shadow-glass: 0 0 0 0.5px oklch(0.3 0.03 50 / 0.10), 0 10px 30px oklch(0.3 0.03 50 / 0.10);
+  --shadow-float: 0 2px 8px oklch(0.3 0.03 50 / 0.10), 0 16px 40px oklch(0.3 0.03 50 / 0.16);
+  --orb-alpha: 0.85;
+ }
+  
+  * { box-sizing: border-box; }
+  body { margin: 0; background: transparent; }
+  a { color: var(--brand); } a:hover { color: oklch(0.55 0.17 40); }
+  .phone { position: relative; width: 390px; height: 844px; overflow: hidden; background: var(--surface); color: var(--label);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", "Noto Sans CJK SC", sans-serif;
+    -webkit-font-smoothing: antialiased; font-size: 17px; line-height: 1.35; letter-spacing: -0.01em; }
+  .paper { background-image: radial-gradient(oklch(0.5 0.03 60 / 0.035) 0.5px, transparent 0.5px); background-size: 6px 6px; }
+  .orb { position: absolute; border-radius: 9999px; filter: blur(60px); opacity: var(--orb-alpha); pointer-events: none; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0; }
+  .glass { background: var(--glass-bg); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+    box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 0 0 0.5px var(--glass-hi2), var(--shadow-glass);
+    background-image: linear-gradient(135deg, var(--glass-hi2), transparent 45%); }
+  .glass-brand { background: color-mix(in oklch, var(--brand) 82%, transparent); color: var(--brand-ink);
+    -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px color-mix(in oklch, var(--brand) 35%, transparent);
+    background-image: linear-gradient(135deg, rgba(255,255,255,0.28), transparent 50%); }
+  .card { background: var(--elev); border-radius: 24px; box-shadow: var(--shadow-card); }
+  .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--label2); }
+  .large-title { font-size: 34px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; }
+  .title1 { font-size: 28px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2; }
+  .title2 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.25; }
+  .headline { font-size: 17px; font-weight: 600; }
+  .body { font-size: 17px; }
+  .subhead { font-size: 15px; }
+  .footnote { font-size: 13px; }
+  .caption { font-size: 12px; }
+  .l2 { color: var(--label2); } .l3 { color: var(--label3); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .chip-claude { background: var(--amber-soft); color: var(--amber-text); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--amber) 60%, transparent); }
+  .chip-codex { background: var(--purple-soft); color: var(--purple); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--purple) 40%, transparent); }
+  .chip-custom { background: var(--blue-soft); color: var(--blue); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--blue) 40%, transparent); }
+  .chip-sage { background: var(--sage-soft); color: var(--sage); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--sage) 50%, transparent); }
+  .chip-brand { background: var(--brand-soft); color: var(--brand); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--brand) 40%, transparent); }
+  .chip-fill { background: var(--fill); color: var(--label2); }
+  .chip-danger { background: var(--danger-soft); color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--danger) 45%, transparent); }
+  .dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; }
+  .dot-sage { background: var(--sage); box-shadow: 0 0 0 3px color-mix(in oklch, var(--sage) 22%, transparent); }
+  .dot-amber { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in oklch, var(--amber) 30%, transparent); }
+  .dot-danger { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 22%, transparent); }
+  .dot-off { background: var(--label3); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 50px; padding: 0 20px; border-radius: 999px; font-size: 16px; font-weight: 600; border: none; }
+  .btn-primary { background: var(--brand); color: var(--brand-ink); box-shadow: 0 8px 22px color-mix(in oklch, var(--brand) 32%, transparent), inset 0 1px 0 rgba(255,255,255,0.35); }
+  .btn-secondary { background: var(--fill); color: var(--label); }
+  .btn-outline { background: transparent; color: var(--label); box-shadow: inset 0 0 0 1.5px var(--border); }
+  .btn-danger-outline { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--danger) 55%, transparent); }
+  .input { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-radius: 16px; background: var(--fill); color: var(--label); box-shadow: inset 0 0 0 1px var(--border); font-size: 16px; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 999px; display: flex; align-items: center; justify-content: center; }
+  .navbar { position: absolute; left: 16px; right: 16px; top: 62px; height: 56px; border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 6px; z-index: 5; }
+  .tabbar { position: absolute; left: 20px; right: 20px; bottom: 22px; height: 66px; border-radius: 999px; display: flex; align-items: center; justify-content: space-around; padding: 0 8px; z-index: 5; }
+  .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 54px; border-radius: 999px; color: var(--label2); font-size: 11px; font-weight: 600; position: relative; }
+  .tab-on { background: var(--brand); color: var(--brand-ink); box-shadow: 0 6px 18px color-mix(in oklch, var(--brand) 35%, transparent), inset 0 1px 0 rgba(255,255,255,0.4); }
+  .badge { position: absolute; top: 4px; right: 12px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--amber); color: oklch(0.25 0.05 60); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--elev); }
+  .toggle { width: 51px; height: 31px; border-radius: 999px; background: var(--brand); position: relative; flex-shrink: 0; }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 22px; width: 27px; height: 27px; border-radius: 999px; background: white; box-shadow: 0 3px 8px rgba(0,0,0,0.15); }
+  .toggle-off { background: var(--fill); box-shadow: inset 0 0 0 1px var(--border); }
+  .toggle-off::after { left: 2px; }
+  .row { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 18px; }
+  .sep { height: 1px; background: var(--border); margin: 0 18px; }
+  .code { background: var(--fill2); border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.5; color: var(--label2); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .scroll { position: absolute; left: 0; right: 0; top: 0; bottom: 0; overflow: hidden; }
+
+  .phone { width: 1200px; height: 1180px; }
+  </style>
+</helmet>
+<div class="phone paper">
+
+<div style="position:absolute;left:0;right:0;top:0;bottom:0;padding:40px 48px;display:flex;flex-direction:column;gap:36px">
+  <div>
+    <div class="eyebrow" style="color:var(--brand)">YzVibe · Design System</div>
+    <div class="large-title" style="margin-top:6px">Liquid Glass × 暖调纸感</div>
+    <div class="subhead l2" style="margin-top:6px;max-width:720px">玻璃只用于漂浮层（导航、Tab、输入条、审批卡），内容层永远是不透明纸感卡片。赭红 = 行动，鼠尾草 = 在线/成功，琥珀 = Claude/等待，红 = 危险。</div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="eyebrow">品牌与语义色</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--brand);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">brand 赭红</div><div class="caption mono l2">oklch(0.64 0.17 40)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--brand-soft);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">brand-soft</div><div class="caption mono l2">oklch(0.94 0.04 45)</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--sage);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">sage 鼠尾草</div><div class="caption mono l2">oklch(0.60 0.09 165)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--sage-soft);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">sage-soft</div><div class="caption mono l2">oklch(0.93 0.035 165)</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--amber);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">amber 琥珀</div><div class="caption mono l2">oklch(0.82 0.13 80)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--amber-soft);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">amber-soft</div><div class="caption mono l2">oklch(0.96 0.05 85)</div></div>
+      <div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--danger);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">danger</div><div class="caption mono l2">oklch(0.60 0.20 25)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--purple);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">purple (Codex)</div><div class="caption mono l2">oklch(0.55 0.15 310)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--blue);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">blue (Custom)</div><div class="caption mono l2">oklch(0.58 0.13 235)</div></div>
+    </div>
+  </div>
+  <div style="display:flex;flex-direction:column;gap:14px">
+    <div class="eyebrow">纸感分层</div>
+    <div style="display:flex;gap:18px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--surface);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">surface</div><div class="caption mono l2">oklch(0.975 0.009 80)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--elev);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">surface-elevated</div><div class="caption mono l2">oklch(0.995 0.004 85)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--fill);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">fill</div><div class="caption mono l2">oklch(0.935 0.012 75)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--fill2);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">fill-secondary</div><div class="caption mono l2">oklch(0.958 0.01 78)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--border);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">border</div><div class="caption mono l2">oklch(0.90 0.014 70)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--label);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">label</div><div class="caption mono l2">oklch(0.22 0.02 45)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--label2);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">label-secondary</div><div class="caption mono l2">oklch(0.50 0.02 55)</div></div><div style="display:flex;flex-direction:column;gap:8px;width:120px"><div style="height:64px;border-radius:16px;background:var(--label3);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="footnote" style="font-weight:600">label-tertiary</div><div class="caption mono l2">oklch(0.68 0.018 60)</div></div>
+    </div>
+  </div>
+  <div style="display:flex;gap:40px">
+    <div style="display:flex;flex-direction:column;gap:14px;flex:1">
+      <div class="eyebrow">字阶（SF Pro / 苹方）</div>
+      <div class="large-title">Large Title 34 Bold</div>
+      <div class="title1">Title 1 28 Bold</div>
+      <div class="title2">Title 2 22 Semibold</div>
+      <div class="headline">Headline 17 Semibold</div>
+      <div class="body">Body 17 Regular — 离开电脑，AI 会话照样往前推。</div>
+      <div class="subhead l2">Subhead 15</div>
+      <div class="footnote l2">Footnote 13</div>
+      <div class="eyebrow">Eyebrow 12 · Tracking 0.1em</div>
+      <div class="mono footnote">Mono 13 — npx yzvibe --access=local</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;flex:1.3">
+      <div class="eyebrow">组件</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <div class="btn btn-primary"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M5 12l5 5 9-10"/></svg>主按钮</div><div class="btn btn-secondary">次按钮</div><div class="btn btn-outline">描边</div><div class="btn btn-danger-outline">拒绝</div><div class="btn glass" style="color:var(--label)">玻璃按钮</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <span class="chip chip-claude">Claude</span><span class="chip chip-codex">Codex</span><span class="chip chip-custom">自定义</span><span class="chip chip-sage">在线</span><span class="chip chip-brand">Tunnel</span><span class="chip chip-danger">高风险</span><span class="chip chip-fill">默认</span>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center">
+        <div class="dot dot-sage"></div><span class="footnote l2">空闲/在线</span><div class="dot dot-amber"></div><span class="footnote l2">运行中</span><div class="dot dot-danger"></div><span class="footnote l2">待审批</span><div class="dot dot-off"></div><span class="footnote l2">离线</span>
+        <div class="toggle" style="margin-left:auto"></div><div class="toggle toggle-off"></div>
+      </div>
+      <div style="position:relative;height:150px;border-radius:24px;overflow:hidden;background:var(--surface)">
+        <div class="orb" style="width:240px;height:240px;left:-40px;top:-100px;background:var(--brand-soft);filter:blur(40px)"></div>
+        <div class="orb" style="width:240px;height:240px;right:-60px;top:-40px;background:var(--amber-soft);filter:blur(40px)"></div>
+        <div class="navbar glass" style="top:16px;left:16px;right:16px"><div class="icon-btn" style="background:var(--fill)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M15 5l-7 7 7 7"/></svg></div><div class="headline" style="flex:1;padding-left:2px">玻璃导航条</div><span class="chip chip-claude">Claude</span></div>
+        <div class="tabbar glass" style="bottom:14px;left:16px;right:16px;height:60px"><div class="tab tab-on" style="height:48px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><rect x="3" y="4" width="18" height="12" rx="2.5"/><path d="M8 20h8M12 16v4"/></svg><span>设备</span></div><div class="tab" style="height:48px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-5 4z"/></svg><span>会话</span></div><div class="tab" style="height:48px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M4 13l2.5-8h11L20 13v6H4z"/><path d="M4 13h5l1.5 2.5h3L15 13h5"/></svg><span>审批</span></div><div class="tab" style="height:48px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span>我</span></div></div>
+      </div>
+      <div class="caption l2">玻璃配方：elev @ 62% · blur 24px saturate 180% · 内描边 0.5pt 白 55% · 暖阴影。iOS 26 用 <span class="mono">.glassEffect()</span>，低版本回落 ultraThinMaterial。</div>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+</body>
+</html>

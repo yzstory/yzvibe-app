@@ -1,0 +1,126 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "核心屏幕"
+    },
+    {
+      "id": "page-2",
+      "name": "设计系统"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "1 设备",
+      "page": "page-1"
+    },
+    {
+      "file": "Pair.dc.html",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "2 扫码配对",
+      "page": "page-1"
+    },
+    {
+      "file": "Sessions.dc.html",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "3 会话列表",
+      "page": "page-1"
+    },
+    {
+      "file": "NewSession.dc.html",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "4 新建会话",
+      "page": "page-1"
+    },
+    {
+      "file": "Chat.dc.html",
+      "x": 1920,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "5 聊天 + 审批卡",
+      "page": "page-1"
+    },
+    {
+      "file": "Approvals.dc.html",
+      "x": 0,
+      "y": 984,
+      "w": 390,
+      "h": 844,
+      "title": "6 审批收件箱",
+      "page": "page-1"
+    },
+    {
+      "file": "Files.dc.html",
+      "x": 480,
+      "y": 984,
+      "w": 390,
+      "h": 844,
+      "title": "7 远程文件",
+      "page": "page-1"
+    },
+    {
+      "file": "Me.dc.html",
+      "x": 960,
+      "y": 984,
+      "w": 390,
+      "h": 844,
+      "title": "8 我 / 设置",
+      "page": "page-1"
+    },
+    {
+      "file": "ChatDark.dc.html",
+      "x": 1440,
+      "y": 984,
+      "w": 390,
+      "h": 844,
+      "title": "9 聊天 · 深色",
+      "page": "page-1"
+    },
+    {
+      "file": "DesignSystem.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1200,
+      "h": 1180,
+      "title": "设计系统总览",
+      "page": "page-2"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "flow-note",
+      "x": 0,
+      "y": -150,
+      "w": 520,
+      "page": "page-1",
+      "text": "YzVibe · 手机远程掌控桌面 AI 会话\\n流程：设备 → 扫码配对 → 会话列表 → 新建会话 → 聊天（内嵌审批卡）\\n第二行：审批收件箱 / 远程文件 / 我 / 深色模式\\n风格：iOS 26 Liquid Glass × yukiTrace 暖调（赭红·鼠尾草·琥珀）"
+    },
+    {
+      "id": "glass-rule",
+      "x": 2400,
+      "y": -150,
+      "w": 420,
+      "page": "page-1",
+      "text": "玻璃规则：只有导航条、Tab 栏、输入条、审批卡、浮动按钮是玻璃；内容卡片始终不透明，保证可读。"
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}
