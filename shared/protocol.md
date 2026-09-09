@@ -34,6 +34,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 ### 服务端 → 客户端
 ```jsonc
 { "type": "session.created",    "session": { ...Session } }
+{ "type": "session.updated",    "session": { ...Session } }   // 标题等元数据变化
 { "type": "session.status",     "sessionId": "s1", "status": "idle|running|waiting_approval|error|closed" }
 { "type": "message.delta",      "sessionId": "s1", "messageId": "m9", "role": "assistant", "text": "..." }
 { "type": "message.done",       "sessionId": "s1", "messageId": "m9" }

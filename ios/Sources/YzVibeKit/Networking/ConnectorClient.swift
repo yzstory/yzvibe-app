@@ -29,6 +29,7 @@ public struct HealthInfo: Codable, Sendable {
 
 public enum ConnectorEvent: Sendable {
     case sessionCreated(Session)
+    case sessionUpdated(Session)
     case sessionStatus(sessionId: String, status: SessionStatus)
     case messageDelta(sessionId: String, messageId: String, text: String)
     case messageDone(sessionId: String, messageId: String)
@@ -228,9 +229,9 @@ final class ConnectorSocket: @unchecked Sendable {
     static func parse(_ data: Data) -> ConnectorEvent? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = obj["type"] as? String else { return nil }
         switch type {
-        case "session.created":
+        case "session.created", "session.updated":
             guard let raw = obj["session"], let d = try? JSONSerialization.data(withJSONObject: raw), let s = try? JSONDecoder.yz.decode(Session.self, from: d) else { return nil }
-            return .sessionCreated(s)
+            return type == "session.created" ? .sessionCreated(s) : .sessionUpdated(s)
         case "session.status":
             guard let sid = obj["sessionId"] as? String, let st = SessionStatus(rawValue: obj["status"] as? String ?? "") else { return nil }
             return .sessionStatus(sessionId: sid, status: st)

@@ -25,10 +25,11 @@ struct ChatView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 140)
                 }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: messages.count) { _, _ in
-                    if let last = messages.last { withAnimation(Motion.quick) { proxy.scrollTo(last.id, anchor: .bottom) } }
-                }
+                .scrollDismissesKeyboard(.immediately)
+                .onTapGesture { hideKeyboard() }
+                .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: messages.last?.text.count) { _, _ in scrollToBottom(proxy, animated: false) }
+                .onAppear { scrollToBottom(proxy, animated: false) }
             }
         }
         .navigationTitle(session?.title ?? "会话")
@@ -49,8 +50,24 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { composer }
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button { hideKeyboard() } label: { Label("收起", systemImage: "keyboard.chevron.compact.down") }
+            }
+        }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
+    }
+
+    private func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
+        guard let last = messages.last else { return }
+        if animated { withAnimation(Motion.quick) { proxy.scrollTo(last.id, anchor: .bottom) } } else { proxy.scrollTo(last.id, anchor: .bottom) }
     }
 
     private var composer: some View {
@@ -80,7 +97,13 @@ struct ChatView: View {
             }
             .padding(.horizontal, 16)
         }
+        .padding(.top, 10)
         .padding(.bottom, 6)
+        .background(
+            LinearGradient(stops: [.init(color: p.surface.opacity(0), location: 0), .init(color: p.surface.opacity(0.92), location: 0.35), .init(color: p.surface, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(edges: .bottom)
+        )
     }
 }
 
@@ -129,7 +152,7 @@ struct AssistantBubble: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !message.text.isEmpty {
-                Text(message.text).font(.system(size: 16)).foregroundStyle(p.label).textSelection(.enabled)
+                MarkdownText(text: message.text).foregroundStyle(p.label).textSelection(.enabled)
             }
             ForEach(message.toolCalls, id: \.id) { ToolCallCard(call: $0) }
             if message.streaming {

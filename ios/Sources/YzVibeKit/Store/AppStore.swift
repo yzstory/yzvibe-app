@@ -178,6 +178,9 @@ public final class AppStore {
     public func send(_ text: String, in sessionId: String, attachments: [String] = []) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
         messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments))
+        if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty {
+            sessions[i].title = String(text.prefix(40))
+        }
         setStatus(.running, for: sessionId)
         do { try await client.send(device: device, sessionId: sessionId, text: text, attachments: attachments) }
         catch { toast = error.localizedDescription }
@@ -221,6 +224,9 @@ public final class AppStore {
             s.deviceId = device.id
             if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s } else { sessions.insert(s, at: 0) }
             setDevice(device.id) { $0.sessionCount += 1 }
+        case .sessionUpdated(var s):
+            s.deviceId = device.id
+            if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s }
         case .sessionStatus(let sid, let st):
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }

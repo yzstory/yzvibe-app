@@ -77,7 +77,15 @@ export class Store extends EventEmitter {
     const m = { id: randomUUID(), sessionId, role: 'assistant', text: '', attachments: [], toolCalls: [], approvalId: null, createdAt: new Date().toISOString(), streaming: false, ...partial };
     this.messagesOf(sessionId).push(m);
     this.#saveMessages(sessionId);
-    const s = this.session(sessionId); if (s) { s.updatedAt = m.createdAt; if (m.role === 'user' && (!s.title || s.title === '新会话')) { s.title = m.text.slice(0, 40); } this.#saveSessions(); }
+    const s = this.session(sessionId);
+    if (s) {
+      s.updatedAt = m.createdAt;
+      if (m.role === 'user' && (!s.title || s.title === '新会话') && m.text.trim()) {
+        s.title = m.text.trim().slice(0, 40);
+        this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+      }
+      this.#saveSessions();
+    }
     return m;
   }
   appendDelta(sessionId, messageId, text) {

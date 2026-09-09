@@ -26,3 +26,4 @@
 - shared/protocol.md 同步新增端点（/approvals、/sessions/:id/stop、上传方式、鉴权、审批实现说明）
 - 中文 README（根 + connector/）；提交并 push 到 origin/main
 - 端口：9876 被 Vibelet 自己的连接器（~/.vibelet/runtime，PID 55599）长期占用 → YzVibe 默认改 19876，连接器 EADDRINUSE 时自动后移最多 20 个端口，二维码携带实际端口；iOS 默认端口同步；新增回退测试；本机 smoke 启动通过
+- 真机首跑（用户 iPhone + 真实 Claude）反馈修复：助手气泡 Markdown 渲染（MarkdownText）、会话标题随首条消息更新（connector 推 session.updated + 本地即时更新）、composer 渐变底避免透出、流式增量自动滚底、聊天页隐藏 Tab 栏、键盘三种收起方式（滚动/点消息区/键盘工具栏「收起」）
