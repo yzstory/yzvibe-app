@@ -11,6 +11,8 @@ node bin/yzvibe.js --access=100.64.1.2  # Tailscale IP
 node bin/yzvibe.js --agent=mock         # 不调用 Claude，用内置假 Agent 演示完整流程
 ```
 
+默认端口 19876（`--port=` 或环境变量 `YZVIBE_PORT` 可改）；被占用时自动向后找空闲端口。
+
 启动后终端打印二维码，手机 App「设备 › 扫码配对」扫一次即可。二维码 10 分钟有效、一次性。
 
 ## 工作原理

@@ -25,3 +25,4 @@
 - iOS 对接修正：容错解码（连接器 JSON 缺字段/未知枚举）、Device.id=connectorId、设备持久化 + 钥匙串、AppStore.live() 真实客户端、消息/审批懒加载、session.created 事件、本地通知、PhotosPicker 上传、文件 API 带 sessionId；干净重编译 20 文件通过
 - shared/protocol.md 同步新增端点（/approvals、/sessions/:id/stop、上传方式、鉴权、审批实现说明）
 - 中文 README（根 + connector/）；提交并 push 到 origin/main
+- 端口：9876 被 Vibelet 自己的连接器（~/.vibelet/runtime，PID 55599）长期占用 → YzVibe 默认改 19876，连接器 EADDRINUSE 时自动后移最多 20 个端口，二维码携带实际端口；iOS 默认端口同步；新增回退测试；本机 smoke 启动通过

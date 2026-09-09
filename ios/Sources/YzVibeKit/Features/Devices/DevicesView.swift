@@ -104,7 +104,7 @@ struct ManualEndpointView: View {
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
     @State private var host = ""
-    @State private var port = "9876"
+    @State private var port = String(Device.defaultPort)
     @State private var token = ""
     @State private var busy = false
     @State private var error: String?
@@ -121,7 +121,7 @@ struct ManualEndpointView: View {
                                 Text("支持局域网 IP、Tailscale IP，或 https:// 开头的 relay 地址。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                                 HStack(spacing: 10) {
                                     field("Host", text: $host, placeholder: "192.168.0.11")
-                                    field("Port", text: $port, placeholder: "9876").frame(width: 110).keyboardType(.numberPad)
+                                    field("Port", text: $port, placeholder: String(Device.defaultPort)).frame(width: 110).keyboardType(.numberPad)
                                 }
                                 field("Token", text: $token, placeholder: "终端里显示的配对 Token", secure: true)
                                 if let error { Text(error).font(.yzFootnote).foregroundStyle(p.danger) }
@@ -162,7 +162,7 @@ struct ManualEndpointView: View {
     private func connect() async {
         busy = true; error = nil
         do {
-            try await store.addManual(host: host.trimmingCharacters(in: .whitespaces), port: Int(port) ?? 9876, token: token)
+            try await store.addManual(host: host.trimmingCharacters(in: .whitespaces), port: Int(port) ?? Device.defaultPort, token: token)
             dismiss()
         } catch let e {
             error = e.localizedDescription

@@ -17,9 +17,9 @@ final class YzVibeKitTests: XCTestCase {
     }
 
     func testPairingPayloadParsesQR() throws {
-        let p = try XCTUnwrap(PairingPayload(qrString: "yzvibe://pair?host=100.82.203.14&port=9876&token=abc123&mode=tailscale&name=Studio"))
+        let p = try XCTUnwrap(PairingPayload(qrString: "yzvibe://pair?host=100.82.203.14&port=19876&token=abc123&mode=tailscale&name=Studio"))
         XCTAssertEqual(p.host, "100.82.203.14")
-        XCTAssertEqual(p.port, 9876)
+        XCTAssertEqual(p.port, 19876)
         XCTAssertEqual(p.token, "abc123")
         XCTAssertEqual(p.mode, .tailscale)
         XCTAssertEqual(p.name, "Studio")

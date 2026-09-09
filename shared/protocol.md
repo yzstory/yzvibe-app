@@ -1,10 +1,10 @@
 # YzVibe 连接协议 v0.1（手机 ⇄ 桌面连接器）
 
-三端共用。传输：HTTPS REST + WebSocket（同一 host:port，默认 9876）。鉴权：`Authorization: Bearer <token>`。
+三端共用。传输：HTTPS REST + WebSocket（同一 host:port，默认 19876；被占用时连接器自动后移，二维码携带实际端口）。鉴权：`Authorization: Bearer <token>`。
 
 ## 配对二维码
 ```
-yzvibe://pair?host=<host>&port=9876&token=<one-time-token>&mode=tunnel|local|p2p|tailscale&name=<device-name>
+yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2p|tailscale&name=<device-name>
 ```
 - token 一次性、5 分钟内有效；握手成功后连接器签发长期 `deviceToken`
 

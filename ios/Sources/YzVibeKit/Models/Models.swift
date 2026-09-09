@@ -33,6 +33,8 @@ public enum SessionStatus: String, Codable, Sendable {
 }
 
 public struct Device: Identifiable, Codable, Hashable, Sendable {
+    /// 与连接器 DEFAULT_PORT 一致（9876 常被 Vibelet 等占用）。
+    public static let defaultPort = 19876
     public var id: String
     public var name: String
     public var host: String
@@ -43,7 +45,7 @@ public struct Device: Identifiable, Codable, Hashable, Sendable {
     public var sessionCount: Int
     public var agents: [AgentKind: Int]
 
-    public init(id: String = UUID().uuidString, name: String, host: String, port: Int = 9876, mode: ConnectionMode,
+    public init(id: String = UUID().uuidString, name: String, host: String, port: Int = Device.defaultPort, mode: ConnectionMode,
                 online: Bool = false, lastSeen: Date = .now, sessionCount: Int = 0, agents: [AgentKind: Int] = [:]) {
         self.id = id; self.name = name; self.host = host; self.port = port; self.mode = mode
         self.online = online; self.lastSeen = lastSeen; self.sessionCount = sessionCount; self.agents = agents
@@ -241,7 +243,7 @@ public struct PairingPayload: Equatable, Sendable {
     public var mode: ConnectionMode
     public var name: String?
 
-    public init(host: String, port: Int = 9876, token: String, mode: ConnectionMode = .tunnel, name: String? = nil) {
+    public init(host: String, port: Int = Device.defaultPort, token: String, mode: ConnectionMode = .tunnel, name: String? = nil) {
         self.host = host; self.port = port; self.token = token; self.mode = mode; self.name = name
     }
 
@@ -251,7 +253,7 @@ public struct PairingPayload: Equatable, Sendable {
         let q = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
         guard let host = q["host"], !host.isEmpty, let token = q["token"], !token.isEmpty else { return nil }
         self.host = host
-        self.port = Int(q["port"] ?? "") ?? 9876
+        self.port = Int(q["port"] ?? "") ?? Device.defaultPort
         self.token = token
         self.mode = ConnectionMode(rawValue: q["mode"] ?? "") ?? .tunnel
         self.name = q["name"].flatMap { $0.isEmpty ? nil : $0 }

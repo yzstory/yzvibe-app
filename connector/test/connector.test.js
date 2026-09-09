@@ -93,3 +93,14 @@ test('权限分类', () => {
   assert.equal(classifyPermission('WebFetch', { url: 'https://x' }).kind, 'network');
   assert.equal(classifyPermission('mcp__foo__bar', { a: 1 }).kind, 'other');
 });
+
+test('默认端口被占用时自动后移', async () => {
+  const net = await import('node:net');
+  const blocker = net.createServer(); await new Promise((r) => blocker.listen(0, '0.0.0.0', r));
+  const busy = blocker.address().port;
+  const c = await createConnector({ port: busy, name: 'T', defaultAgent: 'mock', home: fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-port-')), log: () => {} });
+  const got = await c.listen();
+  assert.equal(got, busy + 1);
+  assert.equal(c.port, busy + 1);
+  await c.close(); blocker.close();
+});

@@ -14,7 +14,9 @@ import { MockAgent } from './agents/mock.js';
 
 const VERSION = '0.1.0';
 
-export async function createConnector({ port = 9876, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log } = {}) {
+export const DEFAULT_PORT = 19876;
+
+export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true } = {}) {
   const store = new Store(home);
   const pairing = new Pairing();
   const internalSecret = randomBytes(16).toString('hex');
@@ -27,7 +29,7 @@ export async function createConnector({ port = 9876, name = os.hostname(), defau
   function agentFor(session, options = {}) {
     if (agents.has(session.id)) return agents.get(session.id);
     const kind = session.agent === 'mock' || defaultAgent === 'mock' ? 'mock' : session.agent;
-    const internalURL = `http://127.0.0.1:${port}/internal/approval`;
+    const internalURL = `http://127.0.0.1:${api.port}/internal/approval`;
     const a = kind === 'mock'
       ? new MockAgent({ session, store })
       : new ClaudeAgent({ session, store, internalURL, internalSecret, home, options });
@@ -171,9 +173,22 @@ export async function createConnector({ port = 9876, name = os.hostname(), defau
   });
 
   let announce = async () => {};
+  /** 监听 port；被占用时（EADDRINUSE）自动向后尝试最多 20 个端口，返回实际端口。 */
+  const listenWithFallback = () => new Promise((resolve, reject) => {
+    const tryPort = (p, left) => {
+      const onError = (e) => {
+        server.removeListener('error', onError);
+        if (e.code === 'EADDRINUSE' && portFallback && left > 0 && p !== 0) { log(`[yzvibe] 端口 ${p} 已被占用，改试 ${p + 1}`); tryPort(p + 1, left - 1); }
+        else reject(e);
+      };
+      server.once('error', onError);
+      server.listen(p, '0.0.0.0', () => { server.removeListener('error', onError); api.port = server.address().port; resolve(api.port); });
+    };
+    tryPort(port, 20);
+  });
   const api = {
     store, pairing, server, port,
-    listen: () => new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => resolve(server.address().port)); }),
+    listen: listenWithFallback,
     close: () => new Promise((resolve) => { for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
