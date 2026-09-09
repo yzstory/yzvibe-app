@@ -34,3 +34,4 @@
 - iOS：Session/NewSessionRequest 加 mode/model/effort（去掉 yolo），`AgentCapabilities` + 内置回退表，聊天输入条改为「文本框 + 底部一排：相机 / 模式 / 模型 / 强度 / 发送」，新建会话页用分段选模式并显示该 Agent 的解释与参数；自定义模型与每个 Agent 上次用的选项存在 Settings
 - 验证：connector 6 个测试通过；YzVibeKit 模拟器编译通过 + 单测；真实 Claude（haiku, trust→normal + effort 切换触发 --resume 重启）与真实 Codex（gpt-5.6-sol, normal→plan resume）各两轮冒烟均记得上下文
 - 已知限制：Codex 非交互模式没有审批回调，Normal 只靠 workspace-write 沙箱兜底；要做 Codex 审批需改走 `codex app-server` 协议
+- 新建会话页对齐 Vibelet（以远程 Plan/Normal/Trust 选项模型为基线叠加）：工作目录「浏览/收藏」、首句消息「历史/模板」、会话模式四张卡（继续上次 / 模式 / 模型 / 思考强度）、启动摘要卡；新增目录选择器（上级目录 / 主目录 / 新建文件夹 / 选择此文件夹）；连接器新增 /fs/dirs、/fs/mkdir 并加测试。Fast mode 未做：本机 claude CLI 没有对应参数。

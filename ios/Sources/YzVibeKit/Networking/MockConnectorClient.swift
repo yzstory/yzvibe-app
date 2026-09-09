@@ -60,6 +60,15 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
         """
     }
 
+    public func listDirectories(device: Device, path: String?) async throws -> DirectoryListing {
+        let base = path ?? "/Users/yuki"
+        let names: [String] = base.hasSuffix("YzVibe") ? ["android", "connector", "design", "docs", "ios", "miniprogram", "shared"]
+            : base.hasSuffix("aigc") ? ["YzVibe", "yukiTrace", "lobehub"] : ["devops", "Documents", "Downloads"]
+        let parent = base == "/" ? nil : (base as NSString).deletingLastPathComponent
+        return DirectoryListing(path: base, parent: parent, home: "/Users/yuki", entries: names.map { .init(name: $0, path: base + "/" + $0) })
+    }
+    public func makeDirectory(device: Device, parent: String, name: String) async throws -> String { parent + "/" + name }
+
     public func events(device: Device) -> AsyncStream<ConnectorEvent> {
         AsyncStream { cont in
             let task = Task {

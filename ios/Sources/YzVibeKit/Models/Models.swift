@@ -343,6 +343,16 @@ public struct SessionOptions: Codable, Hashable, Sendable {
     public init(mode: SessionMode = .normal, model: String? = nil, effort: String? = nil) { self.mode = mode; self.model = model; self.effort = effort }
 }
 
+/// 目录浏览结果（GET /fs/dirs），用于选择工作目录。
+public struct DirectoryListing: Codable, Sendable {
+    public struct Entry: Codable, Sendable, Identifiable, Hashable { public var name: String; public var path: String; public var id: String { path } }
+    public var path: String
+    public var parent: String?
+    public var home: String?
+    public var entries: [Entry]
+    public init(path: String, parent: String?, home: String?, entries: [Entry]) { self.path = path; self.parent = parent; self.home = home; self.entries = entries }
+}
+
 // MARK: - 配对链接 yzvibe://pair?host=…&port=…&token=…&mode=…&name=…
 
 public struct PairingPayload: Equatable, Sendable {

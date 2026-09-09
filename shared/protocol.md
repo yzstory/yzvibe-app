@@ -14,6 +14,8 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /health | 公开。`{ name, version, agents, connectorId, uptime }`；`connectorId` 是电脑的稳定 ID，手机用它作 Device.id |
 | POST | /pair | 公开。body `{ token, phoneName? }` → `{ deviceToken, deviceName, connectorId }`；token 一次性、10 分钟有效 |
 | GET | /agents | 各 Agent 的能力表：`{ claude: { modes, efforts, models, customModel }, codex: {...} }`，见下文「会话选项」 |
+| GET | /fs/dirs?path= | 目录浏览（选工作目录用）：`{ path, parent, home, entries:[{name,path}] }`，只列目录、跳过隐藏项；path 缺省为主目录 |
+| POST | /fs/mkdir | `{ parent, name }` → `{ path }`（201）；名字含路径分隔符或以 . 开头 → 400 |
 | GET | /sessions | 会话列表 |
 | POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, mode?, model?, effort? }` → Session（201）；cwd 不存在 → 400。旧字段 `yolo:true` 等价 `mode:'trust'` |
 | GET | /sessions/:id | 单个会话 |

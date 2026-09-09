@@ -13,6 +13,7 @@ import { ClaudeAgent, classifyPermission } from './agents/claude.js';
 import { CodexAgent } from './agents/codex.js';
 import { MockAgent } from './agents/mock.js';
 import { normalizeOptions, agentCapabilities } from './agents/options.js';
+import { listDirectories, makeDirectory } from './fs.js';
 
 const VERSION = '0.1.0';
 
@@ -80,6 +81,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (!authed(req, url)) return json(res, 401, { error: 'unauthorized' });
 
       if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
+      if (req.method === 'GET' && p === '/fs/dirs') return json(res, 200, listDirectories(url.searchParams.get('path')));
+      if (req.method === 'POST' && p === '/fs/mkdir') { const { parent, name } = await readJSON(req); return json(res, 201, makeDirectory(parent, name)); }
       if (req.method === 'GET' && p === '/sessions') return json(res, 200, store.listSessions());
       if (req.method === 'POST' && p === '/sessions') {
         const body = await readJSON(req);

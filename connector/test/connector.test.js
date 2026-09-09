@@ -189,3 +189,24 @@ test('Codex JSONL 事件 → 消息 / 工具卡', async () => {
   handleCodexEvent({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: 'second turn' } }, store, s, state);
   assert.deepEqual(store.messagesOf(s.id).filter((m) => m.role === 'assistant').map((m) => m.text), ['I will run it.', 'ok', 'second turn']);
 });
+
+test('目录浏览 / 新建文件夹（选工作目录用）', async () => {
+  const c = await createConnector({ port: 0, name: 'T', defaultAgent: 'mock', home: fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-fs-')), log: () => {} });
+  const port = await c.listen();
+  const base = `http://127.0.0.1:${port}`;
+  const pair = await (await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ token: c.pairing.token }) })).json();
+  const H = { authorization: `Bearer ${pair.deviceToken}`, 'content-type': 'application/json' };
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-tree-'));
+  fs.mkdirSync(path.join(root, 'b')); fs.mkdirSync(path.join(root, 'a')); fs.mkdirSync(path.join(root, '.hidden')); fs.writeFileSync(path.join(root, 'file.txt'), '');
+  const dirs = await (await fetch(`${base}/fs/dirs?path=${encodeURIComponent(root)}`, { headers: H })).json();
+  assert.deepEqual(dirs.entries.map((e) => e.name), ['a', 'b']);
+  assert.equal(dirs.parent, path.dirname(root));
+  assert.ok(dirs.home);
+  const home = await (await fetch(`${base}/fs/dirs`, { headers: H })).json();
+  assert.equal(home.path, os.homedir());
+  const mk = await (await fetch(`${base}/fs/mkdir`, { method: 'POST', headers: H, body: JSON.stringify({ parent: root, name: 'new-proj' }) })).json();
+  assert.ok(fs.statSync(mk.path).isDirectory());
+  assert.equal((await fetch(`${base}/fs/mkdir`, { method: 'POST', headers: H, body: JSON.stringify({ parent: root, name: '../x' }) })).status, 400);
+  assert.equal((await fetch(`${base}/fs/dirs?path=${encodeURIComponent(root)}`)).status, 401);
+  await c.close();
+});

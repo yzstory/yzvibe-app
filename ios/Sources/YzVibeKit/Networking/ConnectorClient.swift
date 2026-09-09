@@ -19,6 +19,10 @@ public protocol ConnectorClient: Sendable {
     func capabilities(device: Device) async throws -> [String: AgentCapabilities]
     /// 改会话的 mode / model / effort（PATCH /sessions/:id）。value 为 nil 表示恢复该项默认。
     func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session
+    /// 目录浏览（GET /fs/dirs），path 为 nil 时列主目录。
+    func listDirectories(device: Device, path: String?) async throws -> DirectoryListing
+    /// 新建文件夹（POST /fs/mkdir），返回新目录绝对路径。
+    func makeDirectory(device: Device, parent: String, name: String) async throws -> String
     /// 服务端事件流；调用方持有并消费。
     func events(device: Device) -> AsyncStream<ConnectorEvent>
 }
@@ -157,6 +161,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         req.setValue(filename.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filename, forHTTPHeaderField: "X-Filename")
         req.httpBody = data
         return try await perform(req, as: Resp.self).id
+    }
+
+    public func listDirectories(device: Device, path: String?) async throws -> DirectoryListing {
+        let q = path.map { "?path=" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
+        return try await perform(request(device, "/fs/dirs\(q)"), as: DirectoryListing.self)
+    }
+
+    public func makeDirectory(device: Device, parent: String, name: String) async throws -> String {
+        struct Body: Encodable { var parent: String; var name: String }
+        struct Resp: Decodable { var path: String }
+        return try await perform(request(device, "/fs/mkdir", method: "POST", body: Body(parent: parent, name: name)), as: Resp.self).path
     }
 
     public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
