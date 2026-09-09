@@ -10,7 +10,9 @@ import { Pairing, lanAddresses, pairURL, printQR } from './pairing.js';
 import { startCloudflareTunnel, loadRelay, saveRelay } from './tunnel.js';
 import { listDir, previewFile, resolveInside, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
+import { CodexAgent } from './agents/codex.js';
 import { MockAgent } from './agents/mock.js';
+import { normalizeOptions, agentCapabilities } from './agents/options.js';
 
 const VERSION = '0.1.0';
 
@@ -30,8 +32,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     if (agents.has(session.id)) return agents.get(session.id);
     const kind = session.agent === 'mock' || defaultAgent === 'mock' ? 'mock' : session.agent;
     const internalURL = `http://127.0.0.1:${api.port}/internal/approval`;
-    const a = kind === 'mock'
-      ? new MockAgent({ session, store })
+    const a = kind === 'mock' ? new MockAgent({ session, store })
+      : kind === 'codex' ? new CodexAgent({ session, store })
       : new ClaudeAgent({ session, store, internalURL, internalSecret, home, options });
     agents.set(session.id, a);
     return a;
@@ -70,11 +72,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const { sessionId, toolName, input } = await readJSON(req);
         const c = classifyPermission(toolName, input);
         const decision = await store.requestApproval({ sessionId, toolName, ...c });
+        // 计划被批准后 claude 进程内部已切到普通权限，这里只同步会话记录，不重启进程
+        if (toolName === 'ExitPlanMode' && decision !== 'deny') { store.configureSession(sessionId, { mode: 'normal' }); agents.get(sessionId)?.configure({ mode: 'normal' }); }
         return json(res, 200, { decision });
       }
       // 以下需要设备 Token
       if (!authed(req, url)) return json(res, 401, { error: 'unauthorized' });
 
+      if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
       if (req.method === 'GET' && p === '/sessions') return json(res, 200, store.listSessions());
       if (req.method === 'POST' && p === '/sessions') {
         const body = await readJSON(req);
@@ -82,8 +87,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const cwd = body.cwd || os.homedir();
         try { resolveInside(cwd, ''); if (!fs.existsSync(resolveInside(cwd, '').base)) throw new Error(); } catch { return json(res, 400, { error: `工作目录不存在：${cwd}` }); }
         const title = body.firstMessage ? String(body.firstMessage).slice(0, 40) : '新会话';
-        const s = store.createSession({ agent, cwd, title });
-        const a = agentFor(s, { continueLast: Boolean(body.continueLast), yolo: Boolean(body.yolo), model: body.model });
+        const s = store.createSession({ agent, cwd, title, ...normalizeOptions(body, agent) });
+        const a = agentFor(s, { continueLast: Boolean(body.continueLast) });
         if (body.firstMessage) { store.addMessage(s.id, { role: 'user', text: body.firstMessage }); a.send(body.firstMessage).catch(() => {}); }
         return json(res, 201, store.publicSession(s));
       }
@@ -91,6 +96,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if ((m = p.match(/^\/sessions\/([^/]+)$/))) {
         const s = store.session(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         if (req.method === 'GET') return json(res, 200, store.publicSession(s));
+        if (req.method === 'PATCH') { configureSession(s, await readJSON(req)); return json(res, 200, store.publicSession(s)); }
         if (req.method === 'DELETE') { agents.get(s.id)?.dispose(); agents.delete(s.id); store.closeSession(s.id); return json(res, 200, { ok: true }); }
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/messages$/))) {
@@ -140,6 +146,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     }
   });
 
+  /** 手机改了 mode / model / effort：写入会话并通知已存在的 Agent 实例。 */
+  function configureSession(s, body) {
+    const patch = normalizeOptions(body, s.agent);
+    if (store.configureSession(s.id, patch)) agents.get(s.id)?.configure(patch);
+  }
+
   async function handleSend(s, text, attachments) {
     if (!text?.trim() && !attachments.length) return;
     store.addMessage(s.id, { role: 'user', text: text ?? '', attachments });
@@ -163,6 +175,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
             case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? []); break;
             case 'session.stop': if (s) agents.get(s.id)?.stop(); break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
+            case 'session.configure': if (s) configureSession(s, msg); break;
             case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision); break;
             case 'ping': ws.send(JSON.stringify({ type: 'pong' })); break;
             default: break;

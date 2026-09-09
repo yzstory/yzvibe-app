@@ -27,5 +27,11 @@ cd ios && xcodegen generate && open YzVibe.xcodeproj
 ## 只编译库 / 跑测试（无需生成工程）
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -scheme YzVibeKit -destination 'platform=iOS Simulator,name=iPhone 17' build test
+xcodebuild -scheme YzVibeKit -destination 'generic/platform=iOS Simulator' build
+```
+跑单测时 `ios/` 目录里同时有 `YzVibe.xcodeproj`，xcodebuild 会优先用工程（其 YzVibeKit scheme 不含测试）。
+在一个只有 Package.swift 的目录里跑即可：
+```bash
+mkdir -p /tmp/yzkit && cd /tmp/yzkit && ln -sfn "$OLDPWD/Package.swift" . && ln -sfn "$OLDPWD/Sources" . && ln -sfn "$OLDPWD/Tests" . \
+&& DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme YzVibeKit -destination 'platform=iOS Simulator,name=iPhone 17' test
 ```

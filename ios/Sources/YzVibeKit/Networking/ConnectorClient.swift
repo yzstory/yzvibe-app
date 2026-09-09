@@ -15,6 +15,10 @@ public protocol ConnectorClient: Sendable {
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry]
     func preview(device: Device, sessionId: String, path: String) async throws -> String
     func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String
+    /// 各 Agent 支持的模式 / 模型 / 思考强度（GET /agents），key 为 agent 名。
+    func capabilities(device: Device) async throws -> [String: AgentCapabilities]
+    /// 改会话的 mode / model / effort（PATCH /sessions/:id）。value 为 nil 表示恢复该项默认。
+    func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session
     /// 服务端事件流；调用方持有并消费。
     func events(device: Device) -> AsyncStream<ConnectorEvent>
 }
@@ -153,6 +157,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         req.setValue(filename.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? filename, forHTTPHeaderField: "X-Filename")
         req.httpBody = data
         return try await perform(req, as: Resp.self).id
+    }
+
+    public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
+        try await perform(request(device, "/agents"), as: [String: AgentCapabilities].self)
+    }
+
+    public func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session {
+        var req = try request(device, "/sessions/\(sessionId)", method: "PATCH")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: patch.mapValues { v -> Any in v ?? NSNull() })
+        return try await perform(req, as: Session.self)
     }
 
     public func events(device: Device) -> AsyncStream<ConnectorEvent> {

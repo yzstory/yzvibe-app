@@ -3,6 +3,8 @@ import Foundation
 /// 离线 Mock：返回设计稿里的示例数据，并模拟一次流式回复与审批事件。
 public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public init() {}
+    /// 改过选项的会话（真实连接器会返回权威的完整会话，这里用它模拟）。
+    private var configured: [String: Session] = [:]
 
     public func health(device: Device) async throws -> HealthInfo {
         try await Task.sleep(nanoseconds: 300_000_000)
@@ -33,6 +35,17 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws {}
 
     public func approvals(device: Device) async throws -> [Approval] { MockData.approvals.filter { $0.deviceId == device.id } }
+    public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
+        ["claude": .fallback(for: .claude), "codex": .fallback(for: .codex)]
+    }
+    public func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session {
+        var s = configured[sessionId] ?? MockData.sessions.first { $0.id == sessionId } ?? Session(id: sessionId, deviceId: device.id, agent: .claude, cwd: "", title: "会话")
+        if let m = patch["mode"], let raw = m, let mode = SessionMode(rawValue: raw) { s.mode = mode }
+        if let v = patch["model"] { s.model = v }
+        if let v = patch["effort"] { s.effort = v }
+        configured[sessionId] = s
+        return s
+    }
     public func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { UUID().uuidString }
     public func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { MockData.files }
 

@@ -13,6 +13,7 @@ public final class AppStore {
     public var sessions: [Session] = []
     public var messages: [String: [Message]] = [:]        // sessionId → messages
     public var approvals: [Approval] = []
+    public var capabilities: [String: [String: AgentCapabilities]] = [:]   // deviceId → agent → 能力
     public var settings = Settings() { didSet { settings.save() } }
     public var toast: String?
     public private(set) var isDemo: Bool
@@ -56,6 +57,11 @@ public final class AppStore {
     public func device(_ id: String) -> Device? { devices.first { $0.id == id } }
     public func session(_ id: String) -> Session? { sessions.first { $0.id == id } }
     public func approval(_ id: String) -> Approval? { approvals.first { $0.id == id } }
+    /// 某设备上某种 Agent 的能力表；没拿到时用 App 内置的回退表。
+    public func capabilities(for agent: AgentKind, on deviceId: String?) -> AgentCapabilities {
+        capabilities[deviceId ?? ""]?[agent.rawValue] ?? .fallback(for: agent)
+    }
+    public func capabilities(for session: Session) -> AgentCapabilities { capabilities(for: session.agent, on: session.deviceId) }
 
     public func sessions(for device: Device?, activeOnly: Bool, query: String) -> [Session] {
         guard let device else { return [] }
@@ -110,6 +116,7 @@ public final class AppStore {
             let fresh = try await client.sessions(device: device).map { var s = $0; s.deviceId = device.id; return s }
             sessions.removeAll { $0.deviceId == device.id }
             sessions.append(contentsOf: fresh)
+            if let caps = try? await client.capabilities(device: device) { capabilities[device.id] = caps }
             let pending = try await client.approvals(device: device)
             approvals.removeAll { $0.deviceId == device.id && $0.status == .pending }
             approvals.insert(contentsOf: pending, at: 0)
@@ -172,7 +179,37 @@ public final class AppStore {
         if let first = req.firstMessage, !first.isEmpty { initial.append(Message(sessionId: s.id, role: .user, text: first)) }
         messages[s.id] = initial
         loadedMessages.insert(s.id)
+        settings.remember(SessionOptions(mode: req.mode, model: req.model, effort: req.effort), for: req.agent)
         return s
+    }
+
+    // MARK: 会话选项（模式 / 模型 / 思考强度）
+
+    public func setMode(_ mode: SessionMode, for sessionId: String) async {
+        await patchSession(sessionId, ["mode": mode.rawValue]) { $0.mode = mode }
+    }
+    public func setModel(_ model: String?, for sessionId: String) async {
+        let m = model?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+        await patchSession(sessionId, ["model": m]) { $0.model = m }
+    }
+    public func setEffort(_ effort: String?, for sessionId: String) async {
+        let e = effort?.nilIfEmpty
+        await patchSession(sessionId, ["effort": e]) { $0.effort = e }
+    }
+
+    /// 先本地乐观更新，再 PATCH；失败时回滚并提示。
+    private func patchSession(_ sessionId: String, _ patch: [String: String?], apply: (inout Session) -> Void) async {
+        guard let i = sessions.firstIndex(where: { $0.id == sessionId }), let device = device(sessions[i].deviceId) else { return }
+        let before = sessions[i]
+        apply(&sessions[i])
+        settings.remember(SessionOptions(mode: sessions[i].mode, model: sessions[i].model, effort: sessions[i].effort), for: sessions[i].agent)
+        do {
+            let s = try await client.configure(device: device, sessionId: sessionId, patch: patch)
+            if let j = sessions.firstIndex(where: { $0.id == sessionId }) { sessions[j].mode = s.mode; sessions[j].model = s.model; sessions[j].effort = s.effort }
+        } catch {
+            if let j = sessions.firstIndex(where: { $0.id == sessionId }) { sessions[j].mode = before.mode; sessions[j].model = before.model; sessions[j].effort = before.effort }
+            toast = error.localizedDescription
+        }
     }
 
     public func send(_ text: String, in sessionId: String, attachments: [String] = []) async {
@@ -284,7 +321,24 @@ public struct Settings: Codable, Sendable {
     public var activeOnly = false
     public var appearance: Appearance = .auto
     public var faceIDForHighRisk = true
+    /// 用户手输过的模型 ID，按 Agent 分开记（可选是为了兼容旧版本存下的 JSON）。
+    public var customModels: [String: [String]]?
+    /// 每种 Agent 上次用的模式 / 模型 / 强度，作为新建会话的默认值。
+    public var sessionDefaults: [String: SessionOptions]?
     public init() {}
+
+    public func customModels(for agent: AgentKind) -> [String] { customModels?[agent.rawValue] ?? [] }
+    public mutating func addCustomModel(_ id: String, for agent: AgentKind) {
+        var list = customModels(for: agent)
+        list.removeAll { $0 == id }
+        list.insert(id, at: 0)
+        customModels = (customModels ?? [:]).merging([agent.rawValue: Array(list.prefix(8))]) { $1 }
+    }
+    public func defaults(for agent: AgentKind) -> SessionOptions { sessionDefaults?[agent.rawValue] ?? SessionOptions() }
+    public mutating func remember(_ options: SessionOptions, for agent: AgentKind) {
+        guard defaults(for: agent) != options else { return }
+        sessionDefaults = (sessionDefaults ?? [:]).merging([agent.rawValue: options]) { $1 }
+    }
     public var colorScheme: ColorScheme? {
         switch appearance { case .auto: nil; case .light: .light; case .dark: .dark }
     }
@@ -330,4 +384,8 @@ enum Notifier {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

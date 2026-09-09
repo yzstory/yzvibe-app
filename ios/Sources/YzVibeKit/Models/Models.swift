@@ -23,6 +23,95 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// 会话模式：三端统一叫 Plan / Normal / Trust，连接器按 Agent 翻译成各自的命令行参数。
+public enum SessionMode: String, Codable, CaseIterable, Sendable, Identifiable {
+    case plan, normal, trust
+    public var id: String { rawValue }
+    public var displayName: String { switch self { case .plan: "Plan"; case .normal: "Normal"; case .trust: "Trust" } }
+    public var subtitle: String { switch self { case .plan: "只规划"; case .normal: "需审批"; case .trust: "完全信任" } }
+    public var symbol: String { switch self { case .plan: "list.bullet.clipboard"; case .normal: "checkmark.shield"; case .trust: "bolt.fill" } }
+}
+
+/// 思考强度只是字符串（Claude / Codex 的档位不完全一样），这里只负责显示名。
+public enum EffortLevel {
+    public static func displayName(_ raw: String?) -> String {
+        switch raw {
+        case nil, "": "默认"
+        case "low": "低"; case "medium": "中"; case "high": "高"; case "xhigh": "极高"; case "max": "最大"; case "ultra": "Ultra"
+        default: raw!
+        }
+    }
+}
+
+/// 一个模型选项（连接器 GET /agents 返回；也可能是用户自定义的）。
+public struct ModelOption: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    public var description: String?
+    public var efforts: [String]?
+    public var defaultEffort: String?
+    public init(id: String, label: String? = nil, description: String? = nil, efforts: [String]? = nil, defaultEffort: String? = nil) {
+        self.id = id; self.label = label ?? id; self.description = description; self.efforts = efforts; self.defaultEffort = defaultEffort
+    }
+}
+
+/// 某种 Agent 支持的模式 / 模型 / 思考强度（GET /agents）。连接器不可达或版本较旧时用 `fallback(for:)`。
+public struct AgentCapabilities: Codable, Hashable, Sendable {
+    public struct ModeInfo: Codable, Hashable, Sendable {
+        public var flag: String
+        public var description: String
+        public init(flag: String, description: String) { self.flag = flag; self.description = description }
+    }
+    public var modes: [String: ModeInfo]
+    public var efforts: [String]
+    public var models: [ModelOption]
+    public var customModel: Bool
+
+    public init(modes: [String: ModeInfo], efforts: [String], models: [ModelOption], customModel: Bool = true) {
+        self.modes = modes; self.efforts = efforts; self.models = models; self.customModel = customModel
+    }
+    enum CodingKeys: String, CodingKey { case modes, efforts, models, customModel }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        modes = try c.decodeIfPresent([String: ModeInfo].self, forKey: .modes) ?? [:]
+        efforts = try c.decodeIfPresent([String].self, forKey: .efforts) ?? []
+        models = try c.decodeIfPresent([ModelOption].self, forKey: .models) ?? []
+        customModel = try c.decodeIfPresent(Bool.self, forKey: .customModel) ?? true
+    }
+
+    public func modeInfo(_ mode: SessionMode) -> ModeInfo? { modes[mode.rawValue] }
+    /// 该模型支持的档位；目录没写就用 Agent 通用档位。
+    public func efforts(for model: String?) -> [String] {
+        if let model, let m = models.first(where: { $0.id == model }), let e = m.efforts, !e.isEmpty { return e }
+        return efforts
+    }
+    public func label(forModel id: String?) -> String {
+        guard let id, !id.isEmpty else { return "默认模型" }
+        return models.first { $0.id == id }?.label ?? id
+    }
+
+    public static func fallback(for agent: AgentKind) -> AgentCapabilities {
+        switch agent {
+        case .codex:
+            return AgentCapabilities(
+                modes: ["plan": .init(flag: "sandbox_mode=read-only", description: "只读沙箱，只分析与规划，不改文件"),
+                        "normal": .init(flag: "sandbox_mode=workspace-write", description: "在工作目录沙箱内自动执行；沙箱外的操作会被拒绝，不会发审批"),
+                        "trust": .init(flag: "--dangerously-bypass-approvals-and-sandbox", description: "无沙箱、无确认，完全信任")],
+                efforts: ["low", "medium", "high", "xhigh", "max"],
+                models: [ModelOption(id: "gpt-5.6-sol", label: "GPT-5.6 Sol"), ModelOption(id: "gpt-5.6-terra", label: "GPT-5.6 Terra"),
+                         ModelOption(id: "gpt-5.6-luna", label: "GPT-5.6 Luna"), ModelOption(id: "gpt-5.5", label: "GPT-5.5")])
+        case .claude, .custom:
+            return AgentCapabilities(
+                modes: ["plan": .init(flag: "--permission-mode plan", description: "只读分析并给出计划，批准计划后才开始改动"),
+                        "normal": .init(flag: "--permission-prompt-tool", description: "敏感操作发到手机审批"),
+                        "trust": .init(flag: "--dangerously-skip-permissions", description: "跳过所有权限检查，不再产生审批")],
+                efforts: ["low", "medium", "high", "xhigh", "max"],
+                models: [ModelOption(id: "fable", label: "Fable 5.1"), ModelOption(id: "opus", label: "Opus"),
+                         ModelOption(id: "sonnet", label: "Sonnet"), ModelOption(id: "haiku", label: "Haiku")])
+        }
+    }
+}
+
 public enum SessionStatus: String, Codable, Sendable {
     case idle, running, waitingApproval = "waiting_approval", error, closed
     public var displayName: String {
@@ -68,17 +157,22 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var createdAt: Date
     public var updatedAt: Date
     public var pendingApprovals: Int
+    public var mode: SessionMode
+    public var model: String?
+    public var effort: String?
 
     public init(id: String = UUID().uuidString, deviceId: String, agent: AgentKind, cwd: String, title: String,
-                status: SessionStatus = .idle, createdAt: Date = .now, updatedAt: Date = .now, pendingApprovals: Int = 0) {
+                status: SessionStatus = .idle, createdAt: Date = .now, updatedAt: Date = .now, pendingApprovals: Int = 0,
+                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil) {
         self.id = id; self.deviceId = deviceId; self.agent = agent; self.cwd = cwd; self.title = title
         self.status = status; self.createdAt = createdAt; self.updatedAt = updatedAt; self.pendingApprovals = pendingApprovals
+        self.mode = mode; self.model = model; self.effort = effort
     }
 
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -91,6 +185,9 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
         pendingApprovals = try c.decodeIfPresent(Int.self, forKey: .pendingApprovals) ?? 0
+        mode = SessionMode(rawValue: try c.decodeIfPresent(String.self, forKey: .mode) ?? "") ?? .normal
+        model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }
+        effort = try c.decodeIfPresent(String.self, forKey: .effort).flatMap { $0.isEmpty ? nil : $0 }
     }
 }
 
@@ -222,16 +319,28 @@ public struct FileEntry: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-/// 新建会话表单。
+/// 新建会话表单。`mode` 取代了早期的 `yolo` 开关（Trust ≡ 旧 YOLO）。
 public struct NewSessionRequest: Codable, Sendable {
     public var agent: AgentKind
     public var cwd: String
     public var firstMessage: String?
     public var continueLast: Bool
-    public var yolo: Bool
-    public init(agent: AgentKind = .claude, cwd: String = "", firstMessage: String? = nil, continueLast: Bool = true, yolo: Bool = false) {
-        self.agent = agent; self.cwd = cwd; self.firstMessage = firstMessage; self.continueLast = continueLast; self.yolo = yolo
+    public var mode: SessionMode
+    public var model: String?
+    public var effort: String?
+    public init(agent: AgentKind = .claude, cwd: String = "", firstMessage: String? = nil, continueLast: Bool = true,
+                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil) {
+        self.agent = agent; self.cwd = cwd; self.firstMessage = firstMessage; self.continueLast = continueLast
+        self.mode = mode; self.model = model; self.effort = effort
     }
+}
+
+/// 某个 Agent 上次用过的选项，用作下次新建会话的默认值。
+public struct SessionOptions: Codable, Hashable, Sendable {
+    public var mode: SessionMode
+    public var model: String?
+    public var effort: String?
+    public init(mode: SessionMode = .normal, model: String? = nil, effort: String? = nil) { self.mode = mode; self.model = model; self.effort = effort }
 }
 
 // MARK: - 配对链接 yzvibe://pair?host=…&port=…&token=…&mode=…&name=…

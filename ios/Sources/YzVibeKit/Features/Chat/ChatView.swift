@@ -46,7 +46,7 @@ struct ChatView: View {
                     Button { Task { await store.stop(sessionId) } } label: { Image(systemName: "stop.fill").foregroundStyle(p.danger) }
                 }
                 Button { showFiles = true } label: { Image(systemName: "folder") }
-                if let agent = session?.agent { Chip.agent(agent) }
+                if let s = session { Chip.agent(s.agent, suffix: s.model.map { store.capabilities(for: s).label(forModel: $0) }) }
             }
         }
         .safeAreaInset(edge: .bottom) { composer }
@@ -59,6 +59,17 @@ struct ChatView: View {
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
+    }
+
+    // 选项胶囊的绑定：本地乐观更新 + PATCH 到连接器（AppStore.patchSession）
+    private var modeBinding: Binding<SessionMode> {
+        Binding(get: { session?.mode ?? .normal }, set: { m in Task { await store.setMode(m, for: sessionId) } })
+    }
+    private var modelBinding: Binding<String?> {
+        Binding(get: { session?.model }, set: { m in Task { await store.setModel(m, for: sessionId) } })
+    }
+    private var effortBinding: Binding<String?> {
+        Binding(get: { session?.effort }, set: { e in Task { await store.setEffort(e, for: sessionId) } })
     }
 
     private func hideKeyboard() {
@@ -89,11 +100,13 @@ struct ChatView: View {
                         await store.send(draft.isEmpty ? "（图片）" : draft, in: sessionId, attachments: [id]); draft = ""
                     }
                 }
-            }) {
+            }, onSend: {
                 let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !t.isEmpty else { return }
                 draft = ""
                 Task { await store.send(t, in: sessionId) }
+            }) {
+                if let s = session { SessionOptionsRow(agent: s.agent, caps: store.capabilities(for: s), mode: modeBinding, model: modelBinding, effort: effortBinding) }
             }
             .padding(.horizontal, 16)
         }
@@ -192,47 +205,60 @@ struct ToolCallCard: View {
     }
 }
 
-/// 玻璃输入条：相机 + 文本 + 发送。
-struct InputBar: View {
+/// 玻璃输入条：上面是文本框，下面一行是相机 + 会话选项胶囊（accessory）+ 发送。
+struct InputBar<Accessory: View>: View {
     @Environment(\.palette) private var p
     @Binding var text: String
     let placeholder: String
     var onPickImage: ((Data, String, String) -> Void)? = nil
     let onSend: () -> Void
+    @ViewBuilder let accessory: () -> Accessory
     @FocusState private var focused: Bool
     @State private var pickerItem: PhotosPickerItem?
 
+    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
+
     var body: some View {
-        HStack(spacing: 8) {
-            PhotosPicker(selection: $pickerItem, matching: .images) {
-                Image(systemName: "camera").font(.system(size: 16, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                    .frame(width: 40, height: 40).background(Circle().fill(p.fill))
-            }
-            .onChange(of: pickerItem) { _, item in
-                guard let item else { return }
-                Task {
-                    if let data = try? await item.loadTransferable(type: Data.self) {
-                        let isPNG = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
-                        onPickImage?(data, isPNG ? "image/png" : "image/jpeg", isPNG ? "photo.png" : "photo.jpg")
-                    }
-                    pickerItem = nil
-                }
-            }
+        VStack(spacing: 8) {
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
                 .focused($focused)
-                .padding(.leading, 4)
-            Button(action: onSend) {
-                Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold)).foregroundStyle(p.brandInk)
-                    .frame(width: 46, height: 46)
-                    .liquidGlass(in: Circle(), tint: p.brand, interactive: true)
-                    .background(Circle().fill(p.brand.opacity(0.85)))
+                .padding(.horizontal, 12).padding(.top, 8)
+            HStack(spacing: 8) {
+                PhotosPicker(selection: $pickerItem, matching: .images) {
+                    Image(systemName: "camera").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                        .frame(width: 36, height: 36).background(Circle().fill(p.fill))
+                }
+                .onChange(of: pickerItem) { _, item in
+                    guard let item else { return }
+                    Task {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            let isPNG = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
+                            onPickImage?(data, isPNG ? "image/png" : "image/jpeg", isPNG ? "photo.png" : "photo.jpg")
+                        }
+                        pickerItem = nil
+                    }
+                }
+                accessory()
+                Spacer(minLength: 0)
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(p.brandInk)
+                        .frame(width: 40, height: 40)
+                        .liquidGlass(in: Circle(), tint: p.brand, interactive: true)
+                        .background(Circle().fill(p.brand.opacity(0.85)))
+                }
+                .disabled(empty)
+                .opacity(empty ? 0.5 : 1)
             }
-            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
-            .opacity(text.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
         }
-        .padding(.leading, 8).padding(.trailing, 6).padding(.vertical, 7)
-        .liquidGlass(in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .padding(8)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+}
+
+extension InputBar where Accessory == EmptyView {
+    init(text: Binding<String>, placeholder: String, onPickImage: ((Data, String, String) -> Void)? = nil, onSend: @escaping () -> Void) {
+        self.init(text: text, placeholder: placeholder, onPickImage: onPickImage, onSend: onSend, accessory: { EmptyView() })
     }
 }

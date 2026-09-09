@@ -1,0 +1,141 @@
+// Codex CLI 驱动：每一轮对话起一个 `codex exec --json`（续聊用 `codex exec resume <thread>`）。
+// 选项（mode / model / effort）是进程级参数，所以手机上切换后下一轮自动生效，无需重启常驻进程。
+// Codex 非交互模式没有审批回调：normal 靠 workspace-write 沙箱兜底，沙箱外操作被直接拒绝。
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { expandHome } from '../files.js';
+import { codexOptionArgs, CODEX_PLAN_PREFIX } from './options.js';
+
+export class CodexAgent {
+  constructor({ session, store }) {
+    Object.assign(this, { session, store });
+    this.proc = null;
+    this.buffer = '';
+    this.queue = [];
+    this.turnErrored = false;
+  }
+
+  configure() { /* 每轮重新拼参数，无需处理 */ }
+
+  async send(text, attachments = []) {
+    if (this.proc) { this.queue.push({ text, attachments }); return; }
+    this.#spawn(text, attachments);
+  }
+
+  stop() {
+    const p = this.proc; if (!p) return;
+    this.queue = [];
+    p.kill('SIGTERM');
+    setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 2000).unref();
+  }
+
+  dispose() { this.stop(); }
+
+  #spawn(text, attachments) {
+    const { session, store } = this;
+    const opts = { mode: session.mode, model: session.model, effort: session.effort };
+    const prompt = (opts.mode === 'plan' ? CODEX_PLAN_PREFIX : '') + text;
+    const args = session.agentSessionId ? ['exec', 'resume', ...codexOptionArgs(opts)] : ['exec', ...codexOptionArgs(opts)];
+    for (const a of attachments) {
+      const up = store.uploads.get(a);
+      if (up && up.mime.startsWith('image/')) args.push('-i', up.path);
+    }
+    if (session.agentSessionId) args.push(session.agentSessionId);
+    args.push(prompt);
+
+    this.turnErrored = false;
+    store.setStatus(session.id, 'running');
+    this.proc = spawn('codex', args, { cwd: expandHome(session.cwd), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
+    this.proc.stdout.on('data', (b) => this.#onData(b));
+    this.proc.stderr.on('data', (b) => { const s = String(b).trim(); if (s && !/^(Reading additional input|Shell cwd was reset)/.test(s)) console.error(`[codex ${session.id.slice(0, 8)}] ${s}`); });
+    this.proc.on('exit', (code) => {
+      this.proc = null;
+      if (this.buffer.trim()) { this.#handleLine(this.buffer); this.buffer = ''; }
+      if (code && code !== 0 && !this.turnErrored) store.addMessage(session.id, { role: 'system', text: `codex 退出，代码 ${code}` });
+      store.setStatus(session.id, code === 0 || code === null ? 'idle' : 'error');
+      const next = this.queue.shift();
+      if (next) this.#spawn(next.text, next.attachments);
+    });
+    this.proc.on('error', (e) => {
+      store.addMessage(session.id, { role: 'system', text: `无法启动 codex：${e.message}` });
+      store.setStatus(session.id, 'error');
+      this.proc = null;
+    });
+  }
+
+  #onData(buf) {
+    this.buffer += String(buf);
+    let i;
+    while ((i = this.buffer.indexOf('\n')) >= 0) {
+      const line = this.buffer.slice(0, i).trim();
+      this.buffer = this.buffer.slice(i + 1);
+      if (line) this.#handleLine(line);
+    }
+  }
+
+  #handleLine(line) {
+    let ev; try { ev = JSON.parse(line); } catch { return; }
+    handleCodexEvent(ev, this.store, this.session, this);
+  }
+}
+
+/** 把 `codex exec --json` 的一行事件写进 store（导出便于测试）。
+ *  Codex 的 item id 每轮从 item_0 重新计数，这里加上轮次前缀避免跨轮撞到同一条消息 / 工具卡。 */
+export function handleCodexEvent(ev, store, session, state = {}) {
+  switch (ev.type) {
+    case 'thread.started':
+      if (ev.thread_id) store.setAgentSessionId(session.id, ev.thread_id);
+      break;
+    case 'turn.started':
+      state.turn = randomUUID().slice(0, 8);
+      break;
+    case 'item.started':
+    case 'item.completed': {
+      const raw = ev.item ?? {};
+      const it = { ...raw, id: `${state.turn ?? (state.turn = randomUUID().slice(0, 8))}-${raw.id ?? randomUUID()}` };
+      const done = ev.type === 'item.completed';
+      switch (it.type) {
+        case 'agent_message':
+          if (done && it.text) { store.appendDelta(session.id, it.id, it.text); store.finishMessage(session.id, it.id); }
+          break;
+        case 'command_execution':
+          store.upsertToolCall(session.id, { id: it.id, name: 'Shell', detail: stripShell(it.command),
+            state: !done ? 'running' : it.exit_code === 0 || it.status === 'completed' ? 'done' : 'error' });
+          break;
+        case 'file_change': {
+          const paths = (it.changes ?? []).map((c) => c.path).filter(Boolean);
+          store.upsertToolCall(session.id, { id: it.id, name: 'Edit', detail: paths.join(', ') || '文件改动', state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running' });
+          break;
+        }
+        case 'mcp_tool_call':
+          store.upsertToolCall(session.id, { id: it.id, name: `${it.server ?? 'mcp'}.${it.tool ?? ''}`, detail: JSON.stringify(it.arguments ?? {}).slice(0, 120), state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running' });
+          break;
+        case 'web_search':
+          store.upsertToolCall(session.id, { id: it.id, name: 'WebSearch', detail: it.query ?? '', state: done ? 'done' : 'running' });
+          break;
+        case 'error':
+          console.error(`[codex ${session.id.slice(0, 8)}] ${it.message}`);
+          break;
+        default: break;   // reasoning / todo_list 等不上屏
+      }
+      break;
+    }
+    case 'error':
+      state.turnErrored = true;
+      store.addMessage(session.id, { role: 'system', text: `Codex 出错：${humanError(ev.message)}` });
+      break;
+    case 'turn.failed':
+      if (!state.turnErrored) { state.turnErrored = true; store.addMessage(session.id, { role: 'system', text: `Codex 出错：${humanError(ev.error?.message)}` }); }
+      break;
+    default: break;
+  }
+}
+
+function stripShell(cmd = '') {
+  const m = String(cmd).match(/^\/bin\/(?:ba|z)?sh -lc '([\s\S]*)'$/);
+  return m ? m[1] : String(cmd);
+}
+
+function humanError(msg = '') {
+  try { const j = JSON.parse(msg); return j.error?.message ?? j.message ?? msg; } catch { return msg || '未知错误'; }
+}

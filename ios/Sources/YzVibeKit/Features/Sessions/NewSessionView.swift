@@ -7,6 +7,9 @@ struct NewSessionView: View {
     @State private var req = NewSessionRequest(cwd: MockData.recentFolders.first ?? "")
     @State private var firstMessage = ""
     @State private var busy = false
+    @State private var seeded = false
+
+    private var caps: AgentCapabilities { store.capabilities(for: req.agent, on: store.selectedDeviceId) }
 
     var body: some View {
         NavigationStack {
@@ -57,16 +60,28 @@ struct NewSessionView: View {
                             }
                             .padding(.horizontal, Spacing.card).frame(minHeight: 60)
                             Divider_()
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack(spacing: 6) { Text("YOLO 模式").font(.yzHeadline).foregroundStyle(p.label); Image(systemName: "bolt.fill").font(.system(size: 12)).foregroundStyle(p.danger) }
-                                    Text("跳过所有权限检查，手机端不会再收到审批").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                                    Text("--dangerously-skip-permissions").font(.yzCaption).monospaced().foregroundStyle(p.labelTertiary)
+                            VStack(alignment: .leading, spacing: 10) {
+                                SegmentedPills(items: SessionMode.allCases.map { ($0, "\($0.displayName) · \($0.subtitle)") }, selection: $req.mode)
+                                if let info = caps.modeInfo(req.mode) {
+                                    Text(info.description).font(.yzFootnote).foregroundStyle(req.mode == .trust ? p.danger : p.labelSecondary)
+                                    Text(info.flag).font(.yzCaption).monospaced().foregroundStyle(p.labelTertiary)
                                 }
-                                Spacer()
-                                Toggle("", isOn: $req.yolo).labelsHidden().tint(p.danger)
                             }
-                            .padding(.horizontal, Spacing.card).frame(minHeight: 76)
+                            .padding(.horizontal, Spacing.card).padding(.vertical, 12)
+                            Divider_()
+                            HStack(spacing: 12) {
+                                Text("模型").font(.yzHeadline).foregroundStyle(p.label)
+                                Spacer()
+                                ModelMenu(agent: req.agent, caps: caps, model: $req.model)
+                            }
+                            .padding(.horizontal, Spacing.card).frame(minHeight: 56)
+                            Divider_()
+                            HStack(spacing: 12) {
+                                Text("思考强度").font(.yzHeadline).foregroundStyle(p.label)
+                                Spacer()
+                                EffortMenu(agent: req.agent, caps: caps, model: req.model, effort: $req.effort)
+                            }
+                            .padding(.horizontal, Spacing.card).frame(minHeight: 56)
                         }
                     }
                     .padding(Spacing.page)
@@ -75,6 +90,8 @@ struct NewSessionView: View {
             }
             .navigationTitle("新建会话")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { if !seeded { seeded = true; applyDefaults() } }
+            .onChange(of: req.agent) { _, _ in applyDefaults() }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
             .safeAreaInset(edge: .bottom) {
                 Button { Task { await start() } } label: {
@@ -85,6 +102,12 @@ struct NewSessionView: View {
                 .padding(.horizontal, Spacing.page).padding(.bottom, 8)
             }
         }
+    }
+
+    /// 换 Agent 时把模式 / 模型 / 强度换成该 Agent 上次用的值。
+    private func applyDefaults() {
+        let d = store.settings.defaults(for: req.agent)
+        req.mode = d.mode; req.model = d.model; req.effort = d.effort
     }
 
     private func start() async {

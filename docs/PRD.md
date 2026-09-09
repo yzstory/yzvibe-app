@@ -36,7 +36,8 @@
 | 配对 | 手动端点 | Host / Port / Token 手输；支持 LAN IP、Tailscale IP、https relay |
 | 配对 | 设备列表 | 已配对设备持久化在手机；显示在线状态、连接方式（Tunnel / LAN / P2P / Tailscale） |
 | 会话 | 会话列表 | 按文件夹分组、仅显示活跃、搜索；卡片显示 Agent 标签 / 状态点 / 相对时间 / 路径 |
-| 会话 | 新建会话 | 选 Agent（Claude / Codex / 自定义）、工作目录、首条消息、Continue Last、YOLO 模式 |
+| 会话 | 新建会话 | 选 Agent（Claude / Codex / 自定义）、工作目录、首条消息、Continue Last、模式（Plan / Normal / Trust）、模型、思考强度 |
+| 会话 | 会话内切换 | 输入条下方三枚胶囊：模式 / 模型（含自定义 ID）/ 思考强度，随 Agent 显示各自含义与实际参数，切换后下一轮生效 |
 | 会话 | 恢复会话 | 离开后回来接回同一上下文 |
 | 聊天 | 消息流 | 用户 / 助手气泡、Markdown、代码块、工具调用折叠卡、流式输出 |
 | 聊天 | 快捷回复 | Continue / LGTM / Explain / Undo 等胶囊，可自定义 |

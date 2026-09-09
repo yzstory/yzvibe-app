@@ -31,6 +31,7 @@ export class MockAgent {
     this.running = false;
   }
 
+  configure() {}
   stop() { this.running = false; this.store.setStatus(this.session.id, 'idle'); }
   dispose() {}
 }

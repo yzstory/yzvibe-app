@@ -13,9 +13,11 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 |---|---|---|
 | GET | /health | 公开。`{ name, version, agents, connectorId, uptime }`；`connectorId` 是电脑的稳定 ID，手机用它作 Device.id |
 | POST | /pair | 公开。body `{ token, phoneName? }` → `{ deviceToken, deviceName, connectorId }`；token 一次性、10 分钟有效 |
+| GET | /agents | 各 Agent 的能力表：`{ claude: { modes, efforts, models, customModel }, codex: {...} }`，见下文「会话选项」 |
 | GET | /sessions | 会话列表 |
-| POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, yolo?, model? }` → Session（201）；cwd 不存在 → 400 |
+| POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, mode?, model?, effort? }` → Session（201）；cwd 不存在 → 400。旧字段 `yolo:true` 等价 `mode:'trust'` |
 | GET | /sessions/:id | 单个会话 |
+| PATCH | /sessions/:id | `{ mode?, model?, effort? }` 改会话选项 → Session；`model`/`effort` 传 `null` 或空串恢复默认；广播 `session.updated` |
 | DELETE | /sessions/:id | 结束会话 |
 | GET | /sessions/:id/messages?after=<messageId> | 增量消息（after 之后的） |
 | POST | /sessions/:id/messages | `{ text, attachments? }`（WS 之外的发送方式）|
@@ -47,6 +49,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 { "type": "message.send",     "sessionId": "s1", "text": "...", "attachments": ["upload-id"] }
 { "type": "session.stop",     "sessionId": "s1" }
 { "type": "session.resume",   "sessionId": "s1" }
+{ "type": "session.configure","sessionId": "s1", "mode": "plan", "model": "opus", "effort": "high" }   // 同 PATCH /sessions/:id
 { "type": "approval.respond", "approvalId": "a1", "decision": "allow|deny|allow_once" }
 { "type": "ping" }
 ```
@@ -55,7 +58,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 ## 数据模型（三端共用）
 ```ts
 type Device  = { id, name, host, port, mode: 'tunnel'|'local'|'p2p'|'tailscale'|'relay', online: boolean, lastSeen }
-type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt }
+type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null }
 type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, attachments?, toolCall?, createdAt }
 type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other', summary, detail, risk, status: 'pending'|'allowed'|'denied'|'expired', createdAt, expiresAt? }
 ```
@@ -64,3 +67,18 @@ type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other
 连接器以 `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool mcp__yzvibe__approve --mcp-config <file>` 启动 Agent。
 Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js），它 POST 到连接器 `/internal/approval` 并等待手机决定，再返回 `{behavior:"allow"|"deny"}`。
 `--yolo` 时改传 `--dangerously-skip-permissions`，不会产生审批。
+
+## 会话选项：模式 / 模型 / 思考强度
+
+三端统一叫 **Plan / Normal / Trust**，连接器按 Agent 翻译（`connector/src/agents/options.js`）：
+
+| 选项 | Claude Code | Codex CLI |
+|---|---|---|
+| Plan | `--permission-mode plan`（仍带 `--permission-prompt-tool`；`ExitPlanMode` 会作为一条低风险审批发到手机，批准后会话自动切回 Normal） | `-c sandbox_mode="read-only"` + 提示词前缀「只规划不改文件」（Codex 非交互没有原生 plan） |
+| Normal | `--permission-prompt-tool mcp__yzvibe__approve`（敏感操作发手机审批） | `-c sandbox_mode="workspace-write" -c approval_policy="never"`：沙箱内自动执行，沙箱外操作被拒绝，**不会产生审批** |
+| Trust | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
+| model | `--model <alias 或完整 id>`；预置 fable / opus / sonnet / haiku，支持自定义 | `-m <slug>`；列表来自 `codex debug models`（10 分钟缓存），支持自定义 |
+| effort | `--effort low|medium|high|xhigh|max` | `-c model_reasoning_effort="…"`；档位随模型（目录里带 `efforts`） |
+
+生效时机：Codex 每轮是独立进程，下一轮即生效；Claude 是常驻进程，连接器在会话空闲时于下一轮用 `--resume <session>` 重启进程带上新参数（运行中时等本轮结束）。
+`GET /agents` 返回的每个 Agent：`modes[plan|normal|trust] = { flag, description }`、`efforts: string[]`、`models: [{ id, label, description?, efforts?, defaultEffort? }]`、`customModel: boolean`。手机端在连接器不可达或版本较旧时使用内置回退表。

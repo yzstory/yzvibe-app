@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { expandHome } from '../files.js';
+import { claudeOptionArgs } from './options.js';
 
 export class ClaudeAgent {
   constructor({ session, store, internalURL, internalSecret, home, options = {} }) {
@@ -14,7 +15,11 @@ export class ClaudeAgent {
     this.currentMessageId = null;
     this.currentText = '';
     this.sawDelta = false;
+    this.needsRespawn = false;
   }
+
+  /** 手机切换了 mode / model / effort：这些是 claude 进程级参数，空闲时在下一轮以 --resume 重启进程生效。 */
+  configure() { this.needsRespawn = true; }
 
   #mcpConfigPath() {
     const file = path.join(this.home, `mcp-${this.session.id}.json`);
@@ -34,12 +39,11 @@ export class ClaudeAgent {
   #spawn() {
     const { session, options } = this;
     const args = ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages',
-                  '--mcp-config', this.#mcpConfigPath()];
-    if (options.yolo) args.push('--dangerously-skip-permissions');
-    else args.push('--permission-prompt-tool', 'mcp__yzvibe__approve');
+                  '--mcp-config', this.#mcpConfigPath(),
+                  ...claudeOptionArgs({ mode: session.mode, model: session.model, effort: session.effort })];
     if (session.agentSessionId) args.push('--resume', session.agentSessionId);
     else if (options.continueLast) args.push('--continue');
-    if (options.model) args.push('--model', options.model);
+    this.needsRespawn = false;
 
     const cwd = expandHome(session.cwd);
     this.proc = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, CLAUDECODE: undefined } });
@@ -57,7 +61,17 @@ export class ClaudeAgent {
     });
   }
 
+  /** 丢弃旧进程（不再触发它的 exit 状态回写），下一次 spawn 用 --resume 接上同一段对话。 */
+  #retire() {
+    const p = this.proc; if (!p) return;
+    this.proc = null;
+    p.removeAllListeners('exit'); p.on('exit', () => {});
+    try { p.stdin.end(); } catch {}
+    p.kill('SIGTERM');
+  }
+
   async send(text, attachments = []) {
+    if (this.proc && this.needsRespawn && this.session.status !== 'running' && this.session.status !== 'waiting_approval') this.#retire();
     if (!this.proc) this.#spawn();
     const content = [{ type: 'text', text }];
     for (const a of attachments) {
@@ -161,5 +175,9 @@ export function classifyPermission(toolName, input = {}) {
     return { kind: 'write', risk: outside ? 'high' : 'low', summary, detail: `${toolName} ${summary}` };
   }
   if (/^(WebFetch|WebSearch)$/.test(toolName)) return { kind: 'network', risk: 'low', summary, detail: `${toolName} ${summary}` };
+  if (toolName === 'ExitPlanMode') {
+    const plan = typeof input.plan === 'string' ? input.plan : '';
+    return { kind: 'other', risk: 'low', summary: '批准计划，开始执行', detail: plan ? plan.slice(0, 4000) : 'Claude 已完成规划，批准后切换到 Normal 模式开始改动。' };
+  }
   return { kind: 'other', risk: 'medium', summary: `${toolName}: ${summary}`, detail: JSON.stringify(input, null, 2).slice(0, 2000) };
 }

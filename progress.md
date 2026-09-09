@@ -27,3 +27,10 @@
 - 中文 README（根 + connector/）；提交并 push 到 origin/main
 - 端口：9876 被 Vibelet 自己的连接器（~/.vibelet/runtime，PID 55599）长期占用 → YzVibe 默认改 19876，连接器 EADDRINUSE 时自动后移最多 20 个端口，二维码携带实际端口；iOS 默认端口同步；新增回退测试；本机 smoke 启动通过
 - 真机首跑（用户 iPhone + 真实 Claude）反馈修复：助手气泡 Markdown 渲染（MarkdownText）、会话标题随首条消息更新（connector 推 session.updated + 本地即时更新）、composer 渐变底避免透出、流式增量自动滚底、聊天页隐藏 Tab 栏、键盘三种收起方式（滚动/点消息区/键盘工具栏「收起」）
+
+## 2026-09-09 会话选项（模式 / 模型 / 思考强度）
+- iOS 打包报 Signing 需要 team：project.yml 加 `DEVELOPMENT_TEAM: TRVTR5HQP8` + `CODE_SIGN_STYLE: Automatic`，xcodegen 重新生成，真机 generic 构建通过
+- 连接器：新增 `agents/options.js`（Plan/Normal/Trust、模型、effort 在 Claude / Codex 上的参数映射 + `GET /agents` 能力表，Codex 模型目录来自 `codex debug models`）、`agents/codex.js`（`codex exec --json` 每轮一进程，`exec resume` 续聊）、`PATCH /sessions/:id` 与 WS `session.configure`；Claude 驱动空闲时 `--resume` 重启带新参数；`ExitPlanMode` 变成低风险审批，批准后会话自动回 Normal
+- iOS：Session/NewSessionRequest 加 mode/model/effort（去掉 yolo），`AgentCapabilities` + 内置回退表，聊天输入条改为「文本框 + 底部一排：相机 / 模式 / 模型 / 强度 / 发送」，新建会话页用分段选模式并显示该 Agent 的解释与参数；自定义模型与每个 Agent 上次用的选项存在 Settings
+- 验证：connector 6 个测试通过；YzVibeKit 模拟器编译通过 + 单测；真实 Claude（haiku, trust→normal + effort 切换触发 --resume 重启）与真实 Codex（gpt-5.6-sol, normal→plan resume）各两轮冒烟均记得上下文
+- 已知限制：Codex 非交互模式没有审批回调，Normal 只靠 workspace-write 沙箱兜底；要做 Codex 审批需改走 `codex app-server` 协议

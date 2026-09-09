@@ -104,3 +104,88 @@ test('默认端口被占用时自动后移', async () => {
   assert.equal(c.port, busy + 1);
   await c.close(); blocker.close();
 });
+
+test('会话选项：新建 / PATCH / WS 切换 / 能力表', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-opt-'));
+  const c = await createConnector({ port: 0, name: 'T', defaultAgent: 'mock', home, log: () => {} });
+  const port = await c.listen();
+  const base = `http://127.0.0.1:${port}`;
+  const pair = await (await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ token: c.pairing.token }) })).json();
+  const H = { authorization: `Bearer ${pair.deviceToken}`, 'content-type': 'application/json' };
+
+  // 能力表
+  const caps = await (await fetch(`${base}/agents`, { headers: H })).json();
+  assert.deepEqual(Object.keys(caps.claude.modes), ['plan', 'normal', 'trust']);
+  assert.ok(caps.claude.efforts.includes('max'));
+  assert.ok(caps.codex.models.length > 0);
+  assert.equal(caps.codex.customModel, true);
+
+  // 新建：默认 normal；yolo 兼容成 trust；非法 effort 被丢弃
+  const s1 = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd }) })).json();
+  assert.equal(s1.mode, 'normal'); assert.equal(s1.model, null); assert.equal(s1.effort, null);
+  const s2 = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd, yolo: true, model: 'opus', effort: 'bogus' }) })).json();
+  assert.equal(s2.mode, 'trust'); assert.equal(s2.model, 'opus'); assert.equal(s2.effort, null);
+
+  // PATCH → 返回新会话并广播 session.updated
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${pair.deviceToken}`);
+  const events = [];
+  await new Promise((r) => ws.on('open', r));
+  ws.on('message', (d) => events.push(JSON.parse(d)));
+  const waitFor = (pred, ms = 3000) => new Promise((res, rej) => { const t0 = Date.now(); const tick = () => { const e = events.find(pred); if (e) return res(e); if (Date.now() - t0 > ms) return rej(new Error('timeout')); setTimeout(tick, 20); }; tick(); });
+  const patched = await (await fetch(`${base}/sessions/${s1.id}`, { method: 'PATCH', headers: H, body: JSON.stringify({ mode: 'plan', effort: 'high', model: 'sonnet' }) })).json();
+  assert.equal(patched.mode, 'plan'); assert.equal(patched.effort, 'high'); assert.equal(patched.model, 'sonnet');
+  const ev = await waitFor((e) => e.type === 'session.updated' && e.session.id === s1.id && e.session.mode === 'plan');
+  assert.equal(ev.session.effort, 'high');
+  // 通过 WS 切换；model 传空串表示恢复默认
+  ws.send(JSON.stringify({ type: 'session.configure', sessionId: s1.id, mode: 'trust', model: '' }));
+  const ev2 = await waitFor((e) => e.type === 'session.updated' && e.session.id === s1.id && e.session.mode === 'trust');
+  assert.equal(ev2.session.model, null); assert.equal(ev2.session.effort, 'high');
+  // 持久化后重启仍在
+  const listed = await (await fetch(`${base}/sessions/${s1.id}`, { headers: H })).json();
+  assert.equal(listed.mode, 'trust');
+  ws.close();
+  await c.close();
+});
+
+test('选项映射到命令行参数', async () => {
+  const { claudeOptionArgs, codexOptionArgs, normalizeOptions } = await import('../src/agents/options.js');
+  assert.deepEqual(claudeOptionArgs({ mode: 'normal' }), ['--permission-prompt-tool', 'mcp__yzvibe__approve']);
+  assert.deepEqual(claudeOptionArgs({ mode: 'plan', model: 'opus', effort: 'max' }), ['--permission-prompt-tool', 'mcp__yzvibe__approve', '--permission-mode', 'plan', '--model', 'opus', '--effort', 'max']);
+  assert.deepEqual(claudeOptionArgs({ mode: 'trust' }), ['--dangerously-skip-permissions']);
+  assert.ok(codexOptionArgs({ mode: 'plan' }).includes('sandbox_mode="read-only"'));
+  assert.ok(codexOptionArgs({ mode: 'trust' }).includes('--dangerously-bypass-approvals-and-sandbox'));
+  const cx = codexOptionArgs({ mode: 'normal', model: 'gpt-5.5', effort: 'xhigh' });
+  assert.ok(cx.includes('sandbox_mode="workspace-write"') && cx.includes('gpt-5.5') && cx.includes('model_reasoning_effort="xhigh"'));
+  assert.deepEqual(normalizeOptions({ mode: 'nope', model: 'a b', effort: 'ultra' }, 'codex'), { effort: 'ultra' });
+  assert.deepEqual(normalizeOptions({ yolo: true, model: null }), { mode: 'trust', model: null });
+});
+
+test('Codex JSONL 事件 → 消息 / 工具卡', async () => {
+  const { handleCodexEvent } = await import('../src/agents/codex.js');
+  const { Store } = await import('../src/store.js');
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-cx-')));
+  const s = store.createSession({ agent: 'codex', cwd, title: 't' });
+  const lines = [
+    '{"type":"thread.started","thread_id":"th-1"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I will run it."}}',
+    '{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \'echo hi\'","status":"in_progress"}}',
+    '{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \'echo hi\'","exit_code":0,"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"a.ts","kind":"update"}],"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"ok"}}',
+    '{"type":"turn.completed","usage":{}}',
+  ];
+  const state = {};
+  for (const l of lines) handleCodexEvent(JSON.parse(l), store, s, state);
+  assert.equal(store.session(s.id).agentSessionId, 'th-1');
+  const msgs = store.messagesOf(s.id);
+  assert.deepEqual(msgs.filter((m) => m.role === 'assistant').map((m) => m.text), ['I will run it.', 'ok']);
+  const calls = msgs.flatMap((m) => m.toolCalls);
+  assert.deepEqual(calls.map((t) => [t.name, t.detail, t.state]), [['Shell', 'echo hi', 'done'], ['Edit', 'a.ts', 'done']]);
+  handleCodexEvent({ type: 'turn.failed', error: { message: '{"error":{"message":"model needs upgrade"}}' } }, store, s, state);
+  assert.ok(store.messagesOf(s.id).some((m) => m.role === 'system' && m.text.includes('model needs upgrade')));
+  // 下一轮 item id 从 item_1 重新计数，不能追加到上一轮的消息里
+  handleCodexEvent({ type: 'turn.started' }, store, s, state);
+  handleCodexEvent({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: 'second turn' } }, store, s, state);
+  assert.deepEqual(store.messagesOf(s.id).filter((m) => m.role === 'assistant').map((m) => m.text), ['I will run it.', 'ok', 'second turn']);
+});

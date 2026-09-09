@@ -6,7 +6,7 @@ final class YzVibeKitTests: XCTestCase {
         let s = OKLCH(0.64, 0.17, 40).srgb
         XCTAssertGreaterThan(s.r, s.g)
         XCTAssertGreaterThan(s.g, s.b)
-        XCTAssertEqual(s.r, 0.76, accuracy: 0.06)
+        XCTAssertEqual(s.r, 0.87, accuracy: 0.05)   // oklch(0.64 0.17 40) ≈ rgb(221, 110, 76)
     }
 
     func testOKLCHWhiteAndBlack() {
@@ -52,5 +52,69 @@ final class YzVibeKitTests: XCTestCase {
         XCTAssertEqual(store.approval("a1")?.status, .allowed)
         XCTAssertEqual(store.session("s1")?.pendingApprovals, 0)
         XCTAssertEqual(store.session("s1")?.status, .running)
+    }
+}
+
+// MARK: - 会话选项（模式 / 模型 / 思考强度）
+
+final class SessionOptionsTests: XCTestCase {
+    func testSessionDecodesOptionsWithDefaults() throws {
+        let old = #"{"id":"s1","agent":"claude","cwd":"~/x","title":"t","status":"idle"}"#
+        let s1 = try JSONDecoder.yz.decode(Session.self, from: Data(old.utf8))
+        XCTAssertEqual(s1.mode, .normal); XCTAssertNil(s1.model); XCTAssertNil(s1.effort)
+        let new = #"{"id":"s2","agent":"codex","cwd":"~/x","title":"t","status":"idle","mode":"plan","model":"gpt-5.5","effort":"xhigh"}"#
+        let s2 = try JSONDecoder.yz.decode(Session.self, from: Data(new.utf8))
+        XCTAssertEqual(s2.mode, .plan); XCTAssertEqual(s2.model, "gpt-5.5"); XCTAssertEqual(s2.effort, "xhigh")
+        // 空串等价未设置
+        let blank = #"{"id":"s3","agent":"claude","cwd":"","title":"","status":"idle","model":"","effort":null}"#
+        XCTAssertNil(try JSONDecoder.yz.decode(Session.self, from: Data(blank.utf8)).model)
+    }
+
+    func testNewSessionRequestEncodesModeNotYolo() throws {
+        let r = NewSessionRequest(agent: .codex, cwd: "~/p", mode: .trust, model: "gpt-5.5", effort: "high")
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder.yz.encode(r)) as? [String: Any])
+        XCTAssertEqual(obj["mode"] as? String, "trust")
+        XCTAssertEqual(obj["model"] as? String, "gpt-5.5")
+        XCTAssertNil(obj["yolo"])
+    }
+
+    func testCapabilitiesDecodeAndModelSpecificEfforts() throws {
+        let json = #"{"claude":{"modes":{"plan":{"flag":"--permission-mode plan","description":"d"}},"efforts":["low","max"],"models":[{"id":"opus","label":"Opus"}]},"codex":{"efforts":["low","high"],"models":[{"id":"gpt-5.5","label":"GPT-5.5","efforts":["low","medium","high","xhigh"]}],"customModel":true}}"#
+        let caps = try JSONDecoder.yz.decode([String: AgentCapabilities].self, from: Data(json.utf8))
+        XCTAssertEqual(caps["claude"]?.modeInfo(.plan)?.flag, "--permission-mode plan")
+        XCTAssertEqual(caps["claude"]?.label(forModel: "opus"), "Opus")
+        XCTAssertEqual(caps["claude"]?.label(forModel: "my-custom"), "my-custom")
+        XCTAssertEqual(caps["codex"]?.efforts(for: "gpt-5.5"), ["low", "medium", "high", "xhigh"])
+        XCTAssertEqual(caps["codex"]?.efforts(for: nil), ["low", "high"])
+        XCTAssertEqual(AgentCapabilities.fallback(for: .codex).modes.count, 3)
+    }
+
+    func testSettingsRememberCustomModelsAndDefaults() throws {
+        var s = Settings()
+        s.addCustomModel("claude-opus-5", for: .claude)
+        s.addCustomModel("x", for: .claude)
+        s.addCustomModel("claude-opus-5", for: .claude)   // 去重并置顶
+        XCTAssertEqual(s.customModels(for: .claude), ["claude-opus-5", "x"])
+        XCTAssertEqual(s.customModels(for: .codex), [])
+        s.remember(SessionOptions(mode: .plan, model: "opus", effort: "max"), for: .claude)
+        let roundTrip = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(s))
+        XCTAssertEqual(roundTrip.defaults(for: .claude), SessionOptions(mode: .plan, model: "opus", effort: "max"))
+        XCTAssertEqual(roundTrip.defaults(for: .codex), SessionOptions())
+        // 旧版本存的 JSON 没有新字段也能读
+        let legacy = #"{"notifyOnApproval":true,"notifyOnReply":false,"groupByFolder":true,"activeOnly":false,"appearance":"dark","faceIDForHighRisk":true}"#
+        XCTAssertEqual(try JSONDecoder().decode(Settings.self, from: Data(legacy.utf8)).appearance, .dark)
+    }
+
+    @MainActor
+    func testStoreSetModeUpdatesSessionOptimistically() async {
+        let store = AppStore()
+        await store.setMode(.trust, for: "s1")
+        XCTAssertNil(store.toast, "configure 不应失败")
+        XCTAssertEqual(store.session("s1")?.mode, .trust)
+        await store.setModel("  opus ", for: "s1")
+        XCTAssertEqual(store.session("s1")?.model, "opus")
+        await store.setEffort("", for: "s1")
+        XCTAssertNil(store.session("s1")?.effort)
+        XCTAssertEqual(store.settings.defaults(for: .claude).mode, .trust)
     }
 }
