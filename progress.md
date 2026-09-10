@@ -66,3 +66,12 @@
 - `RootTabView.onOpenURL` 处理 `yzvibe://pair?…`，浏览器唤起后自动配对并跳到设备页（`yzvibe` scheme 早已在 project.yml 注册）
 - 验证：connector 15 个测试通过（新增落地页 / JSON / 过期失效 / relay 拼链 2 组）；YzVibeKit 与测试目标交叉编译通过，新增 5 个解析与二维码识别测试（本机无 iOS 模拟器运行时，未能实跑）；落地页在 127.0.0.1 与局域网地址实测 HTTP 200，深链与 HTML 转义正确
 - 已知环境问题：本机 Clash Party 代理对新分配的 trycloudflare 域名经常握手失败（curl HTTP 000），同一时刻 Vibelet 的长期隧道正常；origin 本身没问题，手机走自己的 DNS 一般可达，实在不通就 `yzvibe restart --access=local` 走局域网
+
+## 2026-09-10 聊天输出与远程文件（对齐 Vibelet 截图）
+- 代码块：`CodeBlock` 加语言标签 + 「复制」按钮（复制后 1.6 秒回落），内容可横向滚动、可选中；聊天里的围栏代码块自动带语言名
+- 聊天正文里的文件路径变成可点链接：`FilePathDetector` 判断行内代码像不像路径（命令 / 参数 / URL / `and/or` 都排除，点文件与目录都认，剥离中英文收尾标点），`MarkdownText.linkifyPaths` 给它套 `yzfile://` 链接，由 `OpenURLAction` 拦截 → 打开文件查看器
+- 新增 `FileViewerView`：标题=文件名、副标题=完整路径（主目录缩成 `~`）、大小 / 修改时间 / 「工作目录外」标记，右上角「下载」与「复制」；文本走 CodeBlock，图片直接显示，>2MB 提示改用下载；下载写临时文件后走系统分享面板（存到「文件」App / 隔空投送）
+- `FilesView` 改成点文件进查看器（原来的「下载到手机」只弹 toast，是假的），列表长按可复制路径
+- 连接器：新增 `GET /files/stat`；`preview` / `download` 换用 `resolveReadable`——工作目录内放行，目录外只放行主目录里的非敏感文件（私钥 / 凭据 / keychain 等一律 403），download 补 content-length
+- 多段气泡输出本来就有（连接器在工具调用前后切分 assistant 消息），无需改动
+- 验证：connector 17 个测试通过（新增权限矩阵与 stat/download 两组）；iOS 新增 4 个测试并编译通过，另把 `FilePathDetector` 抽出来在 macOS 上真跑了 27 条用例全过；对运行中的连接器做了端到端实测：工作目录内 / 工作目录外 `~/.yzvibe/pairing.txt` 均 200 并成功下载，`~/.ssh/id_rsa` 与 `../../etc/passwd` 均 403

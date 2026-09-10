@@ -28,8 +28,19 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /approvals?status=pending | 审批列表（手机重启后用它恢复收件箱） |
 | POST | /approvals/:id | `{ decision }`（WS 之外的审批方式）|
 | GET | /files?sessionId=&path= | 目录列表 `{ path, entries:[{name,path,kind,size,modifiedAt}] }`，path 相对会话 cwd，越界 403 |
+| GET | /files/stat?sessionId=&path= | 单个文件元信息 `{ name, path, displayPath, kind, size, modifiedAt, mime, textual, inCwd }`，文件查看器用 |
 | GET | /files/preview?sessionId=&path= | 文本/图片预览（≤ 2MB） |
-| GET | /files/download?sessionId=&path= | 下载 |
+| GET | /files/download?sessionId=&path= | 下载，带 content-length 与 content-disposition |
+
+### 文件可访问范围
+`/files/stat`、`/files/preview`、`/files/download` 的 `path` 可以是相对会话 cwd 的路径，也可以是绝对路径或 `~/…`。放行规则：
+
+1. 会话工作目录内 → 放行（`inCwd: true`，与原有行为一致）
+2. 工作目录外、但在用户主目录内且不属于敏感清单 → 放行（`inCwd: false`，聊天正文里点 `~/.yzvibe/pairing.txt` 这类路径要用）
+3. 其余（主目录之外、或命中敏感清单）→ 403
+
+敏感清单：`.ssh` `.gnupg` `.aws` `.kube` `Library/Keychains` `.netrc` `.npmrc` `.pypirc` `id_rsa` 等私钥、`*.credentials.json`、`credentials` `.docker/config.json` `.config/gh` `.git-credentials`。
+`/files`（目录列表）仍然只在工作目录内。手机端只读取内容，不执行文件。
 | POST | /uploads | 二进制 body + `Content-Type` + `X-Filename` → `{ id, url }`；发送消息时把 id 放进 attachments |
 | GET | /uploads/:id | 取回上传内容 |
 

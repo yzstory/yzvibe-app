@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Store, HOME } from './store.js';
 import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, printQR } from './pairing.js';
 import { startCloudflareTunnel, loadRelay, saveRelay } from './tunnel.js';
-import { listDir, previewFile, resolveInside, mimeOf } from './files.js';
+import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
 import { CodexAgent } from './agents/codex.js';
 import { MockAgent } from './agents/mock.js';
@@ -183,13 +183,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         return json(res, store.resolveApproval(m[1], decision) ? 200 : 409, { ok: true });
       }
       // 文件
-      if (p === '/files' || p === '/files/preview' || p === '/files/download') {
+      if (p === '/files' || p === '/files/preview' || p === '/files/download' || p === '/files/stat') {
         const s = resolveSession(url.searchParams.get('sessionId') ?? ''); if (!s) return json(res, 400, { error: '需要 sessionId' });
         const rel = url.searchParams.get('path') ?? '';
         if (p === '/files') return json(res, 200, listDir(s.cwd, rel));
+        if (p === '/files/stat') return json(res, 200, statFile(s.cwd, rel));
         if (p === '/files/preview') { const { mime, body } = previewFile(s.cwd, rel); res.writeHead(200, { 'content-type': mime }); return res.end(body); }
-        const { target } = resolveInside(s.cwd, rel);
-        res.writeHead(200, { 'content-type': mimeOf(target), 'content-disposition': `attachment; filename="${encodeURIComponent(path.basename(target))}"` });
+        const { target } = resolveReadable(s.cwd, rel);
+        res.writeHead(200, { 'content-type': mimeOf(target), 'content-length': fs.statSync(target).size, 'content-disposition': `attachment; filename="${encodeURIComponent(path.basename(target))}"` });
         return fs.createReadStream(target).pipe(res);
       }
       // 上传（二进制 body + X-Filename）

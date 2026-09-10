@@ -440,3 +440,64 @@ test('relay / tunnel 模式的外链与配置直接拼在 host 上', async () =>
   // 末尾斜杠不会拼出双斜杠
   assert.equal(pairLink({ ...opts, host: 'https://abc.trycloudflare.com/' }), 'https://abc.trycloudflare.com/pair?token=tok');
 });
+
+test('文件远程访问：工作目录内放行 / 主目录内非敏感放行 / 敏感与目录外 403', async () => {
+  const { resolveReadable, statFile } = await import('../src/files.js');
+  const home = os.homedir();
+  const proj = fs.mkdtempSync(path.join(home, '.yzvibe-test-proj-'));
+  const outside = path.join(home, `.yzvibe-test-note-${Date.now()}.txt`);
+  fs.writeFileSync(path.join(proj, 'a.ts'), 'export const a = 1');
+  fs.writeFileSync(outside, 'hello from home');
+  try {
+    // 工作目录内：相对路径与绝对路径都放行
+    assert.equal(resolveReadable(proj, 'a.ts').target, path.join(proj, 'a.ts'));
+    assert.equal(resolveReadable(proj, path.join(proj, 'a.ts')).inCwd, true);
+
+    // 工作目录外、主目录内：放行但标记 inCwd=false
+    const st = statFile(proj, outside);
+    assert.equal(st.inCwd, false);
+    assert.equal(st.name, path.basename(outside));
+    assert.ok(st.displayPath.startsWith('~/'), '展示路径应把主目录缩成 ~');
+    assert.equal(st.textual, true);
+    assert.equal(statFile(proj, outside.replace(home, '~')).path, outside, '~ 开头的路径也认');
+
+    // 敏感文件与主目录之外：403
+    for (const bad of ['~/.ssh/id_rsa', '~/.aws/credentials', '~/.claude/.credentials.json', '/etc/passwd', '~/.git-credentials']) {
+      assert.throws(() => resolveReadable(proj, bad), (e) => e.status === 403, `应拒绝 ${bad}`);
+    }
+    // 相对路径越界仍然 403（原有行为不变）
+    assert.throws(() => resolveReadable(proj, '../../etc/passwd'), (e) => e.status === 403);
+  } finally {
+    fs.rmSync(proj, { recursive: true, force: true });
+    fs.rmSync(outside, { force: true });
+  }
+});
+
+test('文件接口：/files/stat 与 /files/download 走同一套权限', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-files-'));
+  const c = await createConnector({ port: 0, name: 'T', defaultAgent: 'mock', home, log: () => {} });
+  const port = await c.listen();
+  const base = `http://127.0.0.1:${port}`;
+  const pair = await (await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ token: c.pairing.token }) })).json();
+  const H = { authorization: `Bearer ${pair.deviceToken}`, 'content-type': 'application/json' };
+  const s = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd }) })).json();
+
+  const st = await (await fetch(`${base}/files/stat?sessionId=${s.id}&path=hello.md`, { headers: H })).json();
+  assert.equal(st.name, 'hello.md');
+  assert.equal(st.kind, 'markdown');
+  assert.equal(st.size, 4);
+  assert.equal(st.textual, true);
+  assert.equal(st.inCwd, true);
+  assert.equal(st.path, path.join(cwd, 'hello.md'));
+
+  const dl = await fetch(`${base}/files/download?sessionId=${s.id}&path=hello.md`, { headers: H });
+  assert.equal(dl.status, 200);
+  assert.equal(dl.headers.get('content-length'), '4');
+  assert.match(dl.headers.get('content-disposition'), /hello\.md/);
+  assert.equal(await dl.text(), '# hi');
+
+  assert.equal((await fetch(`${base}/files/stat?sessionId=${s.id}&path=${encodeURIComponent('~/.ssh/id_rsa')}`, { headers: H })).status, 403);
+  assert.equal((await fetch(`${base}/files/download?sessionId=${s.id}&path=../../etc/passwd`, { headers: H })).status, 403);
+  assert.equal((await fetch(`${base}/files/stat?sessionId=${s.id}&path=hello.md`)).status, 401);
+  await c.close();
+});

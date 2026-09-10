@@ -105,6 +105,51 @@ final class YzVibeKitTests: XCTestCase {
         XCTAssertNil(QRImageScanner.decode(try XCTUnwrap(blank.pngData())))
     }
 
+    func testFilePathDetectorAcceptsRealPaths() {
+        let good = ["bin/yzvibe.js", "~/.yzvibe/pairing.txt", "src/server.js", "connector/src/files.js",
+                    "README.md", "/Users/yuki/devops/a.swift", "docs/PRD.md", "ios/project.yml",
+                    "package.json", ".gitignore", "~/.claude/settings.json"]
+        for s in good { XCTAssertNotNil(FilePathDetector.path(in: s), "应识别为路径：\(s)") }
+        // 结尾标点与包裹符号要剥掉
+        XCTAssertEqual(FilePathDetector.path(in: "src/server.js。"), "src/server.js")
+        XCTAssertEqual(FilePathDetector.path(in: "`README.md`"), "README.md")
+        XCTAssertEqual(FilePathDetector.path(in: "(docs/PRD.md)"), "docs/PRD.md")
+        XCTAssertEqual(FilePathDetector.path(in: "connector/src/"), "connector/src")
+    }
+
+    func testFilePathDetectorRejectsNonPaths() {
+        let bad = ["npx yzvibe", "yzvibe qr", "--access=local", "19876", "claude-fable-5-1",
+                   "https://example.com/a.md", "and/or", "GET /files", "*.swift", "npm test",
+                   "-p", "yzvibe start --agent=mock"]
+        for s in bad { XCTAssertNil(FilePathDetector.path(in: s), "不该当成路径：\(s)") }
+    }
+
+    func testMarkdownLinkifiesOnlyPathsInInlineCode() throws {
+        // 行内代码里是路径 → 变成 yzfile:// 链接；是命令 → 保持原样
+        let md = try XCTUnwrap(try? AttributedString(markdown: "打开 `src/server.js` 然后跑 `npm test`",
+                                                    options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        let out = MarkdownText.linkifyPaths(md, tint: .red)
+        let links = out.runs.compactMap(\.link)
+        XCTAssertEqual(links.count, 1)
+        let comps = try XCTUnwrap(URLComponents(url: try XCTUnwrap(links.first), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(comps.scheme, "yzfile")
+        XCTAssertEqual(comps.queryItems?.first { $0.name == "path" }?.value, "src/server.js")
+    }
+
+    func testFileInfoDecodesConnectorPayload() throws {
+        let json = #"{"name":"pairing.txt","path":"/Users/yuki/.yzvibe/pairing.txt","displayPath":"~/.yzvibe/pairing.txt","kind":"other","size":512,"modifiedAt":"2026-09-10T11:00:00.000Z","mime":"application/octet-stream","textual":true,"inCwd":false}"#
+        let info = try JSONDecoder.yz.decode(FileInfo.self, from: Data(json.utf8))
+        XCTAssertEqual(info.name, "pairing.txt")
+        XCTAssertEqual(info.displayPath, "~/.yzvibe/pairing.txt")
+        XCTAssertFalse(info.inCwd)
+        XCTAssertTrue(info.textual)
+        XCTAssertEqual(info.sizeText, ByteCountFormatter.string(fromByteCount: 512, countStyle: .file))
+        // 字段缺失时也能解（连接器老版本）
+        let lean = try JSONDecoder.yz.decode(FileInfo.self, from: Data(#"{"name":"a.ts"}"#.utf8))
+        XCTAssertEqual(lean.path, "a.ts")
+        XCTAssertTrue(lean.inCwd)
+    }
+
     func testEventParsing() throws {
         let json = #"{"type":"approval.requested","sessionId":"s1","approvalId":"a9","kind":"shell","summary":"rm -rf dist","detail":"...","risk":"high"}"#
         let ev = try XCTUnwrap(ConnectorSocket.parse(Data(json.utf8)))

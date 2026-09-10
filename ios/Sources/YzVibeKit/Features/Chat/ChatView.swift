@@ -9,6 +9,7 @@ struct ChatView: View {
     @State private var showFiles = false
     @State private var showUsage = false
     @State private var pending: [PendingImage] = []
+    @State private var openFile: FileRef?
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
@@ -20,7 +21,7 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(messages) { m in
-                            MessageRow(message: m).id(m.id)
+                            MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -62,6 +63,7 @@ struct ChatView: View {
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
+        .sheet(item: $openFile) { ref in NavigationStack { FileViewerView(session: session, path: ref.path) } }
         .sheet(isPresented: $showUsage) { if let s = session { UsageSheet(sessionId: s.id).presentationDetents([.large]) } }
     }
 
@@ -117,18 +119,22 @@ struct ChatView: View {
     }
 }
 
+/// 聊天里点开的文件（正文里的路径链接）。
+struct FileRef: Identifiable, Hashable { let path: String; var id: String { path } }
+
 /// 一条消息：用户气泡 / 助手卡 / 审批卡。
 struct MessageRow: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     let message: Message
+    var onOpenFile: ((String) -> Void)?
 
     var body: some View {
         switch message.role {
         case .user:
             HStack { Spacer(minLength: 60); UserBubble(message: message) }
         case .assistant, .tool:
-            HStack { AssistantBubble(message: message); Spacer(minLength: 40) }
+            HStack { AssistantBubble(message: message, onOpenFile: onOpenFile); Spacer(minLength: 40) }
         case .system:
             if let aid = message.approvalId, let a = store.approval(aid) {
                 ApprovalCardView(approval: a, showsContext: false)
@@ -207,12 +213,15 @@ struct AttachmentThumb: View {
 }
 
 struct AssistantBubble: View {
+    @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     let message: Message
+    var onOpenFile: ((String) -> Void)?
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !message.text.isEmpty {
-                MarkdownText(text: message.text).foregroundStyle(p.label).textSelection(.enabled)
+                MarkdownText(text: message.text, onOpenFile: onOpenFile, onCopy: { _ in store.toast = "已复制代码" })
+                    .foregroundStyle(p.label).textSelection(.enabled)
             }
             ForEach(message.toolCalls, id: \.id) { ToolCallCard(call: $0) }
             if message.streaming {

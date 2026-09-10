@@ -14,6 +14,10 @@ public protocol ConnectorClient: Sendable {
     func approvals(device: Device) async throws -> [Approval]
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry]
     func preview(device: Device, sessionId: String, path: String) async throws -> String
+    /// 单个文件的元信息（GET /files/stat）；path 可以是相对工作目录的路径，也可以是绝对路径或 `~/…`。
+    func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo
+    /// 下载文件原始字节（GET /files/download）。
+    func download(device: Device, sessionId: String, path: String) async throws -> Data
     func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String
     /// 各 Agent 支持的模式 / 模型 / 思考强度（GET /agents），key 为 agent 名。
     func capabilities(device: Device) async throws -> [String: AgentCapabilities]
@@ -191,6 +195,21 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
         try await perform(request(device, "/quota?agent=\(agent.rawValue)"), as: QuotaInfo.self)
+    }
+
+    public func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        return try await perform(request(device, "/files/stat?sessionId=\(sessionId)&path=\(encoded)"), as: FileInfo.self)
+    }
+
+    public func download(device: Device, sessionId: String, path: String) async throws -> Data {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let (data, resp) = try await session.data(for: try request(device, "/files/download?sessionId=\(sessionId)&path=\(encoded)"))
+        guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
+        if http.statusCode == 401 { throw ConnectorError.unauthorized }
+        if http.statusCode == 403 { throw ConnectorError.network("这个文件不在会话工作目录里，出于安全不提供访问") }
+        guard (200..<300).contains(http.statusCode) else { throw ConnectorError.network("HTTP \(http.statusCode)") }
+        return data
     }
 
     public func attachment(device: Device, id: String) async throws -> Data {

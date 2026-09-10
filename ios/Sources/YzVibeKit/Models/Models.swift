@@ -572,6 +572,45 @@ public struct PairingPayload: Equatable, Sendable {
     }
 }
 
+/// 单个远程文件的元信息（GET /files/stat），文件查看器用。
+public struct FileInfo: Codable, Hashable, Sendable {
+    public var name: String
+    /// 连接器上的绝对路径（下载 / 再次请求时用这个）
+    public var path: String
+    /// 展示用路径，主目录缩成 `~`
+    public var displayPath: String
+    public var kind: FileEntry.Kind
+    public var size: Int
+    public var modifiedAt: Date
+    public var mime: String
+    /// 能否按文本预览（图片或超过 2MB 时为 false）
+    public var textual: Bool
+    /// 是否在会话工作目录内（目录外的文件只读、且限于主目录中的非敏感文件）
+    public var inCwd: Bool
+
+    public init(name: String, path: String, displayPath: String, kind: FileEntry.Kind, size: Int = 0,
+                modifiedAt: Date = .now, mime: String = "application/octet-stream", textual: Bool = true, inCwd: Bool = true) {
+        self.name = name; self.path = path; self.displayPath = displayPath; self.kind = kind
+        self.size = size; self.modifiedAt = modifiedAt; self.mime = mime; self.textual = textual; self.inCwd = inCwd
+    }
+
+    enum CodingKeys: String, CodingKey { case name, path, displayPath, kind, size, modifiedAt, mime, textual, inCwd }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        path = try c.decodeIfPresent(String.self, forKey: .path) ?? name
+        displayPath = try c.decodeIfPresent(String.self, forKey: .displayPath) ?? path
+        kind = FileEntry.Kind(rawValue: try c.decodeIfPresent(String.self, forKey: .kind) ?? "") ?? .other
+        size = try c.decodeIfPresent(Int.self, forKey: .size) ?? 0
+        modifiedAt = try c.decodeIfPresent(Date.self, forKey: .modifiedAt) ?? .now
+        mime = try c.decodeIfPresent(String.self, forKey: .mime) ?? "application/octet-stream"
+        textual = try c.decodeIfPresent(Bool.self, forKey: .textual) ?? true
+        inCwd = try c.decodeIfPresent(Bool.self, forKey: .inCwd) ?? true
+    }
+
+    public var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file) }
+}
+
 // MARK: - 相对时间
 
 public enum RelativeTime {

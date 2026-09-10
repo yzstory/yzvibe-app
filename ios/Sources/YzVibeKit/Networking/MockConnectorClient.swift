@@ -68,6 +68,17 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { UUID().uuidString }
     public func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { MockData.files }
 
+    public func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo {
+        let name = path.split(separator: "/").last.map(String.init) ?? path
+        return FileInfo(name: name, path: path, displayPath: path,
+                        kind: MockData.files.first { $0.path == path }?.kind ?? .code,
+                        size: 1280, mime: "text/plain", textual: true, inCwd: true)
+    }
+
+    public func download(device: Device, sessionId: String, path: String) async throws -> Data {
+        Data((try await preview(device: device, sessionId: sessionId, path: path)).utf8)
+    }
+
     public func preview(device: Device, sessionId: String, path: String) async throws -> String {
         """
         export function YtMarker({ tone }: Props) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - 背景：纸感 + 三个装饰球
 
@@ -176,20 +177,67 @@ public struct CodeBlock: View {
     let text: String
     var dark = false
     var lines: Int? = 1
-    public init(_ text: String, dark: Bool = false, lines: Int? = 1) { self.text = text; self.dark = dark; self.lines = lines }
+    /// 代码语言（围栏 ``` 后面那截），显示在标题栏左侧
+    var language: String?
+    /// 显示标题栏与「复制」按钮
+    var copyable = false
+    /// 复制成功后的提示（聊天里用 store.toast，别处可自带）
+    var onCopy: ((String) -> Void)?
+
+    public init(_ text: String, dark: Bool = false, lines: Int? = 1,
+                language: String? = nil, copyable: Bool = false, onCopy: ((String) -> Void)? = nil) {
+        self.text = text; self.dark = dark; self.lines = lines
+        self.language = language; self.copyable = copyable; self.onCopy = onCopy
+    }
+
+    @State private var copied = false
+
     public var body: some View {
-        Text(text)
-            .font(.yzMono)
-            .lineLimit(lines)
-            .truncationMode(.middle)
-            .foregroundStyle(dark ? Color(oklch: 0.92, 0.02, 80) : p.labelSecondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(dark ? Color(oklch: 0.20, 0.02, 50) : p.fillSecondary)
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(dark ? .clear : p.border, lineWidth: 1))
-            )
+        VStack(alignment: .leading, spacing: 0) {
+            if copyable { header }
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(text)
+                    .font(.yzMono)
+                    .lineLimit(lines)
+                    .truncationMode(lines == nil ? .tail : .middle)
+                    .textSelection(.enabled)
+                    .foregroundStyle(dark ? Color(oklch: 0.92, 0.02, 80) : p.labelSecondary)
+                    .frame(maxWidth: copyable ? nil : .infinity, alignment: .leading)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+            }
+            .scrollDisabled(!copyable)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(dark ? Color(oklch: 0.20, 0.02, 50) : p.fillSecondary)
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(dark ? .clear : p.border, lineWidth: 1))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var header: some View {
+        HStack {
+            Text(language?.isEmpty == false ? language! : "text")
+                .font(.yzCaption)
+                .foregroundStyle(dark ? Color(oklch: 0.68, 0.02, 80) : p.labelTertiary)
+            Spacer(minLength: 8)
+            Button {
+                UIPasteboard.general.string = text
+                onCopy?(text)
+                withAnimation(Motion.quick) { copied = true }
+                Task { try? await Task.sleep(nanoseconds: 1_600_000_000); withAnimation(Motion.quick) { copied = false } }
+            } label: {
+                Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(.yzCaption)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(dark ? Color(oklch: 0.88, 0.02, 80) : p.labelSecondary)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Capsule().fill(dark ? Color.white.opacity(0.10) : p.fill))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 12).padding(.trailing, 8).padding(.top, 8).padding(.bottom, 2)
     }
 }
 

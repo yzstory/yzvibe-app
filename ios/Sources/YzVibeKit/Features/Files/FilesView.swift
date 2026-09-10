@@ -8,8 +8,7 @@ struct FilesView: View {
     let session: Session?
     @State private var path = ""
     @State private var entries: [FileEntry] = []
-    @State private var selected: FileEntry?
-    @State private var preview = ""
+    @State private var opened: FileRef?
 
     private var crumbs: [String] { path.split(separator: "/").map(String.init) }
 
@@ -30,33 +29,19 @@ struct FilesView: View {
                     PaperCard(padding: 0) {
                         VStack(spacing: 0) {
                             ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
-                                Button { open(e) } label: { FileRow(entry: e) }.buttonStyle(.plain)
+                                Button { open(e) } label: { FileRow(entry: e) }
+                                    .buttonStyle(.plain)
+                                    .contextMenu {
+                                        Button { UIPasteboard.general.string = e.path; store.toast = "已复制路径" } label: { Label("复制路径", systemImage: "doc.on.doc") }
+                                    }
                                 if i < entries.count - 1 { Divider_() }
                             }
                         }
                         .padding(.vertical, 4)
                     }
-                    if let selected, selected.kind != .folder {
-                        PaperCard {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack(spacing: 10) {
-                                    Image(systemName: symbol(for: selected.kind)).foregroundStyle(p.blue)
-                                    Text(selected.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(p.label)
-                                    Spacer(); Text("预览").font(.yzFootnote).foregroundStyle(p.labelTertiary)
-                                }
-                                CodeBlock(preview, dark: true, lines: nil)
-                                HStack(spacing: 8) {
-                                    Button { UIPasteboard.general.string = selected.path; store.toast = "已复制路径" } label: { Label("复制路径", systemImage: "doc.on.doc") }
-                                        .buttonStyle(SecondaryButtonStyle(height: 44))
-                                    Button { store.toast = "开始下载 \(selected.name)" } label: { Label("下载到手机", systemImage: "arrow.down.to.line") }
-                                        .buttonStyle(PrimaryButtonStyle(height: 44))
-                                }
-                            }
-                        }
-                    }
                     HStack(spacing: 6) {
                         Image(systemName: "lock").font(.system(size: 11))
-                        Text("只预览与下载，手机不会执行任何文件").font(.yzFootnote)
+                        Text("点文件可查看、复制内容或下载；手机不会执行任何文件").font(.yzFootnote)
                     }
                     .foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity)
                 }
@@ -69,6 +54,7 @@ struct FilesView: View {
             ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) { Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") } }
         }
+        .navigationDestination(item: $opened) { ref in FileViewerView(session: session, path: ref.path) }
         .task { await load() }
     }
 
@@ -79,11 +65,7 @@ struct FilesView: View {
 
     private func open(_ e: FileEntry) {
         if e.kind == .folder { path = e.path; Task { await load() }; return }
-        selected = e
-        Task {
-            guard let session, let device = store.device(session.deviceId) else { return }
-            preview = (try? await store.client.preview(device: device, sessionId: session.id, path: e.path)) ?? "（无法预览）"
-        }
+        opened = FileRef(path: e.path)
     }
 
     func symbol(for kind: FileEntry.Kind) -> String {
