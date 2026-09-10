@@ -5,8 +5,11 @@ import os from 'node:os';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mimeOf } from './files.js';
+import { suggestionsFor } from './rules.js';
 
 export const HOME = process.env.YZVIBE_HOME ?? path.join(os.homedir(), '.yzvibe');
+
+const MAX_TOOL_OUTPUT = 4000;
 
 function readJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -15,6 +18,14 @@ function writeJSON(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
+/** 工具输出可能是几百 KB 的编译日志，手机上只要看得懂就够了。 */
+export function clampOutput(text, max = MAX_TOOL_OUTPUT) {
+  const s = String(text ?? '');
+  if (s.length <= max) return { output: s, truncated: false };
+  const head = s.slice(0, Math.floor(max * 0.6));
+  const tail = s.slice(-Math.floor(max * 0.3));
+  return { output: `${head}\n…（中间省略 ${s.length - head.length - tail.length} 字）…\n${tail}`, truncated: true };
+}
 
 export class Store extends EventEmitter {
   constructor(home = HOME) {
@@ -22,12 +33,12 @@ export class Store extends EventEmitter {
     this.home = home;
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
-    this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, createdAt }]
+    this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, push?, createdAt }]
     this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
-    this.autoAllow = new Map();                                             // `${sessionId}:${toolName}:${summary}` → true
     this.uploads = new Map();                                               // id → { path, mime, name }
+    this.rules = null;                                                      // server 注入 Rules 实例
   }
 
   #initConnector() {
@@ -38,12 +49,32 @@ export class Store extends EventEmitter {
 
   // ---------- 设备 ----------
   addDevice(name) {
-    const d = { id: randomUUID(), name, token: randomBytes(32).toString('hex'), createdAt: new Date().toISOString() };
+    const d = { id: randomUUID(), name, token: randomBytes(32).toString('hex'), createdAt: new Date().toISOString(), push: null };
     this.devices.push(d);
-    writeJSON(path.join(this.home, 'devices.json'), this.devices);
+    this.#saveDevices();
     return d;
   }
   deviceByToken(token) { return this.devices.find((d) => d.token === token) ?? null; }
+  /** 对外展示的设备信息（不含 Token）。 */
+  listDevices() {
+    return this.devices.map(({ token, push, ...d }) => ({ ...d, push: push ? { environment: push.environment, updatedAt: push.updatedAt } : null }));
+  }
+  /** 注册 / 更新一台手机的 APNs token。 */
+  setDevicePush(deviceId, push) {
+    const d = this.devices.find((x) => x.id === deviceId); if (!d) return false;
+    d.push = push ? { token: push.token, environment: push.environment ?? 'sandbox', bundleId: push.bundleId ?? null, updatedAt: new Date().toISOString() } : null;
+    this.#saveDevices();
+    return true;
+  }
+  removeDevice(id) {
+    const before = this.devices.length;
+    this.devices = this.devices.filter((d) => d.id !== id);
+    if (this.devices.length === before) return false;
+    this.#saveDevices();
+    this.emit('device.removed', id);
+    return true;
+  }
+  #saveDevices() { writeJSON(path.join(this.home, 'devices.json'), this.devices); }
 
   // ---------- 会话 ----------
   createSession({ agent, cwd, title, mode = 'normal', model = null, effort = null }) {
@@ -92,7 +123,17 @@ export class Store extends EventEmitter {
     this.#saveSessions();
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
   }
-  closeSession(id) { this.setStatus(id, 'closed'); }
+  closeSession(id) {
+    this.rules?.removeForSession(id);
+    this.setStatus(id, 'closed');
+  }
+  /** 清理时彻底忘掉一批会话（消息文件已由 cleanup 删除）。 */
+  forgetSessions(ids) {
+    const set = new Set(ids);
+    this.sessions = this.sessions.filter((s) => !set.has(s.id));
+    for (const id of set) { this.messages.delete(id); this.rules?.removeForSession(id); }
+    this.#saveSessions();
+  }
   #saveSessions() { writeJSON(path.join(this.home, 'sessions.json'), this.sessions); }
 
   // ---------- 消息 ----------
@@ -114,7 +155,13 @@ export class Store extends EventEmitter {
       }
       this.#saveSessions();
     }
+    if (m.role === 'system') this.emit('event', { type: 'message.added', sessionId, message: m });
     return m;
+  }
+  /** 拿到（必要时新建）某个 id 的助手消息，用来把同一轮的工具卡归到同一个气泡里。 */
+  ensureAssistantMessage(sessionId, messageId) {
+    return this.messagesOf(sessionId).find((x) => x.id === messageId)
+        ?? this.addMessage(sessionId, { id: messageId, role: 'assistant' });
   }
   appendDelta(sessionId, messageId, text) {
     const list = this.messagesOf(sessionId);
@@ -129,22 +176,51 @@ export class Store extends EventEmitter {
     if (m) { if (typeof fullText === 'string') m.text = fullText; m.streaming = false; this.#saveMessages(sessionId); }
     this.emit('event', { type: 'message.done', sessionId, messageId });
   }
-  upsertToolCall(sessionId, call) {
+  /**
+   * 新增 / 更新一张工具卡。`output` 是工具的实际输出（Bash 的 stdout、Edit 的 diff），
+   * 手机上可以展开看——之前只显示「运行中 / 完成」，看不到结果就没法判断该不该批下一步。
+   */
+  upsertToolCall(sessionId, call, messageId = null) {
     const list = this.messagesOf(sessionId);
-    let m = [...list].reverse().find((x) => x.role === 'assistant');
-    if (!m) m = this.addMessage(sessionId, { role: 'assistant' });
+    // 先找真正包含这个工具的消息（工具结果可能晚于新消息到达），其次是本轮指定的消息，最后才退回最后一条助手消息
+    let m = [...list].reverse().find((x) => x.toolCalls?.some((t) => t.id === call.id));
+    if (!m && messageId) m = this.ensureAssistantMessage(sessionId, messageId);
+    if (!m) m = [...list].reverse().find((x) => x.role === 'assistant') ?? this.addMessage(sessionId, { role: 'assistant' });
+    const patch = { ...call };
+    if (patch.output != null) {
+      const { output, truncated } = clampOutput(patch.output);
+      patch.output = output; patch.truncated = truncated;
+    }
     const i = m.toolCalls.findIndex((t) => t.id === call.id);
-    if (i >= 0) m.toolCalls[i] = { ...m.toolCalls[i], ...call }; else m.toolCalls.push(call);
+    if (i >= 0) {
+      // diff 预览不要被工具返回的成功提示覆盖掉
+      if (m.toolCalls[i].outputKind === 'diff' && patch.outputKind == null && patch.state !== 'error') delete patch.output;
+      m.toolCalls[i] = { ...m.toolCalls[i], ...patch };
+    } else {
+      m.toolCalls.push({ output: null, outputKind: 'text', truncated: false, ...patch });
+    }
     this.#saveMessages(sessionId);
-    this.emit('event', { type: 'tool.call', sessionId, toolId: call.id, name: call.name, input: { detail: call.detail }, state: call.state });
+    const t = m.toolCalls[i >= 0 ? i : m.toolCalls.length - 1];
+    this.emit('event', { type: 'tool.call', sessionId, messageId: m.id, toolId: t.id, name: t.name, input: { detail: t.detail }, state: t.state,
+                         output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated) });
   }
 
   // ---------- 审批 ----------
-  /** 返回 Promise<'allow'|'deny'|'allow_once'>；若命中 autoAllow 立即 resolve。 */
-  requestApproval({ sessionId, kind, summary, detail, risk, toolName }) {
-    const key = `${sessionId}:${toolName}:${summary}`;
-    if (this.autoAllow.has(key)) return Promise.resolve('allow');
-    const a = { id: randomUUID(), sessionId, deviceId: this.connector.id, kind, summary, detail, risk, status: 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(), toolName };
+  /**
+   * 返回 Promise<'allow'|'deny'|'allow_once'>。命中已保存的审批规则时立刻放行，
+   * 并在聊天里留一条系统消息说明是哪条规则放的，避免「悄悄执行了」。
+   */
+  requestApproval({ sessionId, kind, summary, detail, risk, toolName, agent }) {
+    const rule = this.rules?.match({ sessionId, agent, toolName, summary });
+    if (rule) {
+      this.addMessage(sessionId, { role: 'system', text: `已按规则自动允许：${summary}`, ruleId: rule.id });
+      return Promise.resolve('allow');
+    }
+    const a = {
+      id: randomUUID(), sessionId, deviceId: this.connector.id, kind, summary, detail, risk,
+      status: 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      toolName, agent: agent ?? null, suggestions: suggestionsFor({ toolName, kind, summary }),
+    };
     this.approvals.unshift(a);
     const s = this.session(sessionId); if (s) { s.pendingApprovals += 1; }
     this.addMessage(sessionId, { role: 'system', approvalId: a.id });
@@ -153,19 +229,32 @@ export class Store extends EventEmitter {
     return new Promise((resolve) => {
       a.resolve = resolve;
       a.timer = setTimeout(() => this.resolveApproval(a.id, 'deny', 'timeout'), 10 * 60_000);
+      a.timer.unref?.();
     });
   }
-  publicApproval(a) { const { resolve, timer, toolName, ...rest } = a; return { ...rest, approvalId: a.id }; }
+  publicApproval(a) { const { resolve, timer, ...rest } = a; return { ...rest, approvalId: a.id }; }
+  approval(id) { return this.approvals.find((a) => a.id === id) ?? null; }
   listApprovals(status) { return this.approvals.filter((a) => !status || a.status === status).map((a) => this.publicApproval(a)); }
-  resolveApproval(id, decision, by = 'phone') {
+  /**
+   * @param remember 可选 `{ match, value, scope, ttlMinutes }`：把这次的决定存成规则，以后同类请求自动放行。
+   */
+  resolveApproval(id, decision, by = 'phone', remember = null) {
     const a = this.approvals.find((x) => x.id === id);
     if (!a || a.status !== 'pending') return false;
     clearTimeout(a.timer);
     a.status = by === 'timeout' ? 'expired' : decision === 'deny' ? 'denied' : 'allowed';
-    if (decision === 'allow') this.autoAllow.set(`${a.sessionId}:${a.toolName}:${a.summary}`, true);
+    let rule = null;
+    if (remember && decision !== 'deny' && this.rules) {
+      try {
+        rule = this.rules.add({ sessionId: a.sessionId, agent: a.agent, tool: remember.match === 'tool' ? a.toolName : (remember.tool ?? null),
+                                match: remember.match ?? 'tool', value: remember.value ?? a.toolName, scope: remember.scope ?? 'session',
+                                ttlMinutes: remember.ttlMinutes ?? null, label: remember.label ?? null });
+        this.addMessage(a.sessionId, { role: 'system', text: `已记住规则：${rule.label ?? describeRule(rule)}`, ruleId: rule.id });
+      } catch (e) { this.addMessage(a.sessionId, { role: 'system', text: `规则未保存：${e.message}` }); }
+    }
     const s = this.session(a.sessionId); if (s) { s.pendingApprovals = Math.max(0, s.pendingApprovals - 1); }
     this.setStatus(a.sessionId, decision === 'deny' ? 'idle' : 'running');
-    this.emit('event', { type: 'approval.resolved', approvalId: id, decision, by });
+    this.emit('event', { type: 'approval.resolved', approvalId: id, decision, by, rule });
     a.resolve?.(decision);
     return true;
   }
@@ -190,4 +279,13 @@ export class Store extends EventEmitter {
     this.uploads.set(id, { path: file, mime, name });
     return id;
   }
+}
+
+/** 规则的中文描述（手机端和日志共用）。 */
+export function describeRule(r) {
+  const where = r.scope === 'global' ? '所有会话' : '本会话';
+  const until = r.expiresAt ? `，到 ${new Date(r.expiresAt).toLocaleString('zh-CN', { hour12: false })}` : '';
+  if (r.match === 'tool') return `${where}内不再询问 ${r.value ?? r.tool}${until}`;
+  if (r.match === 'prefix') return `${where}内放行以 ${r.value} 开头的命令${until}`;
+  return `${where}内放行 ${r.value}${until}`;
 }

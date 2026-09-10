@@ -7,9 +7,10 @@ struct SessionsView: View {
     @State private var activeOnly = false
     @State private var showNew = false
     @State private var collapsed: Set<String> = []
+    @State private var path: [String] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             PageScaffold(eyebrow: store.selectedDevice?.name ?? "未选择设备", title: "会话") {
                 DevicePickerChip()
             } content: {
@@ -54,6 +55,12 @@ struct SessionsView: View {
                 }
             }
             .navigationDestination(for: String.self) { ChatView(sessionId: $0) }
+            // 点开「回复完成」的推送时直接进到那个会话
+            .onChange(of: store.openSessionRequest) { _, sid in
+                guard let sid else { return }
+                store.openSessionRequest = nil
+                if path.last != sid { path = [sid] }
+            }
             .overlay(alignment: .bottomTrailing) {
                 Button { showNew = true } label: { Label("新建会话", systemImage: "plus") }
                     .buttonStyle(PrimaryButtonStyle(height: 56))

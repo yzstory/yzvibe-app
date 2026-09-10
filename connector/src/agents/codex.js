@@ -101,20 +101,30 @@ export function handleCodexEvent(ev, store, session, state = {}) {
         case 'agent_message':
           if (done && it.text) { store.appendDelta(session.id, it.id, it.text); store.finishMessage(session.id, it.id); }
           break;
-        case 'command_execution':
+        case 'command_execution': {
+          const out = done ? String(it.aggregated_output ?? it.output ?? '').trim() : '';
           store.upsertToolCall(session.id, { id: it.id, name: 'Shell', detail: stripShell(it.command),
-            state: !done ? 'running' : it.exit_code === 0 || it.status === 'completed' ? 'done' : 'error' });
-          break;
-        case 'file_change': {
-          const paths = (it.changes ?? []).map((c) => c.path).filter(Boolean);
-          store.upsertToolCall(session.id, { id: it.id, name: 'Edit', detail: paths.join(', ') || '文件改动', state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running' });
+            state: !done ? 'running' : it.exit_code === 0 || it.status === 'completed' ? 'done' : 'error',
+            ...(out ? { output: out, outputKind: 'text' } : {}) }, toolBubble(state));
           break;
         }
-        case 'mcp_tool_call':
-          store.upsertToolCall(session.id, { id: it.id, name: `${it.server ?? 'mcp'}.${it.tool ?? ''}`, detail: JSON.stringify(it.arguments ?? {}).slice(0, 120), state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running' });
+        case 'file_change': {
+          const changes = it.changes ?? [];
+          const paths = changes.map((c) => c.path).filter(Boolean);
+          const diff = changes.map((c) => c.diff ?? c.unified_diff).filter(Boolean).join('\n');
+          store.upsertToolCall(session.id, { id: it.id, name: 'Edit', detail: paths.join(', ') || '文件改动',
+            state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running',
+            ...(diff ? { output: diff, outputKind: 'diff' } : paths.length ? { output: paths.map((x) => `~ ${x}`).join('\n'), outputKind: 'text' } : {}) }, toolBubble(state));
           break;
+        }
+        case 'mcp_tool_call': {
+          const res = done ? String(it.result?.content ?? it.result ?? '').trim() : '';
+          store.upsertToolCall(session.id, { id: it.id, name: `${it.server ?? 'mcp'}.${it.tool ?? ''}`, detail: JSON.stringify(it.arguments ?? {}).slice(0, 120),
+            state: done ? (it.status === 'failed' ? 'error' : 'done') : 'running', ...(res && res !== '[object Object]' ? { output: res, outputKind: 'text' } : {}) }, toolBubble(state));
+          break;
+        }
         case 'web_search':
-          store.upsertToolCall(session.id, { id: it.id, name: 'WebSearch', detail: it.query ?? '', state: done ? 'done' : 'running' });
+          store.upsertToolCall(session.id, { id: it.id, name: 'WebSearch', detail: it.query ?? '', state: done ? 'done' : 'running' }, toolBubble(state));
           break;
         case 'error':
           console.error(`[codex ${session.id.slice(0, 8)}] ${it.message}`);
@@ -136,6 +146,9 @@ export function handleCodexEvent(ev, store, session, state = {}) {
     default: break;
   }
 }
+
+/** 同一轮的工具卡放进同一个助手气泡（Codex 的 item 不属于任何消息）。 */
+function toolBubble(state) { return `${state.turn ?? 'turn'}-tools`; }
 
 function stripShell(cmd = '') {
   const m = String(cmd).match(/^\/bin\/(?:ba|z)?sh -lc '([\s\S]*)'$/);

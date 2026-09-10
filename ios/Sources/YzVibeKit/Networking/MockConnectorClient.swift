@@ -33,7 +33,17 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
     public func stop(device: Device, sessionId: String) async throws {}
-    public func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws {}
+    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws {}
+    public func sync(device: Device) async throws -> SyncSnapshot {
+        SyncSnapshot(sessions: MockData.sessions, approvals: MockData.approvals, agents: ["claude": .fallback(for: .claude), "codex": .fallback(for: .codex)],
+                     rules: [ApprovalRule(id: "r1", tool: "Bash", match: "prefix", value: "npm test", description: "本会话内放行以 npm test 开头的命令")],
+                     push: PushStatus(ready: false, missing: "推送密钥 .p8、teamId"))
+    }
+    public func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule] { try await sync(device: device).rules }
+    public func deleteRule(device: Device, id: String) async throws {}
+    public func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus { PushStatus(ready: true, registeredDevices: 1, environment: environment) }
+    public func unregisterPush(device: Device) async throws {}
+    public func reconnect(device: Device) {}
 
     public func approvals(device: Device) async throws -> [Approval] { MockData.approvals.filter { $0.deviceId == device.id } }
     public func attachment(device: Device, id: String) async throws -> Data {

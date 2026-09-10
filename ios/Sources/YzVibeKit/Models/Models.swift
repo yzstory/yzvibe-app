@@ -330,12 +330,33 @@ public enum MessageRole: String, Codable, Sendable { case user, assistant, tool,
 
 public struct ToolCall: Codable, Hashable, Sendable {
     public enum State: String, Codable, Sendable { case running, done, error }
+    /// text = 命令输出；diff = 文件改动（按 +/- 着色）
+    public enum OutputKind: String, Codable, Sendable { case text, diff }
     public var id: String
     public var name: String
     public var detail: String
     public var state: State
-    public init(id: String = UUID().uuidString, name: String, detail: String, state: State) {
+    /// 工具的实际输出。没有它就只能看到「完成」，无法判断该不该批下一步。
+    public var output: String?
+    public var outputKind: OutputKind
+    public var truncated: Bool
+
+    public init(id: String = UUID().uuidString, name: String, detail: String, state: State,
+                output: String? = nil, outputKind: OutputKind = .text, truncated: Bool = false) {
         self.id = id; self.name = name; self.detail = detail; self.state = state
+        self.output = output; self.outputKind = outputKind; self.truncated = truncated
+    }
+
+    enum CodingKeys: String, CodingKey { case id, name, detail, state, output, outputKind, truncated }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        state = State(rawValue: try c.decodeIfPresent(String.self, forKey: .state) ?? "") ?? .running
+        output = try c.decodeIfPresent(String.self, forKey: .output)
+        outputKind = OutputKind(rawValue: try c.decodeIfPresent(String.self, forKey: .outputKind) ?? "") ?? .text
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
     }
 }
 
@@ -349,11 +370,13 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
     public var approvalId: String?
     public var createdAt: Date
     public var streaming: Bool
+    /// 本地乐观追加、还没被连接器确认的消息（不参与编码）。断线重连补数据时用它去重。
+    public var isLocal: Bool = false
 
     public init(id: String = UUID().uuidString, sessionId: String, role: MessageRole, text: String, attachments: [String] = [],
-                toolCalls: [ToolCall] = [], approvalId: String? = nil, createdAt: Date = .now, streaming: Bool = false) {
+                toolCalls: [ToolCall] = [], approvalId: String? = nil, createdAt: Date = .now, streaming: Bool = false, isLocal: Bool = false) {
         self.id = id; self.sessionId = sessionId; self.role = role; self.text = text; self.attachments = attachments
-        self.toolCalls = toolCalls; self.approvalId = approvalId; self.createdAt = createdAt; self.streaming = streaming
+        self.toolCalls = toolCalls; self.approvalId = approvalId; self.createdAt = createdAt; self.streaming = streaming; self.isLocal = isLocal
     }
 
     enum CodingKeys: String, CodingKey { case id, sessionId, role, text, attachments, toolCalls, approvalId, createdAt, streaming }
@@ -400,14 +423,19 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
     public var status: Status
     public var createdAt: Date
     public var expiresAt: Date?
+    public var toolName: String?
+    /// 连接器给出的「总是允许」选项，点一下就变成一条持久规则。
+    public var suggestions: [ApprovalSuggestion]
 
     public init(id: String = UUID().uuidString, sessionId: String, deviceId: String, kind: ApprovalKind, summary: String,
-                detail: String, risk: RiskLevel, status: Status = .pending, createdAt: Date = .now, expiresAt: Date? = nil) {
+                detail: String, risk: RiskLevel, status: Status = .pending, createdAt: Date = .now, expiresAt: Date? = nil,
+                toolName: String? = nil, suggestions: [ApprovalSuggestion] = []) {
+        self.toolName = toolName; self.suggestions = suggestions
         self.id = id; self.sessionId = sessionId; self.deviceId = deviceId; self.kind = kind; self.summary = summary
         self.detail = detail; self.risk = risk; self.status = status; self.createdAt = createdAt; self.expiresAt = expiresAt
     }
 
-    enum CodingKeys: String, CodingKey { case id, approvalId, sessionId, deviceId, kind, summary, detail, risk, status, createdAt, expiresAt }
+    enum CodingKeys: String, CodingKey { case id, approvalId, sessionId, deviceId, kind, summary, detail, risk, status, createdAt, expiresAt, toolName, suggestions }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(String.self, forKey: .approvalId) ?? c.decode(String.self, forKey: .id)
@@ -420,13 +448,16 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
         status = Status(rawValue: try c.decodeIfPresent(String.self, forKey: .status) ?? "") ?? .pending
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
+        toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
+        suggestions = try c.decodeIfPresent([ApprovalSuggestion].self, forKey: .suggestions) ?? []
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id); try c.encode(sessionId, forKey: .sessionId); try c.encode(deviceId, forKey: .deviceId)
         try c.encode(kind, forKey: .kind); try c.encode(summary, forKey: .summary); try c.encode(detail, forKey: .detail)
         try c.encode(risk, forKey: .risk); try c.encode(status, forKey: .status); try c.encode(createdAt, forKey: .createdAt)
-        try c.encodeIfPresent(expiresAt, forKey: .expiresAt)
+        try c.encodeIfPresent(expiresAt, forKey: .expiresAt); try c.encodeIfPresent(toolName, forKey: .toolName)
+        try c.encode(suggestions, forKey: .suggestions)
     }
 }
 
@@ -620,5 +651,124 @@ public enum RelativeTime {
         if s < 3600 { return "\(s / 60) 分钟前" }
         if s < 86400 { return "\(s / 3600) 小时前" }
         return "\(s / 86400) 天前"
+    }
+}
+
+
+// MARK: - 审批规则（「以后别再问我」）
+
+/// 审批卡上的「总是允许」按钮：点一下就在连接器上存成一条规则。
+public struct ApprovalSuggestion: Codable, Hashable, Sendable, Identifiable {
+    public var label: String
+    public var match: String        // tool | prefix | exact
+    public var value: String?
+    public var scope: String        // session | global
+    public var ttlMinutes: Int?
+    public var id: String { "\(match)|\(value ?? "")|\(scope)|\(ttlMinutes ?? 0)" }
+
+    public init(label: String, match: String, value: String? = nil, scope: String = "session", ttlMinutes: Int? = nil) {
+        self.label = label; self.match = match; self.value = value; self.scope = scope; self.ttlMinutes = ttlMinutes
+    }
+    enum CodingKeys: String, CodingKey { case label, match, value, scope, ttlMinutes }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decodeIfPresent(String.self, forKey: .label) ?? "总是允许"
+        match = try c.decodeIfPresent(String.self, forKey: .match) ?? "tool"
+        value = try c.decodeIfPresent(String.self, forKey: .value)
+        scope = try c.decodeIfPresent(String.self, forKey: .scope) ?? "session"
+        ttlMinutes = try c.decodeIfPresent(Int.self, forKey: .ttlMinutes)
+    }
+}
+
+/// 已保存的规则（GET /rules），可以在「我 › 审批规则」里逐条删除。
+public struct ApprovalRule: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var scope: String
+    public var sessionId: String?
+    public var tool: String?
+    public var match: String
+    public var value: String?
+    public var description: String
+    public var createdAt: Date
+    public var expiresAt: Date?
+    public var hits: Int
+
+    public init(id: String, scope: String = "session", sessionId: String? = nil, tool: String? = nil, match: String = "tool",
+                value: String? = nil, description: String = "", createdAt: Date = .now, expiresAt: Date? = nil, hits: Int = 0) {
+        self.id = id; self.scope = scope; self.sessionId = sessionId; self.tool = tool; self.match = match
+        self.value = value; self.description = description; self.createdAt = createdAt; self.expiresAt = expiresAt; self.hits = hits
+    }
+    enum CodingKeys: String, CodingKey { case id, scope, sessionId, tool, match, value, description, createdAt, expiresAt, hits }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        scope = try c.decodeIfPresent(String.self, forKey: .scope) ?? "session"
+        sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId)
+        tool = try c.decodeIfPresent(String.self, forKey: .tool)
+        match = try c.decodeIfPresent(String.self, forKey: .match) ?? "tool"
+        value = try c.decodeIfPresent(String.self, forKey: .value)
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+        expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
+        hits = try c.decodeIfPresent(Int.self, forKey: .hits) ?? 0
+    }
+    /// 剩余有效时间的中文说明（就近取整，避免「还剩 29 分钟」这种读起来别扭的结果）。
+    public var remaining: String? {
+        guard let expiresAt else { return nil }
+        let seconds = expiresAt.timeIntervalSinceNow
+        if seconds <= 0 { return "已过期" }
+        if seconds < 3600 { return "还剩 \(max(1, Int((seconds / 60).rounded()))) 分钟" }
+        return "还剩 \(max(1, Int((seconds / 3600).rounded()))) 小时"
+    }
+}
+
+// MARK: - 远程推送与一次性同步
+
+/// 连接器的推送配置状态（GET /sync 里带回来）。
+public struct PushStatus: Codable, Hashable, Sendable {
+    public var ready: Bool
+    public var missing: String?
+    public var registeredDevices: Int
+    public var bundleId: String?
+    public var environment: String?
+    public var configFile: String?
+
+    public init(ready: Bool = false, missing: String? = nil, registeredDevices: Int = 0, bundleId: String? = nil, environment: String? = nil, configFile: String? = nil) {
+        self.ready = ready; self.missing = missing; self.registeredDevices = registeredDevices
+        self.bundleId = bundleId; self.environment = environment; self.configFile = configFile
+    }
+    enum CodingKeys: String, CodingKey { case ready, missing, registeredDevices, bundleId, environment, configFile }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ready = try c.decodeIfPresent(Bool.self, forKey: .ready) ?? false
+        missing = try c.decodeIfPresent(String.self, forKey: .missing)
+        registeredDevices = try c.decodeIfPresent(Int.self, forKey: .registeredDevices) ?? 0
+        bundleId = try c.decodeIfPresent(String.self, forKey: .bundleId)
+        environment = try c.decodeIfPresent(String.self, forKey: .environment)
+        configFile = try c.decodeIfPresent(String.self, forKey: .configFile)
+    }
+}
+
+/// GET /sync：App 回到前台时一次拿全，避免逐个接口往返。
+public struct SyncSnapshot: Codable, Sendable {
+    public var serverTime: Date
+    public var sessions: [Session]
+    public var approvals: [Approval]
+    public var agents: [String: AgentCapabilities]
+    public var rules: [ApprovalRule]
+    public var push: PushStatus
+
+    enum CodingKeys: String, CodingKey { case serverTime, sessions, approvals, agents, rules, push }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serverTime = try c.decodeIfPresent(Date.self, forKey: .serverTime) ?? .now
+        sessions = try c.decodeIfPresent([Session].self, forKey: .sessions) ?? []
+        approvals = try c.decodeIfPresent([Approval].self, forKey: .approvals) ?? []
+        agents = try c.decodeIfPresent([String: AgentCapabilities].self, forKey: .agents) ?? [:]
+        rules = try c.decodeIfPresent([ApprovalRule].self, forKey: .rules) ?? []
+        push = try c.decodeIfPresent(PushStatus.self, forKey: .push) ?? PushStatus()
+    }
+    public init(serverTime: Date = .now, sessions: [Session] = [], approvals: [Approval] = [], agents: [String: AgentCapabilities] = [:], rules: [ApprovalRule] = [], push: PushStatus = PushStatus()) {
+        self.serverTime = serverTime; self.sessions = sessions; self.approvals = approvals; self.agents = agents; self.rules = rules; self.push = push
     }
 }

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
-import { Store, HOME } from './store.js';
+import { Store, HOME, describeRule } from './store.js';
 import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, printQR } from './pairing.js';
 import { startCloudflareTunnel, loadRelay, saveRelay } from './tunnel.js';
 import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
@@ -17,6 +17,9 @@ import { agentQuota } from './quota.js';
 import { scanTerminalSessions, parseTranscript } from './transcripts.js';
 import { listDirectories, makeDirectory } from './fs.js';
 import { writeDaemonInfo, clearDaemonInfo } from './daemon.js';
+import { Rules } from './rules.js';
+import { Pusher } from './push.js';
+import { startCleanupLoop } from './cleanup.js';
 
 export const VERSION = '0.1.0';
 
@@ -24,12 +27,22 @@ export const DEFAULT_PORT = 19876;
 
 export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true, importTerminal = true, claudeHome, codexHome } = {}) {
   const store = new Store(home);
+  const rules = new Rules(home);
+  store.rules = rules;
   const pairing = new Pairing();
   const internalSecret = randomBytes(16).toString('hex');
   const agents = new Map();            // sessionId → agent 实例
-  const sockets = new Set();
+  const sockets = new Set();           // 每个 ws 上挂了 ws.deviceId
 
   const deviceName = name;
+  const pusher = new Pusher({
+    home, log,
+    onInvalid: (deviceId, { keep, environment }) => {
+      const d = store.devices.find((x) => x.id === deviceId);
+      store.setDevicePush(deviceId, keep && d?.push ? { ...d.push, environment } : null);
+    },
+  });
+  const stopCleanup = startCleanupLoop(store, { log });
 
   /** 当前配对信息（配对码过期会自动换新）：{ token, expiresAt, url, link, config }。access 未定时 link/url 为 null。 */
   function currentPairing() {
@@ -48,7 +61,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const internalURL = `http://127.0.0.1:${api.port}/internal/approval`;
     const a = kind === 'mock' ? new MockAgent({ session, store })
       : kind === 'codex' ? new CodexAgent({ session, store })
-      : new ClaudeAgent({ session, store, internalURL, internalSecret, home, options });
+      : new ClaudeAgent({ session, store, internalURL, internalSecret, home, log, options });
     agents.set(session.id, a);
     return a;
   }
@@ -79,6 +92,44 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   store.on('event', (ev) => {
     const data = JSON.stringify(ev);
     for (const ws of sockets) if (ws.readyState === WebSocket.OPEN) ws.send(data);
+  });
+
+  // ---------- 远程推送 ----------
+  // App 被 iOS 挂起后 WebSocket 必然断开，只有 APNs 能叫醒它——这是「离开电脑也能审批」成立的前提。
+  const phoneOnline = () => [...sockets].some((w) => w.readyState === WebSocket.OPEN);
+  const pendingCount = () => store.listApprovals('pending').length;
+  const RISK_LABEL = { high: '高风险', medium: '中风险', low: '低风险' };
+  store.on('event', (ev) => {
+    if (!pusher.ready) return;
+    try {
+      if (ev.type === 'approval.requested') {
+        const s = store.session(ev.sessionId);
+        pusher.send(store.devices, {
+          title: `需要批准 · ${RISK_LABEL[ev.risk] ?? ''}`.trim(),
+          body: `${s?.title ? s.title + ' · ' : ''}${String(ev.summary ?? '').slice(0, 160)}`,
+          category: 'APPROVAL', threadId: ev.sessionId, collapseId: `approval-${ev.approvalId}`,
+          badge: pendingCount(), ttlSeconds: 600,
+          data: { kind: 'approval', approvalId: ev.approvalId, sessionId: ev.sessionId, connector: deviceName },
+        }).catch((e) => log(`[yzvibe] 推送异常：${e.message}`));
+      } else if (ev.type === 'approval.resolved') {
+        pusher.send(store.devices, { silent: true, badge: pendingCount(), data: { kind: 'approval.resolved', approvalId: ev.approvalId } }).catch(() => {});
+      } else if (ev.type === 'message.done') {
+        if (phoneOnline()) return;                       // 手机还连着，App 自己会显示
+        const s = store.session(ev.sessionId); if (!s) return;
+        const text = (store.messagesOf(ev.sessionId).find((m) => m.id === ev.messageId)?.text ?? '').trim();
+        if (!text) return;
+        pusher.send(store.devices, {
+          title: `${s.agent === 'codex' ? 'Codex' : 'Claude'} 回复完成`, body: `${s.title}\n${text.slice(0, 150)}`,
+          level: 'active', threadId: ev.sessionId, collapseId: `reply-${ev.sessionId}`, badge: pendingCount(),
+          data: { kind: 'reply', sessionId: ev.sessionId, messageId: ev.messageId },
+        }).catch(() => {});
+      }
+    } catch (e) { log(`[yzvibe] 推送出错：${e.message}`); }
+  });
+
+  /** 撤销设备时把它的连接断掉。 */
+  store.on('device.removed', (deviceId) => {
+    for (const ws of sockets) if (ws.deviceId === deviceId) { try { ws.close(4001, 'device revoked'); } catch {} }
   });
 
   // ---------- HTTP ----------
@@ -121,7 +172,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (req.headers['x-yzvibe-secret'] !== internalSecret) return json(res, 403, { error: 'forbidden' });
         const { sessionId, toolName, input } = await readJSON(req);
         const c = classifyPermission(toolName, input);
-        const decision = await store.requestApproval({ sessionId, toolName, ...c });
+        const decision = await store.requestApproval({ sessionId, toolName, agent: store.session(sessionId)?.agent ?? 'claude', ...c });
         // 计划被批准后 claude 进程内部已切到普通权限，这里只同步会话记录，不重启进程
         if (toolName === 'ExitPlanMode' && decision !== 'deny') { store.configureSession(sessionId, { mode: 'normal' }); agents.get(sessionId)?.configure({ mode: 'normal' }); }
         return json(res, 200, { decision });
@@ -133,13 +184,61 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         return json(res, 200, {
           pid: process.pid, name: deviceName, version: VERSION, port: api.port, uptime: process.uptime(), ...api.access,
           pairing: currentPairing(),
-          stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length },
+          push: pusher.status(store.devices),
+          stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length, rules: rules.all().length },
         });
       }
+      // 内部：本机 CLI 管理已配对的手机（yzvibe devices / revoke）与推送自检（yzvibe push）
+      if (p === '/internal/devices' || p.startsWith('/internal/devices/') || p === '/internal/push-test') {
+        if (req.headers['x-yzvibe-secret'] !== internalSecret) return json(res, 403, { error: 'forbidden' });
+        if (req.method === 'GET' && p === '/internal/devices') return json(res, 200, store.listDevices());
+        const dm = p.match(/^\/internal\/devices\/([^/]+)$/);
+        if (dm && req.method === 'DELETE') {
+          const target = store.devices.find((d) => d.id === dm[1] || d.id.startsWith(dm[1]) || d.name === dm[1]);
+          if (!target) return json(res, 404, { error: 'not found' });
+          store.removeDevice(target.id);
+          log(`[yzvibe] 已撤销手机：${target.name} (${target.id.slice(0, 8)})`);
+          return json(res, 200, { ok: true, id: target.id, name: target.name });
+        }
+        if (req.method === 'POST' && p === '/internal/push-test') {
+          pusher.reload();
+          if (!pusher.ready) return json(res, 200, { ok: false, status: pusher.status(store.devices) });
+          const results = await pusher.send(store.devices, { title: 'YzVibe 推送自检', body: `来自 ${deviceName}，收到这条说明推送已经打通。`, level: 'active', collapseId: 'push-test', data: { kind: 'test' } });
+          return json(res, 200, { ok: results.length > 0 && results.every((r) => r?.ok), results, status: pusher.status(store.devices) });
+        }
+      }
       // 以下需要设备 Token
-      if (!authed(req, url)) return json(res, 401, { error: 'unauthorized' });
+      const authDevice = authed(req, url);
+      if (!authDevice) return json(res, 401, { error: 'unauthorized' });
 
+      let m;
       if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
+      // 手机注册 / 注销 APNs token
+      if (p === '/devices/push') {
+        if (req.method === 'POST') {
+          const { token, environment, bundleId } = await readJSON(req);
+          if (!/^[0-9a-fA-F]{40,200}$/.test(String(token ?? ''))) return json(res, 400, { error: '推送 token 不合法' });
+          store.setDevicePush(authDevice.id, { token, environment: environment === 'production' ? 'production' : 'sandbox', bundleId });
+          log(`[yzvibe] ${authDevice.name} 已注册推送（${environment ?? 'sandbox'}）`);
+          return json(res, 200, { ok: true, push: pusher.status(store.devices) });
+        }
+        if (req.method === 'DELETE') { store.setDevicePush(authDevice.id, null); return json(res, 200, { ok: true }); }
+      }
+      // 一次性把会话 / 待审批 / 能力表 / 规则拿全：App 回到前台补数据用，省往返
+      if (req.method === 'GET' && p === '/sync') {
+        return json(res, 200, {
+          serverTime: new Date().toISOString(),
+          sessions: allSessions(),
+          approvals: store.listApprovals('pending'),
+          agents: await agentCapabilities(),
+          rules: rules.all().map((r) => ({ ...r, description: describeRule(r) })),
+          push: pusher.status(store.devices),
+        });
+      }
+      // 审批规则
+      if (req.method === 'GET' && p === '/rules') return json(res, 200, rules.all(url.searchParams.get('sessionId') ?? null).map((r) => ({ ...r, description: describeRule(r) })));
+      if (req.method === 'POST' && p === '/rules') { const r = rules.add(await readJSON(req)); return json(res, 201, { ...r, description: describeRule(r) }); }
+      if ((m = p.match(/^\/rules\/([^/]+)$/)) && req.method === 'DELETE') return json(res, rules.remove(m[1]) ? 200 : 404, { ok: true });
       if (req.method === 'GET' && p === '/quota') return json(res, 200, await agentQuota(url.searchParams.get('agent') ?? 'claude', { force: url.searchParams.get('force') === '1' }));
       if (req.method === 'GET' && p === '/fs/dirs') return json(res, 200, listDirectories(url.searchParams.get('path')));
       if (req.method === 'POST' && p === '/fs/mkdir') { const { parent, name } = await readJSON(req); return json(res, 201, makeDirectory(parent, name)); }
@@ -155,7 +254,6 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (body.firstMessage) { store.addMessage(s.id, { role: 'user', text: body.firstMessage }); a.send(body.firstMessage).catch(() => {}); }
         return json(res, 201, store.publicSession(s));
       }
-      let m;
       if ((m = p.match(/^\/sessions\/([^/]+)$/))) {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         if (req.method === 'GET') return json(res, 200, store.publicSession(s));
@@ -178,9 +276,9 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
       if ((m = p.match(/^\/approvals\/([^/]+)$/)) && req.method === 'POST') {
-        const { decision } = await readJSON(req);
+        const { decision, remember } = await readJSON(req);
         if (!['allow', 'deny', 'allow_once'].includes(decision)) return json(res, 400, { error: 'decision 不合法' });
-        return json(res, store.resolveApproval(m[1], decision) ? 200 : 409, { ok: true });
+        return json(res, store.resolveApproval(m[1], decision, 'phone', remember ?? null) ? 200 : 409, { ok: true });
       }
       // 文件
       if (p === '/files' || p === '/files/preview' || p === '/files/download' || p === '/files/stat') {
@@ -227,8 +325,10 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://localhost:${port}`);
-    if (url.pathname !== '/ws' || !authed(req, url)) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
+    const wsDevice = authed(req, url);
+    if (url.pathname !== '/ws' || !wsDevice) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.deviceId = wsDevice.id;
       sockets.add(ws);
       ws.on('close', () => sockets.delete(ws));
       ws.on('message', async (raw) => {
@@ -240,7 +340,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
             case 'session.stop': if (s) agents.get(s.id)?.stop(); break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
             case 'session.configure': if (s) configureSession(s, msg); break;
-            case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision); break;
+            case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision, 'phone', msg.remember ?? null); break;
             case 'ping': ws.send(JSON.stringify({ type: 'pong' })); break;
             default: break;
           }
@@ -267,7 +367,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     store, pairing, server, port, internalSecret,
     access: { host: null, mode: null },   // startConnector 决定后填入，供 /internal/status 生成配对链接
     listen: listenWithFallback,
-    close: () => new Promise((resolve) => { for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
+    rules, pusher,
+    close: () => new Promise((resolve) => { stopCleanup(); pusher.close(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
   return api;

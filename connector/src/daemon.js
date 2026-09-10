@@ -32,10 +32,58 @@ export function readDaemonInfo() {
   return info;
 }
 
-async function internal(info, pathname, { timeoutMs = 3000 } = {}) {
-  const res = await fetch(`http://127.0.0.1:${info.port}${pathname}`, { headers: { 'x-yzvibe-secret': info.secret }, signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+/** 调用运行中实例的 /internal/*，返回 { status, body }；除 404 外的失败会抛。 */
+async function internal(info, pathname, { timeoutMs = 3000, method = 'GET' } = {}) {
+  const res = await fetch(`http://127.0.0.1:${info.port}${pathname}`, { method, headers: { 'x-yzvibe-secret': info.secret }, signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+  return { status: res.status, body: await res.json() };
+}
+
+// ---------- 已配对的手机 ----------
+
+/** yzvibe devices：列出已配对的手机、推送注册情况。 */
+export async function printDevices(info) {
+  const { body: devices } = await internal(info, '/internal/devices');
+  if (!devices.length) { console.log('还没有配对的手机。运行 yzvibe qr 出示配对方式。'); return; }
+  console.log(`已配对 ${devices.length} 台手机：`);
+  for (const d of devices) {
+    console.log(`  ${d.id.slice(0, 8)}  ${d.name.padEnd(16)} 配对于 ${fmtAge(d.createdAt)}前  推送 ${d.push ? `已注册（${d.push.environment}）` : '未注册'}`);
+  }
+  console.log('\n撤销某台：yzvibe revoke <id 前 8 位或名字>');
+}
+
+/** yzvibe revoke <id|name>：吊销这台手机的访问，正在连的连接会立刻断开。 */
+export async function revokeDevice(info, idOrName) {
+  const { status, body } = await internal(info, `/internal/devices/${encodeURIComponent(idOrName)}`, { method: 'DELETE' });
+  if (status === 404) { console.log(`没有找到手机「${idOrName}」。用 yzvibe devices 看列表。`); return false; }
+  console.log(`已撤销「${body.name}」，它的 Token 立即失效；这台手机需要重新扫码才能再连上。`);
+  return true;
+}
+
+/** yzvibe push：查看推送配置状态，--test 真发一条到已注册的手机。 */
+export async function pushStatus(info, { test = false } = {}) {
+  if (!test) {
+    const st = await fetchStatus(info);
+    const p = st.push ?? {};
+    console.log(`推送：${p.ready ? '已就绪' : '未配置'}`);
+    console.log(`  配置文件  ${p.configFile}`);
+    console.log(`  Bundle ID ${p.bundleId}`);
+    console.log(`  已注册手机 ${p.registeredDevices ?? 0} 台`);
+    if (!p.ready) {
+      console.log(`  还缺      ${p.missing}`);
+      console.log(`\n配置办法：把苹果开发者后台生成的 AuthKey_XXXXXXXXXX.p8 放进 ~/.yzvibe/，再写 ~/.yzvibe/apns.json：`);
+      console.log(`  { "teamId": "你的 Team ID", "bundleId": "icu.yzvibe.YzVibe", "environment": "sandbox" }`);
+      console.log(`  environment：Xcode 直接装的调试版填 sandbox，TestFlight / App Store 版填 production。`);
+    } else {
+      console.log(`\n发一条测试推送：yzvibe push --test`);
+    }
+    return;
+  }
+  const { body: r } = await internal(info, '/internal/push-test', { method: 'POST', timeoutMs: 20_000 });
+  if (!r.status?.ready) { console.log('推送还没配置好：' + (r.status?.missing ?? '未知')); return; }
+  if (!r.results?.length) { console.log('没有手机注册过推送。在 App 的「我 › 通知」里打开推送后再试。'); return; }
+  for (const x of r.results) console.log(`  ${x.deviceId.slice(0, 8)}  ${x.ok ? `送达（${x.environment}）` : `失败 HTTP ${x.status} ${x.reason ?? ''}`}`);
+  console.log(r.ok ? '\n推送已打通，手机应该收到一条「YzVibe 推送自检」。' : '\n有推送没送达，检查 apns.json 的 environment 与 bundleId 是否和 App 一致。');
 }
 
 // ---------- 日志 ----------
@@ -106,7 +154,7 @@ export async function stopDaemon({ timeoutMs = 8000 } = {}) {
 }
 
 /** 运行中实例的状态 + 当前配对码（连接器会把过期的配对码换新）。 */
-export async function fetchStatus(info) { return internal(info, '/internal/status'); }
+export async function fetchStatus(info) { return (await internal(info, '/internal/status')).body; }
 
 export async function printStatus(info) {
   if (!info) { console.log('YzVibe 连接器：未运行。用 `yzvibe start` 启动。'); return; }
@@ -118,7 +166,8 @@ export async function printStatus(info) {
   console.log(`  地址     ${host}${String(host).includes('://') ? '' : `:${info.port}`}   （${modeLabel}，本机端口 ${info.port}）`);
   console.log(`  Agent    ${info.agent}${info.flags?.length ? `   启动参数 ${info.flags.join(' ')}` : ''}`);
   console.log(`  日志     ${LOG_FILE}`);
-  if (st) console.log(`  会话     ${st.stats.sessions} 个（运行中 ${st.stats.running}，待审批 ${st.stats.pendingApprovals}），已配对手机 ${st.stats.devices} 台`);
+  if (st) console.log(`  会话     ${st.stats.sessions} 个（运行中 ${st.stats.running}，待审批 ${st.stats.pendingApprovals}），已配对手机 ${st.stats.devices} 台，审批规则 ${st.stats.rules ?? 0} 条`);
+  if (st) console.log(`  推送     ${st.push?.ready ? `已就绪，${st.push.registeredDevices} 台手机已注册` : `未配置（yzvibe push 看怎么开）`}`);
 }
 
 /** 三种配对方式：扫码 / 手机浏览器打开外链 / 复制 JSON 粘贴进 App。`only` 可指定 'json' | 'link' 只输出一项（便于管道）。 */

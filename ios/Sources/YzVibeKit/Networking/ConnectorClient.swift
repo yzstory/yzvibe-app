@@ -10,7 +10,8 @@ public protocol ConnectorClient: Sendable {
     func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message]
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws
     func stop(device: Device, sessionId: String) async throws
-    func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws
+    /// 回应审批。`remember` 非空时同时在连接器上存一条规则，以后同类请求自动放行。
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws
     func approvals(device: Device) async throws -> [Approval]
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry]
     func preview(device: Device, sessionId: String, path: String) async throws -> String
@@ -23,6 +24,16 @@ public protocol ConnectorClient: Sendable {
     func capabilities(device: Device) async throws -> [String: AgentCapabilities]
     /// 改会话的 mode / model / effort（PATCH /sessions/:id）。value 为 nil 表示恢复该项默认。
     func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session
+    /// 一次拿全会话 / 待审批 / 能力表 / 规则 / 推送状态（GET /sync），App 回到前台时补数据用。
+    func sync(device: Device) async throws -> SyncSnapshot
+    /// 已保存的审批规则；sessionId 非空时只看该会话相关的。
+    func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule]
+    func deleteRule(device: Device, id: String) async throws
+    /// 注册 APNs token，让连接器在 App 被挂起时也能叫醒它。
+    func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus
+    func unregisterPush(device: Device) async throws
+    /// 立刻重连事件通道（回到前台时用，不必等指数退避）。
+    func reconnect(device: Device)
     /// 目录浏览（GET /fs/dirs），path 为 nil 时列主目录。
     func listDirectories(device: Device, path: String?) async throws -> DirectoryListing
     /// 新建文件夹（POST /fs/mkdir），返回新目录绝对路径。
@@ -138,9 +149,43 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         try await socket(for: device).send(["type": "session.stop", "sessionId": sessionId])
     }
 
-    public func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws {
-        try await socket(for: device).send(["type": "approval.respond", "approvalId": approvalId, "decision": decision.rawValue])
+    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion? = nil) async throws {
+        var payload: [String: Any] = ["type": "approval.respond", "approvalId": approvalId, "decision": decision.rawValue]
+        if let r = remember { payload["remember"] = rememberDict(r) }
+        do { try await socket(for: device).send(payload) }
+        catch {
+            // WS 不通就走 HTTP：审批是不能丢的动作
+            struct Body: Encodable { var decision: String; var remember: RememberBody? }
+            _ = try await perform(request(device, "/approvals/\(approvalId)", method: "POST",
+                                          body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init))), as: OK.self)
+        }
     }
+
+    public func sync(device: Device) async throws -> SyncSnapshot {
+        try await perform(request(device, "/sync"), as: SyncSnapshot.self)
+    }
+
+    public func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule] {
+        let q = sessionId.map { "?sessionId=" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
+        return try await perform(request(device, "/rules\(q)"), as: [ApprovalRule].self)
+    }
+
+    public func deleteRule(device: Device, id: String) async throws {
+        _ = try await perform(request(device, "/rules/\(id)", method: "DELETE"), as: OK.self)
+    }
+
+    public func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus {
+        struct Body: Encodable { var token: String; var environment: String; var bundleId: String? }
+        struct Resp: Decodable { var ok: Bool; var push: PushStatus? }
+        let body = Body(token: token, environment: environment, bundleId: Bundle.main.bundleIdentifier)
+        return try await perform(request(device, "/devices/push", method: "POST", body: body), as: Resp.self).push ?? PushStatus()
+    }
+
+    public func unregisterPush(device: Device) async throws {
+        _ = try await perform(request(device, "/devices/push", method: "DELETE"), as: OK.self)
+    }
+
+    public func reconnect(device: Device) { socket(for: device).reconnectNow() }
 
     public func approvals(device: Device) async throws -> [Approval] {
         var list = try await perform(request(device, "/approvals?status=pending"), as: [Approval].self)
@@ -247,6 +292,8 @@ final class ConnectorSocket: @unchecked Sendable {
     private let session: URLSession
     private let token: String?
     private var backoff: TimeInterval = 1
+    private var pingTimer: Timer?
+    private var connecting = false
 
     init(device: Device, session: URLSession, token: String?) {
         self.device = device; self.session = session; self.token = token
@@ -256,7 +303,26 @@ final class ConnectorSocket: @unchecked Sendable {
         connect()
     }
 
+    /// 回到前台时立刻重连：iOS 挂起 App 时会悄悄断掉 WebSocket，等指数退避太慢。
+    func reconnectNow() {
+        backoff = 1
+        if task?.state == .running {
+            task?.sendPing { [weak self] error in if error != nil { self?.restart() } }
+        } else {
+            restart()
+        }
+    }
+
+    private func restart() {
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        connect()
+    }
+
     private func connect() {
+        guard !connecting else { return }
+        connecting = true
+        defer { connecting = false }
         guard let base = device.baseURL, var comps = URLComponents(url: base.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else { return }
         comps.scheme = comps.scheme == "https" ? "wss" : "ws"
         if let token { comps.queryItems = [URLQueryItem(name: "token", value: token)] }
@@ -267,6 +333,21 @@ final class ConnectorSocket: @unchecked Sendable {
         task = t
         t.resume()
         receive()
+        startHeartbeat()
+    }
+
+    /// 每 30 秒 ping 一次：中间隧道悄悄断链时，只靠 receive 可能一直不报错。
+    private func startHeartbeat() {
+        pingTimer?.invalidate()
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            self?.task?.sendPing { [weak self] error in
+                guard error != nil, let self else { return }
+                continuation.yield(.disconnected(error))
+                restart()
+            }
+        }
+        pingTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func receive() {
@@ -279,6 +360,7 @@ final class ConnectorSocket: @unchecked Sendable {
                 receive()
             case .failure(let err):
                 continuation.yield(.disconnected(err))
+                pingTimer?.invalidate()
                 let delay = backoff
                 backoff = min(backoff * 2, 30)
                 DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in self?.connect() }
@@ -328,6 +410,20 @@ final class ConnectorSocket: @unchecked Sendable {
 }
 
 // MARK: - 编解码
+
+struct OK: Decodable { var ok: Bool? }
+
+struct RememberBody: Encodable {
+    var match: String, value: String?, scope: String, ttlMinutes: Int?
+    init(_ s: ApprovalSuggestion) { match = s.match; value = s.value; scope = s.scope; ttlMinutes = s.ttlMinutes }
+}
+
+func rememberDict(_ s: ApprovalSuggestion) -> [String: Any] {
+    var d: [String: Any] = ["match": s.match, "scope": s.scope]
+    if let v = s.value { d["value"] = v }
+    if let t = s.ttlMinutes { d["ttlMinutes"] = t }
+    return d
+}
 
 private struct AnyEncodable: Encodable {
     let value: any Encodable

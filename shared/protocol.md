@@ -14,6 +14,12 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /health | 公开。`{ name, version, agents, connectorId, uptime }`；`connectorId` 是电脑的稳定 ID，手机用它作 Device.id |
 | POST | /pair | 公开。body `{ token, phoneName? }` → `{ deviceToken, deviceName, connectorId }`；token 一次性、10 分钟有效 |
 | GET | /agents | 各 Agent 的能力表：`{ claude: { modes, efforts, models, customModel }, codex: {...} }`，见下文「会话选项」 |
+| GET | /sync | 一次拿全：`{ serverTime, sessions, approvals, agents, rules, push }`。App 回到前台补数据用，省往返 |
+| GET | /rules?sessionId= | 审批规则列表（带中文 `description`） |
+| POST | /rules | 手动新增一条规则 |
+| DELETE | /rules/:id | 撤销一条规则 |
+| POST | /devices/push | `{ token, environment: sandbox\|production, bundleId }` 注册 APNs token |
+| DELETE | /devices/push | 注销本机推送 |
 | GET | /fs/dirs?path= | 目录浏览（选工作目录用）：`{ path, parent, home, entries:[{name,path}] }`，只列目录、跳过隐藏项；path 缺省为主目录 |
 | POST | /fs/mkdir | `{ parent, name }` → `{ path }`（201）；名字含路径分隔符或以 . 开头 → 400 |
 | GET | /quota?agent=claude\|codex | 账号剩余额度，见下文「用量与额度」 |
@@ -26,7 +32,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | POST | /sessions/:id/messages | `{ text, attachments? }`（WS 之外的发送方式）|
 | POST | /sessions/:id/stop | 中断当前轮 |
 | GET | /approvals?status=pending | 审批列表（手机重启后用它恢复收件箱） |
-| POST | /approvals/:id | `{ decision }`（WS 之外的审批方式）|
+| POST | /approvals/:id | `{ decision, remember? }`（WS 之外的审批方式）；`remember` 见下 |
 | GET | /files?sessionId=&path= | 目录列表 `{ path, entries:[{name,path,kind,size,modifiedAt}] }`，path 相对会话 cwd，越界 403 |
 | GET | /files/stat?sessionId=&path= | 单个文件元信息 `{ name, path, displayPath, kind, size, modifiedAt, mime, textual, inCwd }`，文件查看器用 |
 | GET | /files/preview?sessionId=&path= | 文本/图片预览（≤ 2MB） |
@@ -54,8 +60,12 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 { "type": "session.status",     "sessionId": "s1", "status": "idle|running|waiting_approval|error|closed" }
 { "type": "message.delta",      "sessionId": "s1", "messageId": "m9", "role": "assistant", "text": "..." }
 { "type": "message.done",       "sessionId": "s1", "messageId": "m9" }
-{ "type": "tool.call",          "sessionId": "s1", "toolId": "t1", "name": "Bash", "input": {...}, "state": "running|done|error" }
-{ "type": "approval.requested", "sessionId": "s1", "approvalId": "a1", "kind": "shell|write|network|other", "summary": "rm -rf dist", "detail": "...", "risk": "low|medium|high", "expiresAt": "..." }
+{ "type": "tool.call",          "sessionId": "s1", "messageId": "m9", "toolId": "t1", "name": "Bash", "input": {...},
+  "state": "running|done|error", "output": "PASS 12 tests", "outputKind": "text|diff", "truncated": false }
+{ "type": "approval.requested", "sessionId": "s1", "approvalId": "a1", "kind": "shell|write|network|other", "summary": "rm -rf dist",
+  "detail": "...", "risk": "low|medium|high", "expiresAt": "...", "toolName": "Bash",
+  "suggestions": [{ "label": "总是允许 npm test 开头的命令", "match": "prefix", "value": "npm test", "scope": "session", "ttlMinutes": null }] }
+{ "type": "message.added",      "sessionId": "s1", "message": { ...Message } }   // 系统消息（规则自动放行等）
 { "type": "approval.resolved",  "approvalId": "a1", "decision": "allow|deny|allow_once", "by": "phone|desktop" }
 ```
 ### 客户端 → 服务端
@@ -64,10 +74,13 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 { "type": "session.stop",     "sessionId": "s1" }
 { "type": "session.resume",   "sessionId": "s1" }
 { "type": "session.configure","sessionId": "s1", "mode": "plan", "model": "opus", "effort": "high" }   // 同 PATCH /sessions/:id
-{ "type": "approval.respond", "approvalId": "a1", "decision": "allow|deny|allow_once" }
+{ "type": "approval.respond", "approvalId": "a1", "decision": "allow|deny|allow_once",
+  "remember": { "match": "tool|prefix|exact", "value": "npm test", "scope": "session|global", "ttlMinutes": 60 } }
 { "type": "ping" }
 ```
-`allow` 会让连接器记住「本会话 + 同一工具 + 同一命令」下次自动放行；`allow_once` 只放行这一次。
+`decision` 只对这一次生效。要「以后别再问」必须同时给 `remember`，它会在连接器上存成一条规则
+（`~/.yzvibe/rules.json`），命中时聊天里会留一条「已按规则自动允许」的系统消息。
+`approval.requested` 事件里带 `suggestions`，是连接器算好的几个 `remember` 备选，手机直接渲染成按钮。
 
 ## 数据模型（三端共用）
 ```ts
@@ -75,7 +88,9 @@ type Device  = { id, name, host, port, mode: 'tunnel'|'local'|'p2p'|'tailscale'|
 type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null, usage: SessionUsage|null, source: 'phone'|'terminal'|'sdk', branch: string|null }
 type SessionUsage = { model, turn: TurnUsage, total: { input, cacheWrite, cacheRead, output, thinking, costUSD|null, turns }, updatedAt }
 type TurnUsage = { model, input, cacheWrite, cacheRead, output, thinking, contextTokens, contextWindow, costUSD|null, durationMs|null }
-type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, attachments?, toolCall?, createdAt }
+type Message  = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, attachments?, toolCalls?, approvalId?, ruleId?, createdAt, streaming }
+type ToolCall = { id, name, detail, state: 'running'|'done'|'error', output?, outputKind: 'text'|'diff', truncated }
+type Rule     = { id, scope: 'session'|'global', sessionId?, agent?, tool?, match: 'tool'|'prefix'|'exact', value?, createdAt, expiresAt?, hits }
 type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other', summary, detail, risk, status: 'pending'|'allowed'|'denied'|'expired', createdAt, expiresAt? }
 ```
 
@@ -94,6 +109,18 @@ App 端 `PairingPayload(text:)` 四种输入通吃：深链、外链、JSON、�
 ## 连接器本机内部接口（不对手机开放）
 - `POST /internal/approval`、`GET /internal/status`：只接受带 `X-YzVibe-Secret` 的本机请求，secret 每次启动随机生成，写在 `~/.yzvibe/daemon.json`（0600）。
 - `GET /internal/status` → `{ pid, name, version, port, uptime, host, mode, pairing: { token, expiresAt, url }, stats: { devices, sessions, running, pendingApprovals } }`，供 `yzvibe status / qr` 使用（`pairing` 含 `token / expiresAt / url / link / config`）；配对码过期时这里会自动换新，因此连接器常驻后台也随时能配对。
+
+## 远程推送（APNs）
+连接器直连 `api.push.apple.com`，配置在 `~/.yzvibe/apns.json`（`keyFile` / `keyId` / `teamId` / `bundleId` / `environment`）。
+手机通过 `POST /devices/push` 交出 token，连接器在这些时机推送：
+
+| 时机 | 载荷 | 说明 |
+|---|---|---|
+| 有待审批 | `interruption-level: time-sensitive`，`yz.kind = "approval"`，带角标与 `collapse-id` | 锁屏也能收到，点开直接进审批 |
+| 回复完成且没有手机在线 | `interruption-level: active`，`yz.kind = "reply"` | 手机连着时不推，App 自己会显示 |
+| 审批被解决 | 静默推送（`content-available`），只更新角标 | |
+
+设备 token 报 `BadDeviceToken` 时自动换另一个环境重试，`Unregistered` 时清掉。没配置密钥就整体不推送。
 
 ## 审批在连接器内部如何实现（Claude Code）
 连接器以 `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool mcp__yzvibe__approve --mcp-config <file>` 启动 Agent。

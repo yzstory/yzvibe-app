@@ -1,7 +1,7 @@
 {
   "name": "yzvibe",
   "version": "0.1.0",
-  "description": "YzVibe 桌面连接器：把本机的 Claude Code / Codex 会话暴露给手机 App（REST + WebSocket + 扫码配对）",
+  "description": "YzVibe 桌面连接器：把本机的 Claude Code / Codex 会话暴露给手机 App（REST + WebSocket + 扫码配对 + 远程审批推送）",
   "type": "module",
   "bin": {
     "yzvibe": "bin/yzvibe.js"
@@ -16,11 +16,41 @@
     "stop": "node bin/yzvibe.js stop",
     "status": "node bin/yzvibe.js status",
     "dev": "node bin/yzvibe.js run --access=local --agent=mock",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "codex",
+    "agent",
+    "remote",
+    "mobile",
+    "cli",
+    "websocket",
+    "apns"
+  ],
+  "homepage": "https://github.com/yzstory/yzvibe-app#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yzstory/yzvibe-app.git",
+    "directory": "connector"
+  },
+  "bugs": {
+    "url": "https://github.com/yzstory/yzvibe-app/issues"
+  },
+  "author": "yzstory",
+  "files": [
+    "bin/",
+    "src/",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

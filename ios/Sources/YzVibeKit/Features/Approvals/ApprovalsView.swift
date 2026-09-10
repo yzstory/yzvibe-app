@@ -65,10 +65,28 @@ struct ApprovalCardView: View {
             if approval.status == .pending {
                 HStack(spacing: 8) {
                     Button("拒绝") { decide(.deny) }.buttonStyle(OutlineButtonStyle(color: p.danger, height: 44))
-                    if !showsContext { Button("仅此一次") { decide(.allowOnce) }.buttonStyle(SecondaryButtonStyle(height: 44)) }
                     Button { decide(.allow) } label: { Label("允许", systemImage: "checkmark") }.buttonStyle(PrimaryButtonStyle(height: 44))
                 }
                 .disabled(busy)
+                // 「以后别再问我」：存成连接器上的规则，同类请求自动放行，可在「我 › 审批规则」里撤销
+                if !approval.suggestions.isEmpty {
+                    Menu {
+                        ForEach(approval.suggestions) { sug in
+                            Button { decide(.allow, remember: sug) } label: {
+                                Label(sug.label + (sug.ttlMinutes.map { "（\($0) 分钟）" } ?? ""), systemImage: "checkmark.shield")
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.shield").font(.system(size: 12, weight: .semibold))
+                            Text("总是允许…").font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(p.labelSecondary)
+                        .padding(.horizontal, 12).frame(height: 34)
+                        .background(Capsule().strokeBorder(p.border, lineWidth: 1))
+                    }
+                    .disabled(busy)
+                }
             }
         }
         .padding(16)
@@ -85,13 +103,13 @@ struct ApprovalCardView: View {
         }
     }
 
-    private func decide(_ d: ApprovalDecision) {
+    private func decide(_ d: ApprovalDecision, remember: ApprovalSuggestion? = nil) {
         busy = true
         Task {
             if d != .deny, approval.risk == .high, store.settings.faceIDForHighRisk {
                 guard await BiometricGate.confirm(reason: "确认允许：\(approval.summary)") else { busy = false; return }
             }
-            await store.respond(approval.id, d)
+            await store.respond(approval.id, d, remember: remember)
             busy = false
         }
     }

@@ -75,3 +75,12 @@
 - 连接器：新增 `GET /files/stat`；`preview` / `download` 换用 `resolveReadable`——工作目录内放行，目录外只放行主目录里的非敏感文件（私钥 / 凭据 / keychain 等一律 403），download 补 content-length
 - 多段气泡输出本来就有（连接器在工具调用前后切分 assistant 消息），无需改动
 - 验证：connector 17 个测试通过（新增权限矩阵与 stat/download 两组）；iOS 新增 4 个测试并编译通过，另把 `FilePathDetector` 抽出来在 macOS 上真跑了 27 条用例全过；对运行中的连接器做了端到端实测：工作目录内 / 工作目录外 `~/.yzvibe/pairing.txt` 均 200 并成功下载，`~/.ssh/id_rsa` 与 `../../etc/passwd` 均 403
+
+## 会话 3 — 2026-09-10：评估后的 7 项改进
+1. 远程推送：connector/src/push.js 直连 APNs（ES256 JWT + HTTP/2），环境自动回退、失效 token 清理；iOS PushCenter + AppDelegate + entitlements；审批 time-sensitive、回复仅在手机离线时推、审批解决发静默推送更新角标
+2. 断线重同步：scenePhase 触发 resync，GET /sync 一次拿全，消息按服务端游标增量补，本地乐观消息用 isLocal 标记去重；WS 30 秒心跳 + 立即重连
+3. 工具输出可见：连接器捕获 tool_result 内容与 Edit/Write 的行级 diff（src/diff.js），工具卡按消息气泡归属；iOS 工具卡可展开，diff 按 +/- 着色
+4. 审批规则：src/rules.js（tool/prefix/exact × session/global × TTL），审批卡「总是允许…」，自动放行留系统消息，「我 › 安全 › 审批规则」可撤销
+5. 资源回收：Claude 进程空闲 15 分钟回收（--resume 接回）、上传 14 天 / 关闭会话 45 天 / 孤儿文件定期清理、yzvibe devices / revoke
+6. 测试落地：ClaudeStreamTranslator 可用录制事件流测试；连接器 36 项、iOS 36 项（装了 iOS 26.5 模拟器运行时后真跑）；.github/workflows/ci.yml
+7. 分发：npm 包就绪（files/prepublishOnly/npm pack 验证 54.7kB）、ios/scripts/archive.sh 归档并可直传 TestFlight

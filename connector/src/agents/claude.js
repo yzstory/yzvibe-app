@@ -8,18 +8,117 @@ import { expandHome } from '../files.js';
 import { claudeOptionArgs } from './options.js';
 import { claudeTurnUsage, accumulateUsage } from './usage.js';
 import { rememberRateLimit } from '../quota.js';
+import { diffFromToolInput } from '../diff.js';
 
-export class ClaudeAgent {
-  constructor({ session, store, internalURL, internalSecret, home, options = {} }) {
-    Object.assign(this, { session, store, internalURL, internalSecret, home, options });
-    this.proc = null;
-    this.buffer = '';
+/** 空闲多久回收 claude 进程（下次发消息用 --resume 无缝接回）。0 = 不回收。 */
+export const IDLE_RECLAIM_MS = Number(process.env.YZVIBE_IDLE_MINUTES ?? 15) * 60_000;
+
+/**
+ * 把 claude 的 stream-json 事件翻译成 store 里的消息 / 工具卡 / 用量。
+ * 独立成类是为了能用录制的事件流直接测试，不必真的起一个 claude 进程。
+ */
+export class ClaudeStreamTranslator {
+  constructor({ store, session, onTurnEnd = () => {} }) {
+    Object.assign(this, { store, session, onTurnEnd });
     this.currentMessageId = null;
     this.currentText = '';
     this.sawDelta = false;
-    this.needsRespawn = false;
     this.modelId = null;            // system.init 里的模型
     this.lastMessageUsage = null;   // 最后一条 assistant 消息的 usage，用于算上下文大小
+    this.toolInputs = new Map();    // tool_use_id → { name, input }
+  }
+
+  #ensureMessage() {
+    if (!this.currentMessageId) { this.currentMessageId = randomUUID(); this.currentText = ''; this.sawDelta = false; }
+    return this.currentMessageId;
+  }
+
+  #endMessage() {
+    if (!this.currentMessageId) return;
+    this.store.finishMessage(this.session.id, this.currentMessageId, this.currentText || undefined);
+    this.currentMessageId = null;
+  }
+
+  handle(ev) {
+    const { store, session } = this;
+    switch (ev.type) {
+      case 'system':
+        if (ev.subtype === 'init') { if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id); if (ev.model) this.modelId = ev.model; }
+        break;
+      case 'rate_limit_event':
+        rememberRateLimit(ev.rate_limit_info);
+        break;
+      case 'stream_event': {
+        const e = ev.event;
+        if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
+          const mid = this.#ensureMessage();
+          this.sawDelta = true;
+          this.currentText += e.delta.text;
+          store.appendDelta(session.id, mid, e.delta.text);
+        }
+        break;
+      }
+      case 'assistant': {
+        if (ev.message?.usage) this.lastMessageUsage = ev.message.usage;
+        const blocks = ev.message?.content ?? [];
+        const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
+        const mid = this.#ensureMessage();
+        if (text && !this.sawDelta) { this.currentText += text; store.appendDelta(session.id, mid, text); }
+        for (const b of blocks.filter((b) => b.type === 'tool_use')) {
+          this.toolInputs.set(b.id, { name: b.name, input: b.input });
+          const diff = diffFromToolInput(b.name, b.input ?? {});
+          store.upsertToolCall(session.id, {
+            id: b.id, name: b.name, detail: summarizeInput(b.name, b.input), state: 'running',
+            ...(diff ? { output: diff, outputKind: 'diff' } : {}),
+          }, mid);
+        }
+        break;
+      }
+      case 'user': {
+        for (const b of ev.message?.content ?? []) {
+          if (b.type !== 'tool_result') continue;
+          const known = this.toolInputs.get(b.tool_use_id);
+          const patch = { id: b.tool_use_id, state: b.is_error ? 'error' : 'done' };
+          const out = toolResultText(b.content);
+          if (out) { patch.output = out; if (b.is_error || !known || !diffFromToolInput(known.name, known.input ?? {})) patch.outputKind = 'text'; }
+          store.upsertToolCall(session.id, patch);
+          this.toolInputs.delete(b.tool_use_id);
+        }
+        // 工具结果之后 Claude 会继续输出新一段文本，开启新消息
+        this.#endMessage();
+        break;
+      }
+      case 'result': {
+        this.#endMessage();
+        if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id);
+        if (ev.is_error) store.addMessage(session.id, { role: 'system', text: `Claude 出错：${ev.result ?? ev.subtype}` });
+        if (ev.usage) store.setUsage(session.id, accumulateUsage(session.usage, claudeTurnUsage(ev, this.lastMessageUsage, this.modelId)));
+        store.setStatus(session.id, ev.is_error ? 'error' : 'idle');
+        this.onTurnEnd();
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+/** tool_result 的 content 可能是字符串，也可能是 text / image 块数组。 */
+export function toolResultText(content) {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b) => (typeof b === 'string' ? b : b?.type === 'text' ? b.text : b?.type === 'image' ? '[图片]' : ''))
+    .filter(Boolean).join('\n').trim();
+}
+
+export class ClaudeAgent {
+  constructor({ session, store, internalURL, internalSecret, home, options = {}, idleMs = IDLE_RECLAIM_MS, log = console.log }) {
+    Object.assign(this, { session, store, internalURL, internalSecret, home, options, idleMs, log });
+    this.proc = null;
+    this.buffer = '';
+    this.needsRespawn = false;
+    this.idleTimer = null;
+    this.translator = new ClaudeStreamTranslator({ store, session, onTurnEnd: () => this.#scheduleReclaim() });
   }
 
   /** 手机切换了 mode / model / effort：这些是 claude 进程级参数，空闲时在下一轮以 --resume 重启进程生效。 */
@@ -55,8 +154,8 @@ export class ClaudeAgent {
     this.proc.stderr.on('data', (b) => { const s = String(b).trim(); if (s) console.error(`[claude ${session.id.slice(0, 8)}] ${s}`); });
     this.proc.on('exit', (code) => {
       this.proc = null;
-      if (this.currentMessageId) this.store.finishMessage(session.id, this.currentMessageId, this.currentText || undefined);
-      this.currentMessageId = null;
+      if (this.translator.currentMessageId) this.store.finishMessage(session.id, this.translator.currentMessageId, this.translator.currentText || undefined);
+      this.translator.currentMessageId = null;
       this.store.setStatus(session.id, code === 0 || code === null ? 'idle' : 'error');
     });
     this.proc.on('error', (e) => {
@@ -74,7 +173,22 @@ export class ClaudeAgent {
     p.kill('SIGTERM');
   }
 
+  /** 会话闲下来就回收进程：常驻十几个 claude 会持续占内存，而 --resume 能无损接回。 */
+  #scheduleReclaim() {
+    clearTimeout(this.idleTimer);
+    if (!this.idleMs || !this.session.agentSessionId) return;
+    this.idleTimer = setTimeout(() => {
+      if (!this.proc) return;
+      const st = this.session.status;
+      if (st === 'running' || st === 'waiting_approval') return this.#scheduleReclaim();
+      this.log(`[yzvibe] 会话 ${this.session.id.slice(0, 8)} 空闲 ${Math.round(this.idleMs / 60000)} 分钟，回收 claude 进程（下次发消息自动接回）`);
+      this.#retire();
+    }, this.idleMs);
+    this.idleTimer.unref?.();
+  }
+
   async send(text, attachments = []) {
+    clearTimeout(this.idleTimer);
     if (this.proc && this.needsRespawn && this.session.status !== 'running' && this.session.status !== 'waiting_approval') this.#retire();
     if (!this.proc) this.#spawn();
     const content = text?.trim() ? [{ type: 'text', text }] : [];   // 空文本块会被 API 拒绝，只发图时省略
@@ -90,7 +204,11 @@ export class ClaudeAgent {
     if (this.proc) { this.proc.kill('SIGINT'); }
   }
 
-  dispose() { this.stop(); try { fs.unlinkSync(path.join(this.home, `mcp-${this.session.id}.json`)); } catch {} }
+  dispose() {
+    clearTimeout(this.idleTimer);
+    this.stop();
+    try { fs.unlinkSync(path.join(this.home, `mcp-${this.session.id}.json`)); } catch {}
+  }
 
   #onData(buf) {
     this.buffer += String(buf);
@@ -100,64 +218,7 @@ export class ClaudeAgent {
       this.buffer = this.buffer.slice(i + 1);
       if (!line) continue;
       let ev; try { ev = JSON.parse(line); } catch { continue; }
-      this.#handle(ev);
-    }
-  }
-
-  #ensureMessage() {
-    if (!this.currentMessageId) { this.currentMessageId = randomUUID(); this.currentText = ''; this.sawDelta = false; }
-    return this.currentMessageId;
-  }
-
-  #handle(ev) {
-    const { store, session } = this;
-    switch (ev.type) {
-      case 'system':
-        if (ev.subtype === 'init') { if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id); if (ev.model) this.modelId = ev.model; }
-        break;
-      case 'rate_limit_event':
-        rememberRateLimit(ev.rate_limit_info);
-        break;
-      case 'stream_event': {
-        const e = ev.event;
-        if (e?.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
-          const mid = this.#ensureMessage();
-          this.sawDelta = true;
-          this.currentText += e.delta.text;
-          store.appendDelta(session.id, mid, e.delta.text);
-        }
-        break;
-      }
-      case 'assistant': {
-        if (ev.message?.usage) this.lastMessageUsage = ev.message.usage;
-        const blocks = ev.message?.content ?? [];
-        const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
-        const mid = this.#ensureMessage();
-        if (text && !this.sawDelta) { this.currentText += text; store.appendDelta(session.id, mid, text); }
-        for (const b of blocks.filter((b) => b.type === 'tool_use')) {
-          store.upsertToolCall(session.id, { id: b.id, name: b.name, detail: summarizeInput(b.name, b.input), state: 'running' });
-        }
-        break;
-      }
-      case 'user': {
-        for (const b of ev.message?.content ?? []) {
-          if (b.type === 'tool_result') {
-            store.upsertToolCall(session.id, { id: b.tool_use_id, state: b.is_error ? 'error' : 'done' });
-          }
-        }
-        // 工具结果之后 Claude 会继续输出新一段文本，开启新消息
-        if (this.currentMessageId) { store.finishMessage(session.id, this.currentMessageId, this.currentText || undefined); this.currentMessageId = null; }
-        break;
-      }
-      case 'result': {
-        if (this.currentMessageId) { store.finishMessage(session.id, this.currentMessageId, this.currentText || undefined); this.currentMessageId = null; }
-        if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id);
-        if (ev.is_error) store.addMessage(session.id, { role: 'system', text: `Claude 出错：${ev.result ?? ev.subtype}` });
-        if (ev.usage) store.setUsage(session.id, accumulateUsage(session.usage, claudeTurnUsage(ev, this.lastMessageUsage, this.modelId)));
-        store.setStatus(session.id, ev.is_error ? 'error' : 'idle');
-        break;
-      }
-      default: break;
+      this.translator.handle(ev);
     }
   }
 }
@@ -181,7 +242,8 @@ export function classifyPermission(toolName, input = {}) {
   }
   if (/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(toolName)) {
     const outside = typeof input.file_path === 'string' && (input.file_path.startsWith('/etc') || input.file_path.startsWith('/usr') || input.file_path.includes('/.ssh/'));
-    return { kind: 'write', risk: outside ? 'high' : 'low', summary, detail: `${toolName} ${summary}` };
+    const diff = diffFromToolInput(toolName, input);
+    return { kind: 'write', risk: outside ? 'high' : 'low', summary, detail: diff ? `${toolName} ${summary}\n\n${diff}` : `${toolName} ${summary}` };
   }
   if (/^(WebFetch|WebSearch)$/.test(toolName)) return { kind: 'network', risk: 'low', summary, detail: `${toolName} ${summary}` };
   if (toolName === 'ExitPlanMode') {

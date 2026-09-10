@@ -14,6 +14,12 @@ public final class AppStore {
     public var messages: [String: [Message]] = [:]        // sessionId → messages
     public var approvals: [Approval] = []
     public var capabilities: [String: [String: AgentCapabilities]] = [:]   // deviceId → agent → 能力
+    public var rules: [String: [ApprovalRule]] = [:]                       // deviceId → 审批规则
+    public var pushStatus: [String: PushStatus] = [:]                      // deviceId → 连接器的推送配置状态
+    public private(set) var pushToken: String?
+    public private(set) var lastSyncAt: Date?
+    /// 点开推送后要打开的会话（SessionsView 消费后清空）。
+    public var openSessionRequest: String?
     public var attachmentImages: [String: UIImage] = [:]                   // 上传 id → 图片（会话里展示用）
     public var failedAttachments: Set<String> = []
     public var settings = Settings() { didSet { settings.save() } }
@@ -24,6 +30,9 @@ public final class AppStore {
     private let persistence = DevicePersistence()
     private var eventTasks: [String: Task<Void, Never>] = [:]
     private var loadedMessages: Set<String> = []
+    /// 每个会话「服务端已确认的最后一条消息」，断线重连后从这里往后补。
+    private var syncCursor: [String: String] = [:]
+    private var syncing = false
 
     public init(client: any ConnectorClient = MockConnectorClient(), seedMock: Bool = true) {
         self.client = client
@@ -59,6 +68,9 @@ public final class AppStore {
     public func device(_ id: String) -> Device? { devices.first { $0.id == id } }
     public func session(_ id: String) -> Session? { sessions.first { $0.id == id } }
     public func approval(_ id: String) -> Approval? { approvals.first { $0.id == id } }
+    public var allRules: [ApprovalRule] { devices.compactMap { rules[$0.id] }.flatMap { $0 } }
+    public func rules(for deviceId: String?) -> [ApprovalRule] { rules[deviceId ?? ""] ?? [] }
+    public var push: PushStatus? { pushStatus[selectedDevice?.id ?? ""] }
     /// 某设备上某种 Agent 的能力表；没拿到时用 App 内置的回退表。
     public func capabilities(for agent: AgentKind, on deviceId: String?) -> AgentCapabilities {
         capabilities[deviceId ?? ""]?[agent.rawValue] ?? .fallback(for: agent)
@@ -100,6 +112,7 @@ public final class AppStore {
         selectedDeviceId = device.id
         await refresh(device)
         subscribe(device)
+        if let t = pushToken ?? PushCenter.shared.token { await registerPush(token: t, environment: PushCenter.shared.environment) }
         toast = "已配对 \(device.name)"
     }
 
@@ -140,6 +153,71 @@ public final class AppStore {
 
     public func refreshSessions(for device: Device) async { await refresh(device) }
 
+    // MARK: 断线重同步
+    // iOS 把 App 挂起时会悄悄断掉 WebSocket，离线期间的消息、状态、审批都收不到。
+    // 回到前台（或收到静默推送）时走这里：立刻重连事件通道，再把落下的数据补齐。
+
+    public func resync() async {
+        guard !isDemo, !syncing else { return }
+        syncing = true
+        defer { syncing = false }
+        for d in devices {
+            client.reconnect(device: d)
+            subscribe(d)
+            await syncDevice(d)
+        }
+        lastSyncAt = .now
+    }
+
+    private func syncDevice(_ device: Device) async {
+        do {
+            let snap = try await client.sync(device: device)
+            capabilities[device.id] = snap.agents
+            pushStatus[device.id] = snap.push
+            rules[device.id] = snap.rules
+
+            let fresh = snap.sessions.map { var s = $0; s.deviceId = device.id; return s }
+            sessions.removeAll { $0.deviceId == device.id }
+            sessions.append(contentsOf: fresh)
+
+            let pending = snap.approvals.map { var a = $0; a.deviceId = device.id; return a }
+            approvals.removeAll { $0.deviceId == device.id && $0.status == .pending }
+            approvals.insert(contentsOf: pending, at: 0)
+            for a in pending where !(messages[a.sessionId] ?? []).contains(where: { $0.approvalId == a.id }) {
+                messages[a.sessionId, default: []].append(Message(sessionId: a.sessionId, role: .system, text: "", approvalId: a.id))
+            }
+
+            setDevice(device.id) { $0.online = true; $0.lastSeen = .now
+                $0.sessionCount = fresh.filter { $0.status != .closed }.count
+                $0.agents = Dictionary(grouping: fresh, by: \.agent).mapValues(\.count) }
+
+            // 已经打开过的会话补上离线期间的新消息
+            for sid in loadedMessages where fresh.contains(where: { $0.id == sid }) {
+                await catchUpMessages(sid)
+            }
+            if pushToken == nil, let t = PushCenter.shared.token { await registerPush(token: t, environment: PushCenter.shared.environment) }
+        } catch {
+            setDevice(device.id) { $0.online = false }
+        }
+    }
+
+    /// 从服务端已确认的游标往后补消息，并丢掉已被服务端接手的本地乐观消息。
+    private func catchUpMessages(_ sessionId: String) async {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return }
+        do {
+            var fetched = try await client.messages(device: device, sessionId: sessionId, after: syncCursor[sessionId])
+            guard !fetched.isEmpty else { return }
+            for i in fetched.indices { fetched[i].sessionId = sessionId }
+            let newest = fetched.last?.createdAt ?? .distantPast
+            var merged = (messages[sessionId] ?? []).filter { !$0.isLocal || $0.createdAt > newest }
+            var seen = Set(merged.map(\.id))
+            merged.append(contentsOf: fetched.filter { seen.insert($0.id).inserted })
+            merged.sort { $0.createdAt < $1.createdAt }
+            messages[sessionId] = merged
+            syncCursor[sessionId] = fetched.last?.id
+        } catch { }
+    }
+
     private func setDevice(_ id: String, _ mutate: (inout Device) -> Void) {
         guard let i = devices.firstIndex(where: { $0.id == id }) else { return }
         mutate(&devices[i])
@@ -158,11 +236,41 @@ public final class AppStore {
 
     /// App 启动：为每台设备刷新并订阅事件；申请通知权限。
     public func start() async {
-        if !isDemo { await Notifier.requestPermission() }
+        guard !isDemo else { return }        // 演示数据里的设备是假的，别去连
+        PushCenter.shared.onToken = { [weak self] token, env in Task { @MainActor in await self?.registerPush(token: token, environment: env) } }
+        PushCenter.shared.onSilent = { [weak self] in await self?.resync() }
+        await PushCenter.shared.start()
+        for d in devices { subscribe(d) }
+        await resync()
+    }
+
+    // MARK: 远程推送
+
+    /// 把 APNs token 交给每一台已配对的电脑；有了它，App 被挂起时审批也能弹到锁屏上。
+    public func registerPush(token: String, environment: String) async {
+        pushToken = token
         for d in devices {
-            subscribe(d)
-            if !isDemo { await refresh(d) }
+            if let st = try? await client.registerPush(device: d, token: token, environment: environment) { pushStatus[d.id] = st }
         }
+    }
+
+    public func disablePush() async {
+        for d in devices { try? await client.unregisterPush(device: d) }
+        pushToken = nil
+        for k in pushStatus.keys { pushStatus[k]?.registeredDevices = 0 }
+    }
+
+    // MARK: 审批规则
+
+    public func loadRules(for device: Device) async {
+        if let list = try? await client.rules(device: device, sessionId: nil) { rules[device.id] = list }
+    }
+
+    public func deleteRule(_ rule: ApprovalRule, on deviceId: String) async {
+        guard let d = device(deviceId) else { return }
+        rules[deviceId]?.removeAll { $0.id == rule.id }
+        do { try await client.deleteRule(device: d, id: rule.id) }
+        catch { toast = error.localizedDescription; await loadRules(for: d) }
     }
 
     // MARK: 会话与消息
@@ -173,6 +281,7 @@ public final class AppStore {
             var list = try await client.messages(device: device, sessionId: sessionId, after: nil)
             for i in list.indices { list[i].sessionId = sessionId }
             messages[sessionId] = list
+            syncCursor[sessionId] = list.last?.id
             loadedMessages.insert(sessionId)
         } catch { toast = error.localizedDescription }
     }
@@ -228,7 +337,7 @@ public final class AppStore {
 
     public func send(_ text: String, in sessionId: String, attachments: [String] = []) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
-        messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments))
+        messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments, isLocal: true))
         if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty, !text.isEmpty {
             sessions[i].title = String(text.prefix(40))
         }
@@ -262,7 +371,7 @@ public final class AppStore {
         catch { toast = error.localizedDescription }
     }
 
-    public func respond(_ approvalId: String, _ decision: ApprovalDecision) async {
+    public func respond(_ approvalId: String, _ decision: ApprovalDecision, remember: ApprovalSuggestion? = nil) async {
         guard let idx = approvals.firstIndex(where: { $0.id == approvalId }) else { return }
         let a = approvals[idx]
         approvals[idx].status = decision == .deny ? .denied : .allowed
@@ -271,8 +380,10 @@ public final class AppStore {
             sessions[sIdx].status = decision == .deny ? .idle : .running
         }
         guard let device = device(a.deviceId) ?? device(session(a.sessionId)?.deviceId ?? "") ?? selectedDevice else { return }
-        do { try await client.respond(device: device, approvalId: approvalId, decision: decision) }
-        catch { toast = error.localizedDescription }
+        do {
+            try await client.respond(device: device, approvalId: approvalId, decision: decision, remember: remember)
+            if remember != nil { await loadRules(for: device) }
+        } catch { toast = error.localizedDescription }
     }
 
     private func setStatus(_ status: SessionStatus, for sessionId: String) {
@@ -304,6 +415,7 @@ public final class AppStore {
             setStatus(.running, for: sid)
         case .messageDone(let sid, let mid):
             if let i = messages[sid]?.firstIndex(where: { $0.id == mid }) { messages[sid]?[i].streaming = false }
+            syncCursor[sid] = mid
             if settings.notifyOnReply, let s = session(sid) { Notifier.post(title: "\(s.agent.displayName) 回复完成", body: s.title, id: "reply-\(mid)") }
         case .toolCall(let sid, let call):
             var list = messages[sid, default: []]

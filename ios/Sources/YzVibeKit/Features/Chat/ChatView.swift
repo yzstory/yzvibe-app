@@ -238,29 +238,6 @@ struct AssistantBubble: View {
     }
 }
 
-struct ToolCallCard: View {
-    @Environment(\.palette) private var p
-    let call: ToolCall
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "terminal").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(p.surfaceElevated))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(call.name).font(.yzFootnote).fontWeight(.semibold).foregroundStyle(p.label)
-                Text(call.detail).font(.yzCaption).monospaced().foregroundStyle(p.labelSecondary).lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 4)
-            switch call.state {
-            case .done: Chip("完成", tone: .sage)
-            case .running: ProgressView().controlSize(.small)
-            case .error: Chip("失败", tone: .danger)
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fillSecondary).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
-    }
-}
-
 /// 玻璃输入条：上面是文本框，下面一行是相机 + 会话选项胶囊（accessory）+ 发送。
 /// 选好待发送的图片（已缩放为 JPEG）。
 struct PendingImage: Identifiable, Equatable {

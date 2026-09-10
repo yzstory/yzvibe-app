@@ -10,9 +10,11 @@ ios/
 │  ├─ Models/               # 与 shared/protocol.md 对应的数据模型 + Mock 数据
 │  ├─ Networking/           # ConnectorClient 协议、HTTP+WS 实现、Mock 实现、Keychain
 │  ├─ Store/                # AppStore（@Observable）
+│  ├─ Push/                 # PushCenter + UIApplicationDelegate（APNs 注册与通知跳转）
 │  └─ Features/             # Root / Devices / Sessions / Chat / Approvals / Files / Me
 ├─ Tests/YzVibeKitTests/
-├─ App/YzVibe/              # 薄壳 App 目标
+├─ App/YzVibe/              # 薄壳 App 目标（含 YzVibe.entitlements：aps-environment）
+├─ scripts/archive.sh       # 归档 + 导出 ipa（--upload 直传 TestFlight）
 └─ project.yml              # XcodeGen 描述
 ```
 
@@ -21,17 +23,41 @@ ios/
 brew install xcodegen
 cd ios && xcodegen generate && open YzVibe.xcodeproj
 ```
-默认使用 `MockConnectorClient`（离线示例数据）。联调时在 `RootTabView(store:)` 传入
-`AppStore(client: HTTPConnectorClient(tokenProvider: { TokenStore.shared.token(for: $0.id) }), seedMock: false)`。
+默认走真实连接器（`AppStore.live()`）。没有配对设备时，设备页可以点「先看看演示数据」用离线示例。
 
-## 只编译库 / 跑测试（无需生成工程）
+## 远程推送
+
+`App/YzVibe/YzVibe.entitlements` 声明了 `aps-environment: development`——Xcode 装机用它，
+通过 App Store Connect（含 TestFlight）分发时导出流程会换成 `production`。
+电脑那端的密钥配置见 `../connector/README.md`「远程推送」。App 里「我 › 通知 › 远程推送」能逐项看到状态。
+
+## 发 TestFlight
+
+```bash
+ios/scripts/archive.sh            # 归档 + 导出 build/YzVibe.ipa
+ios/scripts/archive.sh --upload   # 顺便上传（需要 ASC_KEY_ID / ASC_ISSUER_ID）
+```
+
+## 只编译库（无需生成工程）
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -scheme YzVibeKit -destination 'generic/platform=iOS Simulator' build
+swift build --package-path ios --build-tests --triple arm64-apple-ios17.0-simulator \
+  --sdk "$(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --sdk iphonesimulator --show-sdk-path)"
 ```
-跑单测时 `ios/` 目录里同时有 `YzVibe.xcodeproj`，xcodebuild 会优先用工程（其 YzVibeKit scheme 不含测试）。
-在一个只有 Package.swift 的目录里跑即可：
+
+## 跑单元测试（36 个）
+
+需要装好 iOS 模拟器运行时：`xcodebuild -downloadPlatform iOS`（几个 GB，只要一次）。
+
+`ios/` 目录里如果已经 `xcodegen generate` 过，xcodebuild 会优先用那个工程（它的 YzVibeKit scheme 不含测试目标），
+所以在一个只有 Package.swift 的目录里跑：
+
 ```bash
-mkdir -p /tmp/yzkit && cd /tmp/yzkit && ln -sfn "$OLDPWD/Package.swift" . && ln -sfn "$OLDPWD/Sources" . && ln -sfn "$OLDPWD/Tests" . \
-&& DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme YzVibeKit -destination 'platform=iOS Simulator,name=iPhone 17' test
+mkdir -p /tmp/yzkit && cd /tmp/yzkit \
+  && ln -sfn "$OLDPWD/Package.swift" . && ln -sfn "$OLDPWD/Sources" . && ln -sfn "$OLDPWD/Tests" . \
+  && DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+     xcodebuild -scheme YzVibeKit -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
+
+覆盖：oklch 颜色转换、配对链接 / JSON / 二维码解析、Markdown 与文件路径识别、会话选项与能力表、
+用量与额度解码、图片压缩、工具输出与 diff 解码、审批建议与规则、推送载荷解析、断线重同步的消息合并。

@@ -18,6 +18,8 @@ targets:
     dependencies:
       - package: YzVibeKit
         product: YzVibeKit
+    entitlements:
+      path: App/YzVibe/YzVibe.entitlements
     info:
       path: App/YzVibe/Info.plist
       properties:
@@ -26,6 +28,8 @@ targets:
         CFBundleVersion: "1"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # 收到静默推送时在后台补一次数据
+        UIBackgroundModes: [remote-notification]
         NSCameraUsageDescription: 用于扫描电脑终端里的配对二维码
         NSFaceIDUsageDescription: 用于确认高风险审批
         NSLocalNetworkUsageDescription: 用于在局域网内连接你的电脑

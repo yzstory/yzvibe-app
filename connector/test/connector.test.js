@@ -58,7 +58,8 @@ test('配对 → 会话 → WS 流式回复 → 审批 → 文件', async () => 
   assert.equal((await (await fetch(`${base}/sessions/${s.id}`, { headers: H })).json()).status, 'waiting_approval');
 
   // 通过 WS 批准 → resolved → agent 继续 → idle
-  ws.send(JSON.stringify({ type: 'approval.respond', approvalId: approval.approvalId, decision: 'allow' }));
+  // 「允许」只放行这一次；要以后不再问，得同时给出规则（remember）
+  ws.send(JSON.stringify({ type: 'approval.respond', approvalId: approval.approvalId, decision: 'allow', remember: { match: 'tool', scope: 'session', ttlMinutes: 60 } }));
   await waitFor((e) => e.type === 'approval.resolved' && e.decision === 'allow');
   await waitFor((e) => e.type === 'session.status' && e.status === 'idle' && events.filter((x) => x.type === 'message.done').length >= 2);
   const msgs = await (await fetch(`${base}/sessions/${s.id}/messages`, { headers: H })).json();
@@ -66,7 +67,7 @@ test('配对 → 会话 → WS 流式回复 → 审批 → 文件', async () => 
   assert.ok(msgs.some((m) => m.role === 'system' && m.approvalId === approval.approvalId));
   assert.ok(msgs.some((m) => m.role === 'assistant' && m.text.includes('已删除')));
 
-  // 同样的命令第二次自动放行（autoAllow），不再产生新审批
+  // 规则已记住这个工具，第二次不再产生审批
   ws.send(JSON.stringify({ type: 'message.send', sessionId: s.id, text: '再删除一次 dist' }));
   await waitFor((e) => e.type === 'message.done' && events.filter((x) => x.type === 'message.done').length >= 4, 8000);
   assert.equal(events.filter((e) => e.type === 'approval.requested').length, 1);
@@ -184,15 +185,19 @@ test('Codex JSONL 事件 → 消息 / 工具卡', async () => {
   for (const l of lines) handleCodexEvent(JSON.parse(l), store, s, state);
   assert.equal(store.session(s.id).agentSessionId, 'th-1');
   const msgs = store.messagesOf(s.id);
-  assert.deepEqual(msgs.filter((m) => m.role === 'assistant').map((m) => m.text), ['I will run it.', 'ok']);
+  const said = (list) => list.filter((m) => m.role === 'assistant' && m.text).map((m) => m.text);
+  assert.deepEqual(said(msgs), ['I will run it.', 'ok']);
   const calls = msgs.flatMap((m) => m.toolCalls);
   assert.deepEqual(calls.map((t) => [t.name, t.detail, t.state]), [['Shell', 'echo hi', 'done'], ['Edit', 'a.ts', 'done']]);
+  // 同一轮的工具卡归到同一个气泡里，不会挂到上一条消息上
+  assert.equal(msgs.filter((m) => m.toolCalls.length).length, 1);
+  assert.equal(calls.find((t) => t.name === 'Edit').output, '~ a.ts');
   handleCodexEvent({ type: 'turn.failed', error: { message: '{"error":{"message":"model needs upgrade"}}' } }, store, s, state);
   assert.ok(store.messagesOf(s.id).some((m) => m.role === 'system' && m.text.includes('model needs upgrade')));
   // 下一轮 item id 从 item_1 重新计数，不能追加到上一轮的消息里
   handleCodexEvent({ type: 'turn.started' }, store, s, state);
   handleCodexEvent({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: 'second turn' } }, store, s, state);
-  assert.deepEqual(store.messagesOf(s.id).filter((m) => m.role === 'assistant').map((m) => m.text), ['I will run it.', 'ok', 'second turn']);
+  assert.deepEqual(said(store.messagesOf(s.id)), ['I will run it.', 'ok', 'second turn']);
 });
 
 test('目录浏览 / 新建文件夹（选工作目录用）', async () => {

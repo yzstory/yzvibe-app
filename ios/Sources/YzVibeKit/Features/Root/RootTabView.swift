@@ -5,6 +5,7 @@ public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .devices
     @State private var pairingFromLink = false
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("yz.appearance") private var appearanceRaw = Settings.Appearance.auto.rawValue
 
     public enum Tab: Hashable { case devices, sessions, approvals, me }
@@ -37,7 +38,25 @@ public struct RootTabView: View {
             .overlay { if pairingFromLink { pairingOverlay } }
             // 手机浏览器打开连接器的 /pair 外链后，落地页跳到 yzvibe://pair?… 唤起这里
             .onOpenURL { url in Task { await handle(url) } }
-            .task { await store.start() }
+            // 回到前台：iOS 挂起 App 时 WebSocket 一定断了，这里立刻重连并把落下的消息补齐
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await store.resync() }
+            }
+            .onChange(of: store.pendingApprovals.count) { _, n in PushCenter.shared.setBadge(n) }
+            .task {
+                PushCenter.shared.onOpen = { payload in
+                    switch payload.kind {
+                    case .approval, .approvalResolved: tab = .approvals
+                    case .reply:
+                        tab = .sessions
+                        if let sid = payload.sessionId { store.openSessionRequest = sid }
+                    default: break
+                    }
+                    Task { await store.resync() }
+                }
+                await store.start()
+            }
         }
     }
 

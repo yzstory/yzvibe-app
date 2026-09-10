@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  connector:
+    name: 连接器（Node ${{ matrix.node }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: connector/package-lock.json
+      - run: npm ci || npm install
+        working-directory: connector
+      - run: npm test
+        working-directory: connector
+      - name: 打包自检（发布前的产物清单）
+        run: npm pack --dry-run
+        working-directory: connector
+
+  ios:
+    name: iOS（编译 + 单元测试）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选 Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: 编译 YzVibeKit（iOS 模拟器）
+        working-directory: ios
+        run: |
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          swift build --build-tests --triple arm64-apple-ios17.0-simulator --sdk "$SDK"
+      - name: 跑单元测试
+        working-directory: ios
+        run: |
+          DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(x['udid'] for v in d.values() for x in v if 'iPhone' in x['name']))")
+          xcodebuild test -scheme YzVibeKit -destination "id=$DEVICE" | xcpretty || \
+          xcodebuild test -scheme YzVibeKit -destination "id=$DEVICE"

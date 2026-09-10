@@ -337,3 +337,189 @@ final class AttachmentTests: XCTestCase {
         XCTAssertFalse(store.failedAttachments.contains("up2"))
     }
 }
+
+// MARK: - 会话 3 新增：工具输出、审批规则、推送、断线重同步
+
+final class ToolOutputAndRulesTests: XCTestCase {
+    private func decode<T: Decodable>(_ json: String, as: T.Type) throws -> T {
+        try JSONDecoder.yzTest.decode(T.self, from: Data(json.utf8))
+    }
+
+    func testToolCallDecodesOutputAndTolerantDefaults() throws {
+        let full = try decode(#"{"id":"t1","name":"Bash","detail":"npm test","state":"done","output":"PASS","outputKind":"text","truncated":true}"#, as: ToolCall.self)
+        XCTAssertEqual(full.output, "PASS")
+        XCTAssertEqual(full.outputKind, .text)
+        XCTAssertTrue(full.truncated)
+
+        // 老连接器不带这些字段，也不能崩
+        let old = try decode(#"{"id":"t2","name":"Read","detail":"a.ts","state":"running"}"#, as: ToolCall.self)
+        XCTAssertNil(old.output)
+        XCTAssertEqual(old.outputKind, .text)
+        XCTAssertFalse(old.truncated)
+
+        // 未知的 outputKind 退回 text，未知 state 退回 running
+        let weird = try decode(#"{"id":"t3","state":"zzz","outputKind":"html"}"#, as: ToolCall.self)
+        XCTAssertEqual(weird.state, .running)
+        XCTAssertEqual(weird.outputKind, .text)
+    }
+
+    func testApprovalDecodesSuggestionsAndToolName() throws {
+        let a = try decode(#"""
+        {"approvalId":"a1","sessionId":"s1","kind":"shell","summary":"npm test","detail":"npm test","risk":"medium","toolName":"Bash",
+         "suggestions":[{"label":"总是允许 npm test 开头的命令","match":"prefix","value":"npm test","scope":"session","ttlMinutes":null},
+                        {"label":"本会话 1 小时内不再询问 Bash","match":"tool","value":"Bash","scope":"session","ttlMinutes":60}]}
+        """#, as: Approval.self)
+        XCTAssertEqual(a.id, "a1")
+        XCTAssertEqual(a.toolName, "Bash")
+        XCTAssertEqual(a.suggestions.count, 2)
+        XCTAssertEqual(a.suggestions[0].match, "prefix")
+        XCTAssertNil(a.suggestions[0].ttlMinutes)
+        XCTAssertEqual(a.suggestions[1].ttlMinutes, 60)
+        XCTAssertNotEqual(a.suggestions[0].id, a.suggestions[1].id)
+
+        // 没有 suggestions 的老数据
+        let old = try decode(#"{"id":"a2","sessionId":"s","kind":"write","summary":"x","detail":"x","risk":"low"}"#, as: Approval.self)
+        XCTAssertTrue(old.suggestions.isEmpty)
+        XCTAssertNil(old.toolName)
+    }
+
+    func testApprovalRuleRemainingText() throws {
+        let soon = ApprovalRule(id: "r", description: "d", expiresAt: Date().addingTimeInterval(1800))
+        XCTAssertEqual(soon.remaining, "还剩 30 分钟")
+        let later = ApprovalRule(id: "r", description: "d", expiresAt: Date().addingTimeInterval(7200))
+        XCTAssertEqual(later.remaining, "还剩 2 小时")
+        XCTAssertEqual(ApprovalRule(id: "r", description: "d", expiresAt: Date().addingTimeInterval(-60)).remaining, "已过期")
+        XCTAssertNil(ApprovalRule(id: "r", description: "d").remaining)
+    }
+
+    func testSyncSnapshotDecodesAndTolerantOfMissingFields() throws {
+        let snap = try decode(#"""
+        {"serverTime":"2026-09-10T10:00:00Z","sessions":[{"id":"s1","agent":"claude","cwd":"/p","title":"t","status":"idle"}],
+         "approvals":[],"agents":{},"rules":[{"id":"r1","match":"tool","tool":"Bash","description":"本会话内不再询问 Bash","hits":3}],
+         "push":{"ready":false,"missing":"推送密钥 .p8","registeredDevices":0}}
+        """#, as: SyncSnapshot.self)
+        XCTAssertEqual(snap.sessions.count, 1)
+        XCTAssertEqual(snap.rules.first?.hits, 3)
+        XCTAssertFalse(snap.push.ready)
+        XCTAssertEqual(snap.push.missing, "推送密钥 .p8")
+
+        let empty = try decode("{}", as: SyncSnapshot.self)
+        XCTAssertTrue(empty.sessions.isEmpty)
+        XCTAssertFalse(empty.push.ready)
+    }
+
+    func testPushPayloadParsing() {
+        let p = PushPayload(userInfo: ["aps": ["alert": "x"], "yz": ["kind": "approval", "approvalId": "a1", "sessionId": "s1", "connector": "Mac"]])
+        XCTAssertEqual(p.kind, .approval)
+        XCTAssertEqual(p.approvalId, "a1")
+        XCTAssertEqual(p.sessionId, "s1")
+        XCTAssertEqual(p.connector, "Mac")
+        XCTAssertEqual(PushPayload(userInfo: [:]).kind, .unknown)
+        XCTAssertEqual(PushPayload(userInfo: ["yz": ["kind": "reply", "sessionId": "s2"]]).kind, .reply)
+    }
+
+    func testMessageLocalFlagIsNotEncodedAndDefaultsFalse() throws {
+        let local = Message(sessionId: "s", role: .user, text: "hi", isLocal: true)
+        XCTAssertTrue(local.isLocal)
+        let round = try decode(#"{"id":"m","sessionId":"s","role":"user","text":"hi"}"#, as: Message.self)
+        XCTAssertFalse(round.isLocal, "服务端来的消息不该被当成本地乐观消息")
+    }
+
+    @MainActor
+    func testResyncMergesServerMessagesAndDropsLocalDuplicates() async {
+        let client = ResyncStubClient()
+        let store = AppStore(client: client, seedMock: false)
+        var device = MockData.macStudio
+        device.online = true
+        store.devices = [device]
+        store.selectedDeviceId = device.id
+
+        // 先打开一个会话，拿到服务端的历史
+        store.sessions = [Session(id: "s1", deviceId: device.id, agent: .claude, cwd: "/p", title: "t")]
+        await store.loadMessages("s1")
+        XCTAssertEqual(store.messages["s1"]?.count, 1)
+
+        // 断线期间：本地乐观发了一条，服务端那边其实已经存了自己的版本并有了回复
+        await store.send("继续", in: "s1")
+        XCTAssertEqual(store.messages["s1"]?.last?.isLocal, true)
+        client.newMessages = [
+            Message(id: "m2", sessionId: "s1", role: .user, text: "继续", createdAt: Date().addingTimeInterval(1)),
+            Message(id: "m3", sessionId: "s1", role: .assistant, text: "好的", createdAt: Date().addingTimeInterval(2)),
+        ]
+
+        await store.resync()
+        let texts = store.messages["s1"]?.map(\.text) ?? []
+        XCTAssertEqual(texts, ["历史", "继续", "好的"], "本地乐观消息应被服务端版本取代，而不是重复一条")
+        XCTAssertEqual(store.messages["s1"]?.filter(\.isLocal).count, 0)
+        XCTAssertEqual(client.lastAfterCursor, "m1", "应从服务端确认过的游标往后拉，而不是整份重取")
+        XCTAssertTrue(client.reconnected, "回到前台要立刻重连事件通道")
+        XCTAssertEqual(store.rules(for: device.id).count, 1)
+        XCTAssertEqual(store.push?.ready, false)
+    }
+
+    @MainActor
+    func testRespondPassesRememberRuleThrough() async {
+        let client = ResyncStubClient()
+        let store = AppStore(client: client, seedMock: false)
+        var device = MockData.macStudio
+        device.online = true
+        store.devices = [device]
+        store.selectedDeviceId = device.id
+        store.sessions = [Session(id: "s1", deviceId: device.id, agent: .claude, cwd: "/p", title: "t")]
+        store.approvals = [Approval(id: "a1", sessionId: "s1", deviceId: device.id, kind: .shell, summary: "npm test", detail: "", risk: .medium)]
+
+        let rule = ApprovalSuggestion(label: "总是允许", match: "prefix", value: "npm test", scope: "session")
+        await store.respond("a1", .allow, remember: rule)
+        XCTAssertEqual(client.lastRemember?.match, "prefix")
+        XCTAssertEqual(client.lastRemember?.value, "npm test")
+        XCTAssertEqual(store.approval("a1")?.status, .allowed)
+    }
+}
+
+/// 断线重同步用的假连接器：只实现这几个测试要用到的方法。
+final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
+    var newMessages: [Message] = []
+    var lastAfterCursor: String??
+    var lastRemember: ApprovalSuggestion?
+    var reconnected = false
+
+    func health(device: Device) async throws -> HealthInfo { HealthInfo(name: "T", version: "0", agents: []) }
+    func pair(_ payload: PairingPayload) async throws -> Device { MockData.macStudio }
+    func sessions(device: Device) async throws -> [Session] { [] }
+    func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }
+    func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] {
+        lastAfterCursor = cursor
+        if cursor == nil { return [Message(id: "m1", sessionId: sessionId, role: .user, text: "历史")] }
+        return newMessages
+    }
+    func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
+    func stop(device: Device, sessionId: String) async throws {}
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws { lastRemember = remember }
+    func approvals(device: Device) async throws -> [Approval] { [] }
+    func capabilities(device: Device) async throws -> [String: AgentCapabilities] { [:] }
+    func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session { MockData.sessions[0] }
+    func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo { QuotaInfo(agent: agent.rawValue) }
+    func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo { throw ConnectorError.unreachable }
+    func download(device: Device, sessionId: String, path: String) async throws -> Data { Data() }
+    func attachment(device: Device, id: String) async throws -> Data { Data() }
+    func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { [] }
+    func preview(device: Device, sessionId: String, path: String) async throws -> String { "" }
+    func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { "u1" }
+    func listDirectories(device: Device, path: String?) async throws -> DirectoryListing { DirectoryListing(path: "/", parent: nil, home: "/", entries: []) }
+    func makeDirectory(device: Device, parent: String, name: String) async throws -> String { parent }
+    func sync(device: Device) async throws -> SyncSnapshot {
+        SyncSnapshot(sessions: [Session(id: "s1", deviceId: device.id, agent: .claude, cwd: "/p", title: "t")],
+                     rules: [ApprovalRule(id: "r1", tool: "Bash", description: "本会话内不再询问 Bash")],
+                     push: PushStatus(ready: false, missing: "推送密钥 .p8"))
+    }
+    func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule] { [ApprovalRule(id: "r1", description: "d")] }
+    func deleteRule(device: Device, id: String) async throws {}
+    func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus { PushStatus(ready: true) }
+    func unregisterPush(device: Device) async throws {}
+    func reconnect(device: Device) { reconnected = true }
+    func events(device: Device) -> AsyncStream<ConnectorEvent> { AsyncStream { $0.finish() } }
+}
+
+extension JSONDecoder {
+    static let yzTest: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
+}

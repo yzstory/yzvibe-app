@@ -44,3 +44,20 @@
 - [x] 阶段 10：初始化 git，接入 remote git@github.com:yzstory/yzvibe-app.git
 - [x] 阶段 11：自检与优化 —— 编写 connector/（Node.js 桌面连接器：REST + WS + 配对二维码 + Claude Code stream-json 驱动 + 审批 MCP 桥），并修正 iOS 端与服务端对接的缺口（设备持久化、tolerant 解码、审批拉取、消息懒加载、本地通知）
 - [x] 阶段 12：中文 README，提交并 push
+
+## 会话 3（2026-09-10）：评估后的 7 项改进，一次性完成
+- [x] 1 远程推送：连接器直连 APNs（ES256 JWT + HTTP/2），审批/回复完成推送；iOS 注册 token、点击跳转
+- [x] 2 前台恢复与断线重同步：scenePhase 触发 resync，消息按游标增量拉取，WS 立即重连 + 心跳
+- [x] 3 工具输出可见：连接器捕获 tool_result 内容与 Edit diff，iOS 工具卡可展开
+- [x] 4 审批规则：按工具/前缀/会话的持久化规则，审批卡上「总是允许」，我页可管理
+- [x] 5 资源回收：Claude 进程空闲回收、上传与旧会话清理、设备撤销 CLI
+- [x] 6 测试落地：Claude 事件流翻译器可测 + 夹具、iOS 模拟器运行时、GitHub Actions
+- [x] 7 分发：npm 包就绪（files/prepublish/pack 验证）、iOS 归档脚本与 TestFlight 说明
+
+## 会话 3 追加（用户 2026-09-10 追加）
+- [ ] 8 任务执行中再次发消息：默认排队（可见「排队中」），也可选择立即发送打断
+- [ ] 9 连接器地址稳定性：重启电脑 / cloudflared 抖动后不必重新扫码（多端点 + 推送下发新地址）
+- [ ] 10 会话 Diff 视图（工作目录的累计改动）
+- [ ] 11 Live Activity / 灵动岛显示会话状态
+- [ ] 12 会话里支持常用斜杠命令（/compact、/new 等，Claude 与 Codex 各自适配）
+- [ ] 13 会话里支持各自能读到的 skill / 自定义提示词

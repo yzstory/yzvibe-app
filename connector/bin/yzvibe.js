@@ -5,6 +5,9 @@
 //   yzvibe stop / restart     停止 / 用上次的参数重启
 //   yzvibe status             运行状态、地址、会话数
 //   yzvibe qr [--json|--link] 再次出示配对方式：二维码 / 外链 / 可粘贴的 JSON 配置
+//   yzvibe devices            列出已配对的手机
+//   yzvibe revoke <id|名字>    吊销某台手机的访问（正在连的会立刻断开）
+//   yzvibe push [--test]      查看 / 自检远程推送配置
 //   yzvibe logs [-f]          看日志（~/.yzvibe/yzvibe.log），-f 持续跟随
 //   yzvibe install [flags]    注册为开机自启服务（macOS launchd / Linux systemd --user）
 //   yzvibe uninstall          取消开机自启
@@ -14,9 +17,9 @@
 //   --port=19876 --name="我的 Mac"      端口被占用时自动后移
 //   --force                            不复用已保存的 relay 地址
 import { startConnector, DEFAULT_PORT } from '../src/server.js';
-import { readDaemonInfo, startDaemon, stopDaemon, printStatus, printPairing, tailLog, installService, uninstallService, serviceInstalled, LOG_FILE } from '../src/daemon.js';
+import { readDaemonInfo, startDaemon, stopDaemon, printStatus, printPairing, tailLog, installService, uninstallService, serviceInstalled, printDevices, revokeDevice, pushStatus, LOG_FILE } from '../src/daemon.js';
 
-const COMMANDS = new Set(['start', 'run', 'stop', 'restart', 'status', 'qr', 'logs', 'install', 'uninstall', 'help']);
+const COMMANDS = new Set(['start', 'run', 'stop', 'restart', 'status', 'qr', 'logs', 'install', 'uninstall', 'devices', 'revoke', 'push', 'help']);
 const argv = process.argv.slice(2);
 const command = COMMANDS.has(argv[0]) ? argv[0] : 'start';
 const flags = COMMANDS.has(argv[0]) ? argv.slice(1) : argv;
@@ -37,6 +40,9 @@ if (command === 'help' || args.help || args.h) {
   restart    用上次的参数重启（也可附带新参数）
   status     运行状态、地址、会话数
   qr         再次出示配对方式：二维码 + 外链 + JSON 配置（--json / --link 只输出一项）
+  devices    列出已配对的手机
+  revoke <x> 吊销某台手机的访问
+  push       查看远程推送配置（--test 发一条测试推送）
   logs [-f]  查看日志（-f 持续跟随）
   install    注册开机自启（macOS launchd / Linux systemd --user）
   uninstall  取消开机自启`);
@@ -97,6 +103,18 @@ async function main() {
       const info = readDaemonInfo();
       if (!info) { console.log('[yzvibe] 连接器没有在运行，先 yzvibe start。'); process.exitCode = 1; return; }
       await printPairing(info, { only: args.json ? 'json' : args.link ? 'link' : null });
+      return;
+    }
+    case 'devices':
+    case 'revoke':
+    case 'push': {
+      const info = readDaemonInfo();
+      if (!info) { console.log('[yzvibe] 连接器没有在运行，先 yzvibe start。'); process.exitCode = 1; return; }
+      if (command === 'devices') return printDevices(info);
+      if (command === 'push') return pushStatus(info, { test: Boolean(args.test) });
+      const target = flags.find((f) => !f.startsWith('-'));
+      if (!target) { console.log('用法：yzvibe revoke <id 前 8 位或名字>（先用 yzvibe devices 看列表）'); process.exitCode = 1; return; }
+      if (!await revokeDevice(info, target)) process.exitCode = 1;
       return;
     }
     case 'logs':

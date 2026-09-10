@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 远程推送。本地用 Xcode 装机时是 development；通过 App Store Connect（含 TestFlight）
+	     分发时，导出流程会把它换成 production。连接器两个环境都会试，猜错也能自愈。 -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

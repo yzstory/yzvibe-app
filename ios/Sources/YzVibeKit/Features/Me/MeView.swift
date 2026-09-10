@@ -5,6 +5,9 @@ struct MeView: View {
     @Environment(\.palette) private var p
     @AppStorage("yz.appearance") private var appearanceRaw = Settings.Appearance.auto.rawValue
 
+    private var pushReady: Bool { store.push?.ready == true && PushCenter.shared.token != nil }
+    private var ruleCount: Int { store.rules(for: store.selectedDevice?.id).count }
+
     var body: some View {
         @Bindable var store = store
         NavigationStack {
@@ -25,6 +28,17 @@ struct MeView: View {
                 .liquidGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
                 SectionCard("通知") {
+                    NavigationLink { PushSettingsView() } label: {
+                        SettingRow(icon: "bell.badge", color: p.danger, title: "远程推送",
+                                   subtitle: pushReady ? "锁屏也能收到审批" : "没开通，锁屏后收不到审批") {
+                            HStack(spacing: 6) {
+                                Circle().fill(pushReady ? p.sage : p.amber).frame(width: 8, height: 8)
+                                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelTertiary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Divider_()
                     SettingRow(icon: "bell", color: p.danger, title: "有待审批时通知") { Toggle("", isOn: $store.settings.notifyOnApproval).labelsHidden().tint(p.brand) }
                     Divider_()
                     SettingRow(icon: "bubble.left", color: p.sage, title: "回复完成时通知") { Toggle("", isOn: $store.settings.notifyOnReply).labelsHidden().tint(p.brand) }
@@ -48,6 +62,14 @@ struct MeView: View {
                         .padding(.horizontal, 14).padding(.vertical, 10)
                 }
                 SectionCard("安全") {
+                    NavigationLink { RulesView() } label: {
+                        SettingRow(icon: "checkmark.shield", color: p.sage, title: "审批规则",
+                                   subtitle: ruleCount == 0 ? "没有自动放行的规则" : "\(ruleCount) 条自动放行，可随时撤销") {
+                            Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelTertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Divider_()
                     SettingRow(icon: "faceid", color: p.purple, title: "高风险审批需 Face ID") { Toggle("", isOn: $store.settings.faceIDForHighRisk).labelsHidden().tint(p.brand) }
                     Divider_()
                     SettingRow(icon: "lock", color: p.blue, title: "Token 存储") { Text("钥匙串").font(.yzFootnote).foregroundStyle(p.labelSecondary) }
