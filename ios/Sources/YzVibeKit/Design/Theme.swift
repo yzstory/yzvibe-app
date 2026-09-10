@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// 设计 token（对应 docs/DESIGN.md §2–§4）。浅/深色各一组，通过 `Environment(\.colorScheme)` 选择。
+/// 设计 token（对应 docs/DESIGN.md）。方向 B「焦橙纸感」：暖纸中性 + 单一焦橙强调色。
+///
+/// 颜色直接用 sRGB hex 定义，和设计文档、`design/directions/build.py` 里的值逐字一致 —— 早期用
+/// oklch 换算时文档标注和实际渲染差了整整一档，改成 hex 后两边不会再漂。
+/// 每个前景色都标了对最近背景的对比度，改数值时请一并重算（`design/directions/` 里有脚本）。
 public struct Palette: Sendable {
-    public let brand, brandSoft, brandInk: Color
+    public let brand, brandSoft, brandInk, brandText: Color
     public let sage, sageSoft: Color
     public let amber, amberText, amberSoft: Color
     public let danger, dangerSoft: Color
@@ -10,44 +14,102 @@ public struct Palette: Sendable {
     public let blue, blueSoft: Color
     public let surface, surfaceElevated, fill, fillSecondary, border: Color
     public let label, labelSecondary, labelTertiary: Color
-    public let orbAlpha: Double
     public let shadow: Color
 
     public static let light = Palette(
-        brand: Color(oklch: 0.64, 0.17, 40), brandSoft: Color(oklch: 0.94, 0.04, 45), brandInk: Color(oklch: 0.99, 0.01, 80),
-        sage: Color(oklch: 0.60, 0.09, 165), sageSoft: Color(oklch: 0.93, 0.035, 165),
-        amber: Color(oklch: 0.82, 0.13, 80), amberText: Color(oklch: 0.58, 0.12, 70), amberSoft: Color(oklch: 0.96, 0.05, 85),
-        danger: Color(oklch: 0.60, 0.20, 25), dangerSoft: Color(oklch: 0.95, 0.04, 25),
-        purple: Color(oklch: 0.55, 0.15, 310), purpleSoft: Color(oklch: 0.94, 0.04, 310),
-        blue: Color(oklch: 0.58, 0.13, 235), blueSoft: Color(oklch: 0.94, 0.04, 235),
-        surface: Color(oklch: 0.975, 0.009, 80), surfaceElevated: Color(oklch: 0.995, 0.004, 85),
-        fill: Color(oklch: 0.935, 0.012, 75), fillSecondary: Color(oklch: 0.958, 0.01, 78), border: Color(oklch: 0.90, 0.014, 70),
-        label: Color(oklch: 0.22, 0.02, 45), labelSecondary: Color(oklch: 0.50, 0.02, 55), labelTertiary: Color(oklch: 0.68, 0.018, 60),
-        orbAlpha: 0.85, shadow: Color(oklch: 0.30, 0.03, 50)
+        brand: Color(hex: 0xC75015),        // 白字 4.58:1
+        brandSoft: Color(hex: 0xFFE5D8),
+        brandInk: Color(hex: 0xFFFFFF),
+        brandText: Color(hex: 0xA63D02),    // 在 brandSoft 上 5.30:1，在纸底上 5.93:1
+        sage: Color(hex: 0x1B7046),         // 纸底 5.65:1
+        sageSoft: Color(hex: 0xE0F1E7),
+        amber: Color(hex: 0xB0761A),        // 纸底 3.58:1（只做色条与图标，不承载正文）
+        amberText: Color(hex: 0x8A5A0E),    // 在 amberSoft 上 5.19:1
+        amberSoft: Color(hex: 0xFBEFD6),
+        danger: Color(hex: 0xC4261C),       // 纸底 5.35:1，白字 5.77:1
+        dangerSoft: Color(hex: 0xFBE3E0),
+        purple: Color(hex: 0x6E4B9E), purpleSoft: Color(hex: 0xEFE8F7),
+        blue: Color(hex: 0x1F6FA8), blueSoft: Color(hex: 0xE3EFF8),
+        surface: Color(hex: 0xF9F6F2),      // 暖纸，不是纯白
+        surfaceElevated: Color(hex: 0xFFFDFA),
+        fill: Color(hex: 0xEFEAE2), fillSecondary: Color(hex: 0xF4F0E9), border: Color(hex: 0xE6DFD5),
+        label: Color(hex: 0x231813),        // 16.09:1
+        labelSecondary: Color(hex: 0x6D6059), // 5.62:1
+        labelTertiary: Color(hex: 0x877E78),  // 3.69:1（时间戳、占位）
+        shadow: Color(hex: 0x50432F)
     )
 
+    /// 深色：暖灰棕底，不用纯黑；橙提亮后配深色文字，而不是白字。
     public static let dark = Palette(
-        brand: Color(oklch: 0.72, 0.15, 42), brandSoft: Color(oklch: 0.30, 0.06, 40), brandInk: Color(oklch: 0.16, 0.02, 40),
-        sage: Color(oklch: 0.70, 0.09, 165), sageSoft: Color(oklch: 0.28, 0.04, 165),
-        amber: Color(oklch: 0.85, 0.12, 82), amberText: Color(oklch: 0.85, 0.12, 82), amberSoft: Color(oklch: 0.30, 0.05, 80),
-        danger: Color(oklch: 0.70, 0.18, 25), dangerSoft: Color(oklch: 0.30, 0.06, 25),
-        purple: Color(oklch: 0.70, 0.14, 310), purpleSoft: Color(oklch: 0.30, 0.05, 310),
-        blue: Color(oklch: 0.70, 0.12, 235), blueSoft: Color(oklch: 0.30, 0.05, 235),
-        surface: Color(oklch: 0.16, 0.008, 60), surfaceElevated: Color(oklch: 0.215, 0.01, 60),
-        fill: Color(oklch: 0.29, 0.012, 60), fillSecondary: Color(oklch: 0.25, 0.01, 60), border: Color.white.opacity(0.09),
-        label: Color(oklch: 0.96, 0.008, 80), labelSecondary: Color(oklch: 0.72, 0.015, 70), labelTertiary: Color(oklch: 0.52, 0.012, 60),
-        orbAlpha: 0.35, shadow: .black
+        brand: Color(hex: 0xFF9868),        // 暗底 7.87:1
+        brandSoft: Color(hex: 0x3A2A22),
+        brandInk: Color(hex: 0x241812),     // 在 brand 上 8.19:1
+        brandText: Color(hex: 0xFFB08A),
+        sage: Color(hex: 0x5FD08E), sageSoft: Color(hex: 0x23382D),
+        amber: Color(hex: 0xE8B45C), amberText: Color(hex: 0xE8B45C), amberSoft: Color(hex: 0x3A3020),
+        danger: Color(hex: 0xFF6961), dangerSoft: Color(hex: 0x3A2422),
+        purple: Color(hex: 0xC09AE8), purpleSoft: Color(hex: 0x2F2838),
+        blue: Color(hex: 0x6FB6E8), blueSoft: Color(hex: 0x22303A),
+        surface: Color(hex: 0x201E1B), surfaceElevated: Color(hex: 0x2C2A27),
+        fill: Color(hex: 0x383530), fillSecondary: Color(hex: 0x322F2B), border: Color.white.opacity(0.12),
+        label: Color(hex: 0xF5F2EE), labelSecondary: Color(hex: 0xB5AEA6), labelTertiary: Color(hex: 0x8A837B),
+        shadow: .black
     )
 
-    public static func current(_ scheme: ColorScheme) -> Palette { scheme == .dark ? .dark : .light }
+    /// 「增强对比度」辅助功能开关打开时用：压暗次要文字、加深强调色。
+    public static let lightHighContrast = Palette(
+        brand: Color(hex: 0xA83B00), brandSoft: Color(hex: 0xFFDCCA), brandInk: Color(hex: 0xFFFFFF), brandText: Color(hex: 0x8A3200),
+        sage: Color(hex: 0x145A37), sageSoft: Color(hex: 0xD8EEE1),
+        amber: Color(hex: 0x8A5A0E), amberText: Color(hex: 0x6E470A), amberSoft: Color(hex: 0xF8E9C8),
+        danger: Color(hex: 0xA31A12), dangerSoft: Color(hex: 0xF9D9D5),
+        purple: Color(hex: 0x573A7E), purpleSoft: Color(hex: 0xE9DFF4),
+        blue: Color(hex: 0x155888), blueSoft: Color(hex: 0xDAE9F5),
+        surface: Color(hex: 0xF9F6F2), surfaceElevated: Color(hex: 0xFFFFFF),
+        fill: Color(hex: 0xE9E3DA), fillSecondary: Color(hex: 0xF1ECE4), border: Color(hex: 0xC9C0B4),
+        label: Color(hex: 0x160E0A), labelSecondary: Color(hex: 0x554A44), labelTertiary: Color(hex: 0x6F675F),
+        shadow: Color(hex: 0x50432F)
+    )
+
+    public static let darkHighContrast = Palette(
+        brand: Color(hex: 0xFFB088), brandSoft: Color(hex: 0x45322A), brandInk: Color(hex: 0x1A100C), brandText: Color(hex: 0xFFC4A6),
+        sage: Color(hex: 0x86E0AC), sageSoft: Color(hex: 0x2A4335),
+        amber: Color(hex: 0xF2C97F), amberText: Color(hex: 0xF2C97F), amberSoft: Color(hex: 0x453A26),
+        danger: Color(hex: 0xFF8B84), dangerSoft: Color(hex: 0x452A28),
+        purple: Color(hex: 0xD4B8F2), purpleSoft: Color(hex: 0x392F44),
+        blue: Color(hex: 0x94CCF2), blueSoft: Color(hex: 0x2A3A45),
+        surface: Color(hex: 0x1A1816), surfaceElevated: Color(hex: 0x2A2724),
+        fill: Color(hex: 0x3E3A35), fillSecondary: Color(hex: 0x35322D), border: Color.white.opacity(0.22),
+        label: Color(hex: 0xFFFDFA), labelSecondary: Color(hex: 0xCCC5BC), labelTertiary: Color(hex: 0xA9A199),
+        shadow: .black
+    )
+
+    public static func current(_ scheme: ColorScheme, _ contrast: ColorSchemeContrast = .standard) -> Palette {
+        switch (scheme, contrast) {
+        case (.dark, .increased): darkHighContrast
+        case (.dark, _): dark
+        case (_, .increased): lightHighContrast
+        default: light
+        }
+    }
+}
+
+public extension Color {
+    /// `Color(hex: 0xC75015)`
+    init(hex: UInt32, opacity: Double = 1) {
+        self.init(.sRGB,
+                  red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255,
+                  opacity: opacity)
+    }
 }
 
 public enum Radius {
-    public static let sm: CGFloat = 10, md: CGFloat = 14, lg: CGFloat = 18, xl: CGFloat = 22, xxl: CGFloat = 26, card: CGFloat = 24
+    public static let sm: CGFloat = 8, md: CGFloat = 10, lg: CGFloat = 14, xl: CGFloat = 16, xxl: CGFloat = 20, card: CGFloat = 16
 }
 
 public enum Spacing {
-    public static let page: CGFloat = 20, card: CGFloat = 18, row: CGFloat = 12
+    public static let page: CGFloat = 20, card: CGFloat = 16, row: CGFloat = 12
 }
 
 public enum Motion {
@@ -66,26 +128,32 @@ public extension EnvironmentValues {
 }
 
 /// 在根视图挂一次，之后子视图用 `@Environment(\.palette) private var p`。
+/// 同时跟随系统的深色模式与「增强对比度」开关。
 public struct PaletteProvider<Content: View>: View {
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     let content: () -> Content
     public init(@ViewBuilder content: @escaping () -> Content) { self.content = content }
-    public var body: some View { content().environment(\.palette, Palette.current(scheme)) }
+    public var body: some View { content().environment(\.palette, Palette.current(scheme, contrast)) }
 }
 
-// MARK: - Typography (iOS 字阶 + 设计规范)
+// MARK: - 字体
 
+/// 全部基于系统文本样式，跟随「动态字体」缩放。需要固定尺寸的地方用 `@ScaledMetric`，不要写死 pt。
 public extension Font {
-    static let yzLargeTitle = Font.system(size: 34, weight: .bold, design: .default)
-    static let yzTitle1 = Font.system(size: 28, weight: .bold)
-    static let yzTitle2 = Font.system(size: 22, weight: .semibold)
-    static let yzHeadline = Font.system(size: 17, weight: .semibold)
-    static let yzBody = Font.system(size: 17)
-    static let yzCallout = Font.system(size: 16, weight: .semibold)
-    static let yzSubhead = Font.system(size: 15)
-    static let yzFootnote = Font.system(size: 13)
-    static let yzCaption = Font.system(size: 12)
-    static let yzEyebrow = Font.system(size: 12, weight: .semibold)
-    static let yzMono = Font.system(size: 13, design: .monospaced)
-    static let yzMonoBody = Font.system(size: 15, design: .monospaced)
+    static let yzLargeTitle = Font.system(.largeTitle, weight: .bold)
+    static let yzTitle1 = Font.system(.title, weight: .bold)
+    static let yzTitle2 = Font.system(.title2, weight: .semibold)
+    static let yzTitle3 = Font.system(.title3, weight: .semibold)
+    static let yzHeadline = Font.system(.headline)
+    static let yzBody = Font.system(.body)
+    static let yzCallout = Font.system(.callout, weight: .semibold)
+    static let yzSubhead = Font.system(.subheadline)
+    static let yzSubheadStrong = Font.system(.subheadline, weight: .semibold)
+    static let yzFootnote = Font.system(.footnote)
+    static let yzFootnoteStrong = Font.system(.footnote, weight: .semibold)
+    static let yzCaption = Font.system(.caption)
+    static let yzEyebrow = Font.system(.caption, weight: .semibold)
+    static let yzMono = Font.system(.footnote, design: .monospaced)
+    static let yzMonoBody = Font.system(.subheadline, design: .monospaced)
 }

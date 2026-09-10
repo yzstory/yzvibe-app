@@ -19,7 +19,7 @@ struct MarkdownText: View {
                 case .code(let code, let lang):
                     CodeBlock(code, dark: true, lines: nil, language: lang, copyable: true, onCopy: onCopy)
                 case .heading(let t, let level):
-                    inline(t).font(level <= 2 ? .yzHeadline : .system(size: 16, weight: .semibold)).padding(.top, 4)
+                    inline(t).font(level <= 2 ? .yzHeadline : .system(.callout, weight: .semibold)).padding(.top, 4)
                 case .bullet(let t):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle().fill(p.labelTertiary).frame(width: 5, height: 5).offset(y: -3)
@@ -27,7 +27,7 @@ struct MarkdownText: View {
                     }
                 case .numbered(let n, let t):
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(n).").font(.system(size: 16)).foregroundStyle(p.labelSecondary).monospacedDigit()
+                        Text("\(n).").font(.system(.callout)).foregroundStyle(p.labelSecondary).monospacedDigit()
                         inline(t)
                     }
                 case .paragraph(let t):
@@ -48,9 +48,9 @@ struct MarkdownText: View {
     private func inline(_ s: String) -> Text {
         if var a = try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
             if onOpenFile != nil { a = Self.linkifyPaths(a, tint: p.brand) }
-            return Text(a).font(.system(size: 16))
+            return Text(a).font(.system(.callout))
         }
-        return Text(s).font(.system(size: 16))
+        return Text(s).font(.system(.callout))
     }
 
     /// 把看着像文件路径的行内代码变成 `yzfile://` 链接，点击由下面的 openURL 拦截。

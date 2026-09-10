@@ -8,7 +8,7 @@ struct UsageGauge: View {
         ZStack {
             Circle().stroke(p.border, lineWidth: 2.5)
             Circle().trim(from: 0, to: fraction ?? 0).stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round)).rotationEffect(.degrees(-90))
-            Image(systemName: "chart.pie").font(.system(size: 8, weight: .bold)).foregroundStyle(p.labelSecondary)
+            Image(systemName: "chart.pie").font(.system(.caption2, weight: .bold)).foregroundStyle(p.labelSecondary)
         }
         .frame(width: 22, height: 22)
         .accessibilityLabel("上下文与用量")
@@ -93,7 +93,7 @@ struct UsageSheet: View {
                     Text("账号剩余用量").font(.yzHeadline).foregroundStyle(p.label)
                     Spacer()
                     if loadingQuota { ProgressView().controlSize(.small) }
-                    else { Button { Task { await loadQuota(force: true) } } label: { Image(systemName: "arrow.clockwise").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelSecondary) } }
+                    else { Button { Task { await loadQuota(force: true) } } label: { Image(systemName: "arrow.clockwise").font(.system(.footnote, weight: .semibold)).foregroundStyle(p.labelSecondary) } }
                 }
                 if let q = quota {
                     if let u = q.unavailable { Text(u).font(.yzFootnote).foregroundStyle(p.labelSecondary) }

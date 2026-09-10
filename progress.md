@@ -99,3 +99,22 @@
 13. Skill：扫 ~/.claude/skills（符号链接要用 statSync）、项目 .claude/skills、插件 installPath，以及 ~/.codex/skills。
     修了两个 bug：符号链接目录被漏掉、frontmatter 描述超过 8KB 被截断。
 - 测试：连接器 41 项、iOS 45 项，全部在模拟器上实跑通过。
+
+## 会话 4 — 2026-09-11：视觉重构（方向 B「焦橙纸感」）
+先做了 4 个方向对比（`design/directions/`，浏览器打开 index.html），用户选定 B：**结构全部还给系统，品牌只留一个焦橙 + 一层暖纸**。
+
+- 色板重写：hex 直接定义（上一版 oklch 换算让文档 `#C2573A` 与实际渲染 `#DE602F` 差了一档、深色底比设计意图暗一档）。
+  主色 `#C75015`（白字 4.58:1），胶囊文字 `#A63D02`，暖纸底 `#F9F6F2`，深色 `#201E1B`。新增 `lightHighContrast` / `darkHighContrast`，跟随系统「增强对比度」。
+  修掉的不达标项：主按钮白字 3.50→4.58、时间戳 2.69→3.69、brand 胶囊 2.97→5.30、amber 1.64→3.58。
+- 结构：删掉自绘的 `PageScaffold`（原来 `.toolbar(.hidden, for: .navigationBar)` 自己画大标题），四个 Tab 全换成
+  `NavigationStack` + `.navigationTitle` + `.searchable` + `List`。会话 / 审批 / 设备用 `.plain` + 纸卡行，
+  设置 / 文件 / 规则 / 模型用 `.insetGrouped`，新建会话与手动添加改成 `Form`。空态一律 `ContentUnavailableView`。
+  由此拿到了侧滑（停止 / 复制路径 / 撤销规则 / 移除设备）、系统分组与刷新。
+- 动态字体：43 处写死的 `.system(size:)` 换成系统文本样式，固定尺寸控件改用 `@ScaledMetric`。
+- 装饰球删除（`AmbientBackground` 只剩暖纸底），玻璃只留输入条 / Toast / 配对遮罩 / 扫码框，并处理 `reduceTransparency`。
+- 修的 bug：`RootTabView` 的 `.tint` 写死 light 色板，深色模式取错色；`ModelListEditorView` 的 `.swipeActions`
+  挂在 List 之外从来没生效；「仅活跃」在设置页和会话页各有一份互不相干的状态，现在统一到 `settings.activeOnly`。
+- 新增 `PaletteContrastTests`：四套色板 × 15 组前景/背景断言，把「改颜色」和「掉到不合规」绑在一起。
+- 同步：docs/DESIGN.md 重写，design/canvas 的 token 与材质跟到 B（各屏版式仍是画稿期的自绘导航，以代码为准）。
+- 验证：iOS 按 arm64-apple-ios17.0-simulator 交叉编译通过（含测试目标）；连接器 46 项测试通过。
+  未在模拟器实跑 —— 本机没装 iOS 运行时，XCTest 由 CI 执行。

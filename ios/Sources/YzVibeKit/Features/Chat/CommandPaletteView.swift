@@ -24,32 +24,30 @@ struct CommandPaletteView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AmbientBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if let note = catalog?.note {
-                            HStack(spacing: 10) {
-                                Image(systemName: "info.circle").foregroundStyle(p.blue)
-                                Text(note).font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                            }
-                            .padding(14)
-                            .liquidGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        }
-                        section("手机端", filter(catalog?.app ?? []), tone: .brand)
-                        section("\(agent.displayName) 命令", filter(catalog?.agentCommands ?? []), tone: .custom)
-                        section("Skill", filter(catalog?.skills ?? []), tone: .codex)
-                        section("自定义提示词", filter(catalog?.prompts ?? []), tone: .claude)
-                        if loading && catalog == nil { ProgressView().frame(maxWidth: .infinity).padding(.top, 40) }
-                        else if isEmpty { Text("没有匹配的命令").font(.yzSubhead).foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity).padding(.top, 40) }
+            List {
+                if let note = catalog?.note {
+                    Section {
+                        Label(note, systemImage: "info.circle")
+                            .font(.yzFootnote).foregroundStyle(p.labelSecondary)
                     }
-                    .padding(Spacing.page)
-                    .padding(.bottom, 40)
                 }
+                section("手机端", filter(catalog?.app ?? []), tone: .brand)
+                section("\(agent.displayName) 命令", filter(catalog?.agentCommands ?? []), tone: .fill)
+                section("Skill", filter(catalog?.skills ?? []), tone: .fill)
+                section("自定义提示词", filter(catalog?.prompts ?? []), tone: .claude)
             }
+            .listStyle(.insetGrouped)
+            .paperBackground()
             .navigationTitle("命令与 Skill")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "搜索命令或 skill")
+            .overlay {
+                if loading && catalog == nil {
+                    ProgressView()
+                } else if isEmpty {
+                    ContentUnavailableView.search(text: query)
+                }
+            }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
             .task { catalog = await store.commands(for: sessionId); loading = false }
         }
@@ -63,35 +61,42 @@ struct CommandPaletteView: View {
     @ViewBuilder
     private func section(_ title: String, _ items: [SlashCommand], tone: ChipTone) -> some View {
         if !items.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Eyebrow(title)
-                    Spacer()
-                    Text("\(items.count)").font(.yzCaption).foregroundStyle(p.labelTertiary)
+            Section {
+                ForEach(items) { cmd in
+                    Button { onPick(cmd); dismiss() } label: { CommandRow(cmd: cmd, tone: tone) }
+                        .buttonStyle(.plain)
                 }
-                PaperCard(padding: 0) {
-                    VStack(spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { i, cmd in
-                            Button { onPick(cmd); dismiss() } label: {
-                                HStack(alignment: .top, spacing: 12) {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(cmd.display).font(.yzMonoBody).foregroundStyle(p.label).lineLimit(1)
-                                        if !cmd.description.isEmpty {
-                                            Text(cmd.description).font(.yzFootnote).foregroundStyle(p.labelSecondary).lineLimit(2).multilineTextAlignment(.leading)
-                                        }
-                                    }
-                                    Spacer(minLength: 8)
-                                    if !cmd.source.isEmpty { Chip(cmd.source, tone: tone) }
-                                }
-                                .padding(.horizontal, 14).padding(.vertical, 12)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            if i < items.count - 1 { Divider_() }
-                        }
-                    }
+            } header: {
+                HStack {
+                    Text(title)
+                    Spacer()
+                    Text("\(items.count)")
                 }
             }
         }
+    }
+}
+
+/// 一条命令：名字 + 说明 + 来源标记。
+struct CommandRow: View {
+    @Environment(\.palette) private var p
+    let cmd: SlashCommand
+    let tone: ChipTone
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cmd.isApp || !cmd.insertAsText ? "/\(cmd.name)" : cmd.name)
+                    .font(.yzMonoBody).foregroundStyle(p.label).lineLimit(1)
+                if !cmd.description.isEmpty {
+                    Text(cmd.description).font(.yzFootnote).foregroundStyle(p.labelSecondary).lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            if cmd.isApp { Chip("手机", tone: tone) }
+            Image(systemName: "chevron.right").font(.system(.caption, weight: .semibold)).foregroundStyle(p.labelTertiary)
+        }
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 }

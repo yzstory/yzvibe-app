@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """YzVibe 设计画布生成器：把共享样式 + 各屏 body 组装为 .dc.html 画板。
-运行：python3 build.py  → 在同目录输出 *.dc.html 与 canvas.json"""
+运行：python3 build.py  → 在同目录输出 *.dc.html 与 canvas.json
+
+颜色与材质已同步到方向 B「焦橙纸感」（docs/DESIGN.md）。
+注意：各屏的导航条 / 大标题 / 新建按钮仍是画稿时期的自绘版式；实现里这些已经换成
+系统的 NavigationStack + navigationTitle + toolbar，以 DESIGN.md §5 和 iOS 代码为准。"""
 import json, os
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -54,57 +58,56 @@ def ic(name, size=20, color="currentColor", sw=1.8):
 
 # ───────────── 共享样式 ─────────────
 LIGHT = """
-  --brand: oklch(0.64 0.17 40); --brand-soft: oklch(0.94 0.04 45); --brand-ink: oklch(0.99 0.01 80);
-  --sage: oklch(0.60 0.09 165); --sage-soft: oklch(0.93 0.035 165);
-  --amber: oklch(0.82 0.13 80); --amber-text: oklch(0.58 0.12 70); --amber-soft: oklch(0.96 0.05 85);
-  --danger: oklch(0.60 0.20 25); --danger-soft: oklch(0.95 0.04 25);
-  --purple: oklch(0.55 0.15 310); --purple-soft: oklch(0.94 0.04 310);
-  --blue: oklch(0.58 0.13 235); --blue-soft: oklch(0.94 0.04 235);
-  --surface: oklch(0.975 0.009 80); --elev: oklch(0.995 0.004 85);
-  --fill: oklch(0.935 0.012 75); --fill2: oklch(0.958 0.01 78);
-  --border: oklch(0.90 0.014 70);
-  --label: oklch(0.22 0.02 45); --label2: oklch(0.50 0.02 55); --label3: oklch(0.68 0.018 60);
-  --glass-bg: oklch(0.995 0.004 85 / 0.62); --glass-hi: rgba(255,255,255,0.65); --glass-hi2: rgba(255,255,255,0.32);
-  --shadow-card: 0 1px 2px oklch(0.3 0.03 50 / 0.05), 0 6px 20px oklch(0.3 0.03 50 / 0.07);
-  --shadow-glass: 0 0 0 0.5px oklch(0.3 0.03 50 / 0.10), 0 10px 30px oklch(0.3 0.03 50 / 0.10);
-  --shadow-float: 0 2px 8px oklch(0.3 0.03 50 / 0.10), 0 16px 40px oklch(0.3 0.03 50 / 0.16);
-  --orb-alpha: 0.85;
+  --brand: #C75015; --brand-soft: #FFE5D8; --brand-ink: #FFFFFF; --brand-text: #A63D02;
+  --sage: #1B7046; --sage-soft: #E0F1E7;
+  --amber: #B0761A; --amber-text: #8A5A0E; --amber-soft: #FBEFD6;
+  --danger: #C4261C; --danger-soft: #FBE3E0;
+  --purple: #6E4B9E; --purple-soft: #EFE8F7;
+  --blue: #1F6FA8; --blue-soft: #E3EFF8;
+  --surface: #F9F6F2; --elev: #FFFDFA;
+  --fill: #EFEAE2; --fill2: #F4F0E9;
+  --border: #E6DFD5;
+  --label: #231813; --label2: #6D6059; --label3: #877E78;
+  --glass-bg: rgba(255,253,250,0.72); --glass-hi: rgba(255,255,255,0.5); --glass-hi2: rgba(255,255,255,0.2);
+  --shadow-card: 0 1px 2px rgba(80,67,47,0.04);
+  --shadow-glass: 0 0 0 0.5px rgba(80,67,47,0.10), 0 8px 24px rgba(80,67,47,0.10);
+  --shadow-float: 0 2px 8px rgba(80,67,47,0.08), 0 12px 30px rgba(80,67,47,0.12);
+  --orb-alpha: 0;
 """
 DARK = """
-  --brand: oklch(0.72 0.15 42); --brand-soft: oklch(0.30 0.06 40); --brand-ink: oklch(0.16 0.02 40);
-  --sage: oklch(0.70 0.09 165); --sage-soft: oklch(0.28 0.04 165);
-  --amber: oklch(0.85 0.12 82); --amber-text: oklch(0.85 0.12 82); --amber-soft: oklch(0.30 0.05 80);
-  --danger: oklch(0.70 0.18 25); --danger-soft: oklch(0.30 0.06 25);
-  --purple: oklch(0.70 0.14 310); --purple-soft: oklch(0.30 0.05 310);
-  --blue: oklch(0.70 0.12 235); --blue-soft: oklch(0.30 0.05 235);
-  --surface: oklch(0.16 0.008 60); --elev: oklch(0.215 0.01 60);
-  --fill: oklch(0.29 0.012 60); --fill2: oklch(0.25 0.01 60);
-  --border: oklch(1 0 0 / 0.09);
-  --label: oklch(0.96 0.008 80); --label2: oklch(0.72 0.015 70); --label3: oklch(0.52 0.012 60);
-  --glass-bg: oklch(0.30 0.01 60 / 0.55); --glass-hi: rgba(255,255,255,0.14); --glass-hi2: rgba(255,255,255,0.06);
-  --shadow-card: 0 1px 2px rgba(0,0,0,0.3), 0 6px 20px rgba(0,0,0,0.35);
-  --shadow-glass: 0 0 0 0.5px rgba(255,255,255,0.06), 0 10px 30px rgba(0,0,0,0.45);
-  --shadow-float: 0 2px 8px rgba(0,0,0,0.4), 0 16px 40px rgba(0,0,0,0.5);
-  --orb-alpha: 0.35;
+  --brand: #FF9868; --brand-soft: #3A2A22; --brand-ink: #241812; --brand-text: #FFB08A;
+  --sage: #5FD08E; --sage-soft: #23382D;
+  --amber: #E8B45C; --amber-text: #E8B45C; --amber-soft: #3A3020;
+  --danger: #FF6961; --danger-soft: #3A2422;
+  --purple: #C09AE8; --purple-soft: #2F2838;
+  --blue: #6FB6E8; --blue-soft: #22303A;
+  --surface: #201E1B; --elev: #2C2A27;
+  --fill: #383530; --fill2: #322F2B;
+  --border: rgba(255,255,255,0.12);
+  --label: #F5F2EE; --label2: #B5AEA6; --label3: #8A837B;
+  --glass-bg: rgba(44,42,39,0.72); --glass-hi: rgba(255,255,255,0.10); --glass-hi2: rgba(255,255,255,0.06);
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.30);
+  --shadow-glass: 0 0 0 0.5px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.45);
+  --shadow-float: 0 2px 8px rgba(0,0,0,0.35), 0 12px 30px rgba(0,0,0,0.5);
+  --orb-alpha: 0;
 """
 CSS = """
   * { box-sizing: border-box; }
   body { margin: 0; background: transparent; }
-  a { color: var(--brand); } a:hover { color: oklch(0.55 0.17 40); }
+  a { color: var(--brand); } a:hover { color: var(--brand-text); }
   .phone { position: relative; width: 390px; height: 844px; overflow: hidden; background: var(--surface); color: var(--label);
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Helvetica Neue", "Noto Sans CJK SC", sans-serif;
     -webkit-font-smoothing: antialiased; font-size: 17px; line-height: 1.35; letter-spacing: -0.01em; }
   .paper { background-image: radial-gradient(oklch(0.5 0.03 60 / 0.035) 0.5px, transparent 0.5px); background-size: 6px 6px; }
-  .orb { position: absolute; border-radius: 9999px; filter: blur(60px); opacity: var(--orb-alpha); pointer-events: none; }
+  .orb { display: none; }   /* 方向 B 取消背景装饰球 */
   .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0; }
   .glass { background: var(--glass-bg); -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
-    box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 0 0 0.5px var(--glass-hi2), var(--shadow-glass);
-    background-image: linear-gradient(135deg, var(--glass-hi2), transparent 45%); }
-  .glass-brand { background: color-mix(in oklch, var(--brand) 82%, transparent); color: var(--brand-ink);
+    box-shadow: inset 0 0 0 0.5px var(--border), var(--shadow-glass); }
+  .glass-brand { background: color-mix(in srgb, var(--brand) 82%, transparent); color: var(--brand-ink);
     -webkit-backdrop-filter: blur(16px) saturate(160%); backdrop-filter: blur(16px) saturate(160%);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px color-mix(in oklch, var(--brand) 35%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px color-mix(in srgb, var(--brand) 35%, transparent);
     background-image: linear-gradient(135deg, rgba(255,255,255,0.28), transparent 50%); }
-  .card { background: var(--elev); border-radius: 24px; box-shadow: var(--shadow-card); }
+  .card { background: var(--elev); border-radius: 16px; border: 1px solid var(--border); box-shadow: var(--shadow-card); }
   .eyebrow { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--label2); }
   .large-title { font-size: 34px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.15; }
   .title1 { font-size: 28px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.2; }
@@ -116,30 +119,31 @@ CSS = """
   .caption { font-size: 12px; }
   .l2 { color: var(--label2); } .l3 { color: var(--label3); }
   .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px; font-size: 13px; font-weight: 600; white-space: nowrap; }
-  .chip-claude { background: var(--amber-soft); color: var(--amber-text); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--amber) 60%, transparent); }
-  .chip-codex { background: var(--purple-soft); color: var(--purple); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--purple) 40%, transparent); }
-  .chip-custom { background: var(--blue-soft); color: var(--blue); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--blue) 40%, transparent); }
-  .chip-sage { background: var(--sage-soft); color: var(--sage); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--sage) 50%, transparent); }
-  .chip-brand { background: var(--brand-soft); color: var(--brand); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--brand) 40%, transparent); }
+  .chip-claude { background: var(--brand-soft); color: var(--brand-text); }
+  .chip-codex { background: var(--fill); color: var(--label2); }
+  .chip-custom { background: var(--fill); color: var(--label2); }
+  .chip-sage { background: var(--sage-soft); color: var(--sage); }
+  .chip-brand { background: var(--brand-soft); color: var(--brand-text); }
   .chip-fill { background: var(--fill); color: var(--label2); }
-  .chip-danger { background: var(--danger-soft); color: var(--danger); box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--danger) 45%, transparent); }
+  .chip-danger { background: var(--danger-soft); color: var(--danger); }
   .dot { width: 9px; height: 9px; border-radius: 999px; flex-shrink: 0; }
-  .dot-sage { background: var(--sage); box-shadow: 0 0 0 3px color-mix(in oklch, var(--sage) 22%, transparent); }
-  .dot-amber { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in oklch, var(--amber) 30%, transparent); }
-  .dot-danger { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in oklch, var(--danger) 22%, transparent); }
+  .dot-sage { background: var(--sage); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sage) 22%, transparent); }
+  .dot-amber { background: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent); }
+  .dot-danger { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
   .dot-off { background: var(--label3); }
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 50px; padding: 0 20px; border-radius: 999px; font-size: 16px; font-weight: 600; border: none; }
-  .btn-primary { background: var(--brand); color: var(--brand-ink); box-shadow: 0 8px 22px color-mix(in oklch, var(--brand) 32%, transparent), inset 0 1px 0 rgba(255,255,255,0.35); }
+  .btn-primary { background: var(--brand); color: var(--brand-ink); }
   .btn-secondary { background: var(--fill); color: var(--label); }
   .btn-outline { background: transparent; color: var(--label); box-shadow: inset 0 0 0 1.5px var(--border); }
-  .btn-danger-outline { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1.5px color-mix(in oklch, var(--danger) 55%, transparent); }
+  .btn-danger-outline { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--danger) 55%, transparent); }
   .input { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 16px; border-radius: 16px; background: var(--fill); color: var(--label); box-shadow: inset 0 0 0 1px var(--border); font-size: 16px; }
   .icon-btn { width: 44px; height: 44px; border-radius: 999px; display: flex; align-items: center; justify-content: center; }
   .navbar { position: absolute; left: 16px; right: 16px; top: 62px; height: 56px; border-radius: 999px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 6px; z-index: 5; }
-  .tabbar { position: absolute; left: 20px; right: 20px; bottom: 22px; height: 66px; border-radius: 999px; display: flex; align-items: center; justify-content: space-around; padding: 0 8px; z-index: 5; }
+  /* 系统 Tab 栏：贴底通栏 + 顶部发丝线，不再是悬浮胶囊 */
+  .tabbar { position: absolute; left: 0; right: 0; bottom: 0; height: 78px; display: flex; align-items: flex-start; justify-content: space-around; padding: 8px 6px 0; z-index: 5; border-top: 1px solid var(--border); }
   .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; width: 72px; height: 54px; border-radius: 999px; color: var(--label2); font-size: 11px; font-weight: 600; position: relative; }
-  .tab-on { background: var(--brand); color: var(--brand-ink); box-shadow: 0 6px 18px color-mix(in oklch, var(--brand) 35%, transparent), inset 0 1px 0 rgba(255,255,255,0.4); }
-  .badge { position: absolute; top: 4px; right: 12px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--amber); color: oklch(0.25 0.05 60); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--elev); }
+  .tab-on { color: var(--brand); }
+  .badge { position: absolute; top: 0; right: 16px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
   .toggle { width: 51px; height: 31px; border-radius: 999px; background: var(--brand); position: relative; flex-shrink: 0; }
   .toggle::after { content: ""; position: absolute; top: 2px; left: 22px; width: 27px; height: 27px; border-radius: 999px; background: white; box-shadow: 0 3px 8px rgba(0,0,0,0.15); }
   .toggle-off { background: var(--fill); box-shadow: inset 0 0 0 1px var(--border); }
@@ -358,7 +362,7 @@ NEWSESSION = f"""
 """
 
 def bubble_user(text):
-    return f'<div style="display:flex;justify-content:flex-end"><div style="max-width:280px;padding:12px 16px;border-radius:22px 22px 6px 22px;background:var(--brand);color:var(--brand-ink);font-size:16px;line-height:1.4;box-shadow:0 6px 18px color-mix(in oklch, var(--brand) 25%, transparent)">{text}</div></div>'
+    return f'<div style="display:flex;justify-content:flex-end"><div style="max-width:280px;padding:12px 16px;border-radius:22px 22px 6px 22px;background:var(--brand);color:var(--brand-ink);font-size:16px;line-height:1.4;box-shadow:0 6px 18px color-mix(in srgb, var(--brand) 25%, transparent)">{text}</div></div>'
 def bubble_ai(html):
     return f'<div style="display:flex;justify-content:flex-start"><div class="card" style="max-width:300px;padding:14px 16px;border-radius:22px 22px 22px 6px;font-size:16px;line-height:1.45;display:flex;flex-direction:column;gap:10px">{html}</div></div>'
 def toolcard(name, detail, state_cls, state):
@@ -496,7 +500,7 @@ ME = f"""
   </div>
   <div style="position:absolute;left:20px;right:20px;top:150px;display:flex;flex-direction:column;gap:20px">
     <div class="glass" style="border-radius:22px;padding:16px 18px;display:flex;align-items:center;gap:14px">
-      <div style="width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg, var(--brand), var(--amber));display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px color-mix(in oklch, var(--brand) 30%, transparent)">{ic("phone",26,"white")}</div>
+      <div style="width:52px;height:52px;border-radius:16px;background:linear-gradient(135deg, var(--brand), var(--amber));display:flex;align-items:center;justify-content:center;box-shadow:0 8px 20px color-mix(in srgb, var(--brand) 30%, transparent)">{ic("phone",26,"white")}</div>
       <div style="flex:1"><div class="headline">这台 iPhone</div><div class="footnote l2">3 台已配对电脑 · 无账号，本地优先</div></div>
       {ic("chev",18,"var(--label3)")}
     </div>

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 远程文件：面包屑 + 列表 + 预览。只预览与下载，手机不执行任何文件。
 struct FilesView: View {
@@ -13,49 +14,69 @@ struct FilesView: View {
     private var crumbs: [String] { path.split(separator: "/").map(String.init) }
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            Chip("~", tone: .fill, mono: true)
-                            ForEach(Array(crumbs.enumerated()), id: \.offset) { i, c in
-                                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.labelTertiary)
-                                Chip(c, tone: i == crumbs.count - 1 ? .brand : .fill, mono: true)
+        List {
+            Section {
+                ForEach(entries) { e in
+                    Button { open(e) } label: { FileRow(entry: e) }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 4, leading: Spacing.card, bottom: 4, trailing: Spacing.card))
+                        .swipeActions(edge: .trailing) {
+                            Button { UIPasteboard.general.string = e.path; store.toast = "已复制路径" } label: {
+                                Label("复制路径", systemImage: "doc.on.doc")
                             }
+                            .tint(p.labelSecondary)
                         }
-                    }
-                    PaperCard(padding: 0) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
-                                Button { open(e) } label: { FileRow(entry: e) }
-                                    .buttonStyle(.plain)
-                                    .contextMenu {
-                                        Button { UIPasteboard.general.string = e.path; store.toast = "已复制路径" } label: { Label("复制路径", systemImage: "doc.on.doc") }
-                                    }
-                                if i < entries.count - 1 { Divider_() }
-                            }
+                        .contextMenu {
+                            Button { UIPasteboard.general.string = e.path; store.toast = "已复制路径" } label: { Label("复制路径", systemImage: "doc.on.doc") }
                         }
-                        .padding(.vertical, 4)
-                    }
-                    HStack(spacing: 6) {
-                        Image(systemName: "lock").font(.system(size: 11))
-                        Text("点文件可查看、复制内容或下载；手机不会执行任何文件").font(.yzFootnote)
-                    }
-                    .foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity)
                 }
-                .padding(16)
+            } header: {
+                breadcrumbs
+            } footer: {
+                Label("点文件可查看、复制内容或下载；手机不会执行任何文件", systemImage: "lock")
+                    .font(.yzFootnote).foregroundStyle(p.labelTertiary)
+                    .padding(.top, 6)
             }
         }
+        .listStyle(.insetGrouped)
+        .paperBackground()
         .navigationTitle("文件")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
-            ToolbarItem(placement: .topBarTrailing) { Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") } }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
+                    .accessibilityLabel("刷新")
+            }
+        }
+        .overlay {
+            if entries.isEmpty {
+                ContentUnavailableView("这个目录是空的", systemImage: "folder", description: Text("换个目录，或在电脑上确认路径。"))
+            }
         }
         .navigationDestination(item: $opened) { ref in FileViewerView(session: session, path: ref.path) }
+        .refreshable { await load() }
         .task { await load() }
+    }
+
+    /// 面包屑：跟随 Section header，点任意一段可以跳回上级。
+    private var breadcrumbs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 5) {
+                Button { path = ""; Task { await load() } } label: { Chip("~", tone: crumbs.isEmpty ? .brand : .fill, mono: true) }
+                    .buttonStyle(.plain)
+                ForEach(Array(crumbs.enumerated()), id: \.offset) { i, c in
+                    Image(systemName: "chevron.right").font(.system(.caption2, weight: .semibold)).foregroundStyle(p.labelTertiary)
+                    Button {
+                        path = crumbs.prefix(i + 1).joined(separator: "/")
+                        Task { await load() }
+                    } label: { Chip(c, tone: i == crumbs.count - 1 ? .brand : .fill, mono: true) }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .textCase(nil)
     }
 
     private func load() async {
@@ -84,17 +105,17 @@ struct FileRow: View {
     }
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbol).font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                .frame(width: 38, height: 38).background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tint))
+            Image(systemName: symbol).font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                .frame(width: 34, height: 34).background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint))
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.name).font(.system(size: 16, weight: .semibold)).foregroundStyle(p.label).lineLimit(1)
+                Text(entry.name).font(.system(.callout, weight: .semibold)).foregroundStyle(p.label).lineLimit(1)
                 Text(meta).font(.yzCaption).foregroundStyle(p.labelTertiary)
             }
             Spacer(minLength: 4)
             if let b = entry.badge { Chip(b, tone: b == "审批中" ? .danger : .sage) }
-            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.labelTertiary)
+            Image(systemName: "chevron.right").font(.system(.caption, weight: .semibold)).foregroundStyle(p.labelTertiary)
         }
-        .padding(.horizontal, Spacing.card).frame(minHeight: 60)
+        .frame(minHeight: 52)
     }
     private var meta: String {
         let size = entry.kind == .folder ? "" : ByteCountFormatter.string(fromByteCount: Int64(entry.size), countStyle: .file) + " · "

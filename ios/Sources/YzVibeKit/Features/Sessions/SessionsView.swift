@@ -1,57 +1,37 @@
 import SwiftUI
+import UIKit
 
 struct SessionsView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     @State private var query = ""
-    @State private var activeOnly = false
     @State private var showNew = false
     @State private var collapsed: Set<String> = []
     @State private var path: [String] = []
 
-    var body: some View {
-        NavigationStack(path: $path) {
-            PageScaffold(eyebrow: store.selectedDevice?.name ?? "未选择设备", title: "会话") {
-                DevicePickerChip()
-            } content: {
-                HStack(spacing: 10) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "magnifyingglass").foregroundStyle(p.labelTertiary)
-                        TextField("搜索会话或路径", text: $query).font(.yzCallout).fontWeight(.regular)
-                    }
-                    .padding(.horizontal, 16).frame(height: 46)
-                    .background(Capsule().fill(p.fill).overlay(Capsule().strokeBorder(p.border, lineWidth: 1)))
-                    Button { withAnimation(Motion.quick) { activeOnly.toggle() } } label: {
-                        Text("仅活跃").font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(activeOnly ? p.brand : p.labelSecondary)
-                            .padding(.horizontal, 14).frame(height: 46)
-                            .background(Capsule().fill(activeOnly ? p.brandSoft : p.fill).overlay(Capsule().strokeBorder(activeOnly ? p.brand.opacity(0.4) : p.border, lineWidth: 1)))
-                    }
-                    .buttonStyle(.plain)
-                }
+    private var list: [Session] {
+        store.sessions(for: store.selectedDevice, activeOnly: store.settings.activeOnly, query: query)
+    }
 
-                let list = store.sessions(for: store.selectedDevice, activeOnly: activeOnly, query: query)
+    var body: some View {
+        @Bindable var store = store
+        NavigationStack(path: $path) {
+            Group {
                 if list.isEmpty {
-                    PaperCard {
-                        VStack(spacing: 10) {
-                            Image(systemName: "bubble.left.and.text.bubble.right").font(.system(size: 36, weight: .light)).foregroundStyle(p.brand)
-                            Text("这台电脑还没有会话").font(.yzHeadline).foregroundStyle(p.label)
-                            Text("点右下角「新建会话」，选择 Agent 与工作目录。").font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
-                        }.frame(maxWidth: .infinity)
-                    }
-                } else if store.settings.groupByFolder {
-                    ForEach(store.groupedSessions(list), id: \.cwd) { group in
-                        FolderHeader(cwd: group.cwd, count: group.sessions.count, collapsed: collapsed.contains(group.cwd)) {
-                            withAnimation(Motion.quick) { if collapsed.contains(group.cwd) { collapsed.remove(group.cwd) } else { collapsed.insert(group.cwd) } }
-                        }
-                        if !collapsed.contains(group.cwd) {
-                            ForEach(group.sessions) { s in
-                                NavigationLink(value: s.id) { SessionCard(session: s) }.buttonStyle(.plain)
-                            }
-                        }
-                    }
+                    emptyState
                 } else {
-                    ForEach(list) { s in NavigationLink(value: s.id) { SessionCard(session: s) }.buttonStyle(.plain) }
+                    sessionList
+                }
+            }
+            .paperBackground()
+            .navigationTitle("会话")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索会话或路径")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { DevicePickerMenu() }
+                ToolbarItem(placement: .topBarTrailing) { filterMenu }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+                        .accessibilityLabel("新建会话")
                 }
             }
             .navigationDestination(for: String.self) { ChatView(sessionId: $0) }
@@ -61,41 +41,114 @@ struct SessionsView: View {
                 store.openSessionRequest = nil
                 if path.last != sid { path = [sid] }
             }
-            .overlay(alignment: .bottomTrailing) {
-                Button { showNew = true } label: { Label("新建会话", systemImage: "plus") }
-                    .buttonStyle(PrimaryButtonStyle(height: 56))
-                    .fixedSize()
-                    .padding(.trailing, Spacing.page).padding(.bottom, 12)
-            }
             .sheet(isPresented: $showNew) { NewSessionView().presentationDetents([.large]) }
             .refreshable { if let d = store.selectedDevice { await store.refresh(d) } }
         }
     }
+
+    // MARK: 列表
+
+    @ViewBuilder
+    private var sessionList: some View {
+        List {
+            if store.settings.groupByFolder {
+                ForEach(store.groupedSessions(list), id: \.cwd) { group in
+                    Section {
+                        if !collapsed.contains(group.cwd) {
+                            ForEach(group.sessions) { row($0) }
+                        }
+                    } header: {
+                        FolderHeader(cwd: group.cwd, count: group.sessions.count, collapsed: collapsed.contains(group.cwd)) {
+                            withAnimation(Motion.quick) {
+                                if collapsed.contains(group.cwd) { collapsed.remove(group.cwd) } else { collapsed.insert(group.cwd) }
+                            }
+                        }
+                    }
+                }
+            } else {
+                ForEach(list) { row($0) }
+            }
+        }
+        .listStyle(.plain)
+        .environment(\.defaultMinListRowHeight, 0)
+    }
+
+    /// 一行 = 一张纸卡；分隔线交给卡片之间的留白，不用系统 separator。
+    private func row(_ s: Session) -> some View {
+        NavigationLink(value: s.id) { SessionCard(session: s) }
+            .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 5, leading: Spacing.page, bottom: 5, trailing: Spacing.page))
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .swipeActions(edge: .trailing) {
+                if s.status == .running {
+                    Button { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
+                        .tint(p.danger)
+                }
+                Button {
+                    UIPasteboard.general.string = s.cwd
+                    store.toast = "已复制工作目录"
+                } label: { Label("复制路径", systemImage: "doc.on.doc") }
+                .tint(p.labelSecondary)
+            }
+            .contextMenu {
+                Button { UIPasteboard.general.string = s.cwd } label: { Label("复制工作目录", systemImage: "doc.on.doc") }
+                if s.status == .running {
+                    Button(role: .destructive) { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
+                }
+            }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label(query.isEmpty ? "这台电脑还没有会话" : "没有匹配的会话", systemImage: "bubble.left.and.text.bubble.right")
+        } description: {
+            Text(query.isEmpty ? "点右上角新建，选择 Agent 与工作目录。" : "换个关键词，或清掉「仅活跃」筛选。")
+        } actions: {
+            if query.isEmpty {
+                Button("新建会话") { showNew = true }.buttonStyle(.borderedProminent).tint(p.brand)
+            }
+        }
+    }
+
+    private var filterMenu: some View {
+        @Bindable var store = store
+        return Menu {
+            Toggle("仅显示活跃", isOn: $store.settings.activeOnly)
+            Toggle("按文件夹分组", isOn: $store.settings.groupByFolder)
+        } label: {
+            Image(systemName: store.settings.activeOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .accessibilityLabel("筛选")
+    }
 }
 
-/// 顶部「已连接 ▾」胶囊：切换设备。
-struct DevicePickerChip: View {
+/// 导航栏左上的设备切换菜单。
+struct DevicePickerMenu: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     var body: some View {
         Menu {
-            ForEach(store.devices) { d in
-                Button { store.selectedDeviceId = d.id } label: {
-                    Label(d.name, systemImage: d.online ? "circle.fill" : "circle")
+            Picker("设备", selection: Binding(get: { store.selectedDeviceId ?? "" }, set: { store.selectedDeviceId = $0 })) {
+                ForEach(store.devices) { d in
+                    Label(d.name, systemImage: d.online ? "desktopcomputer" : "desktopcomputer.trianglebadge.exclamationmark").tag(d.id)
                 }
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 StatusDot(store.selectedDevice?.online == true ? .sage : .off)
-                Text(store.selectedDevice?.online == true ? "已连接" : "离线").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.label)
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                Text(store.selectedDevice?.name ?? "未选择设备")
+                    .font(.yzFootnoteStrong)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))
             }
-            .padding(.horizontal, 12).frame(height: 36)
-            .liquidGlass(in: Capsule(), interactive: true)
+            .foregroundStyle(p.labelSecondary)
         }
+        .accessibilityLabel("切换设备，当前 \(store.selectedDevice?.name ?? "未选择")")
     }
 }
 
+/// 文件夹分组头：跟随系统 Section header 的观感（小写字重、贴左）。
 struct FolderHeader: View {
     @Environment(\.palette) private var p
     let cwd: String
@@ -104,17 +157,21 @@ struct FolderHeader: View {
     let toggle: () -> Void
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 8) {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.labelSecondary).frame(width: 14)
-                Image(systemName: "folder").foregroundStyle(p.labelSecondary)
-                Text((cwd as NSString).lastPathComponent).font(.system(size: 16, weight: .semibold)).foregroundStyle(p.label)
+            HStack(spacing: 6) {
+                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(.caption2, weight: .bold))
+                    .frame(width: 12)
+                Text((cwd as NSString).lastPathComponent).font(.yzFootnoteStrong).foregroundStyle(p.label)
                 Text(cwd).font(.yzMono).foregroundStyle(p.labelTertiary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 4)
-                Text("\(count) 个").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                Text("\(count)").font(.yzFootnote).foregroundStyle(p.labelTertiary)
             }
-            .padding(.horizontal, 4)
+            .foregroundStyle(p.labelSecondary)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .textCase(nil)
+        .listRowInsets(EdgeInsets(top: 10, leading: Spacing.page + 2, bottom: 4, trailing: Spacing.page))
     }
 }
 
@@ -122,25 +179,32 @@ struct SessionCard: View {
     @Environment(\.palette) private var p
     let session: Session
     var body: some View {
-        PaperCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
+        PaperCard(padding: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
                     StatusDot(session: session.status)
                     Chip.agent(session.agent)
-                    if session.source != .phone { Chip(session.source.displayName, tone: .sage, icon: session.source == .terminal ? "terminal" : "shippingbox") }
+                    if session.source != .phone {
+                        Chip(session.source.displayName, tone: .fill, icon: session.source == .terminal ? "terminal" : "shippingbox")
+                    }
                     if session.pendingApprovals > 0 { Chip("\(session.pendingApprovals) 待审批", tone: .danger) }
                     Spacer(minLength: 4)
-                    Text("\(session.status.displayName) · \(RelativeTime.string(from: session.updatedAt))").font(.yzFootnote).foregroundStyle(p.labelTertiary)
+                    Text("\(session.status.displayName) · \(RelativeTime.string(from: session.updatedAt))")
+                        .font(.yzFootnote).foregroundStyle(p.labelTertiary).lineLimit(1)
                 }
-                Text(session.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(p.label).lineLimit(2)
+                Text(session.title).font(.yzTitle3).foregroundStyle(p.label).lineLimit(2)
                 HStack(spacing: 8) {
                     if let b = session.branch {
-                        HStack(spacing: 4) { Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold)); Text(b).font(.yzMono) }
-                            .foregroundStyle(p.labelSecondary).lineLimit(1)
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.triangle.branch").font(.system(.caption2, weight: .semibold))
+                            Text(b).font(.yzMono)
+                        }
+                        .foregroundStyle(p.labelSecondary).lineLimit(1)
                     }
                     CodeBlock(session.cwd)
                 }
             }
         }
+        .accessibilityElement(children: .combine)
     }
 }

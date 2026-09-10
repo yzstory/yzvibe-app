@@ -34,7 +34,7 @@ struct FileViewerView: View {
                     } else if let error {
                         PaperCard {
                             VStack(spacing: 10) {
-                                Image(systemName: "exclamationmark.triangle").font(.system(size: 26)).foregroundStyle(p.amber)
+                                Image(systemName: "exclamationmark.triangle").font(.system(.title2)).foregroundStyle(p.amber)
                                 Text(error).font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -91,7 +91,7 @@ struct FileViewerView: View {
 
     private var footer: some View {
         HStack(spacing: 6) {
-            Image(systemName: "lock").font(.system(size: 11))
+            Image(systemName: "lock").font(.system(.caption2))
             Text("只读取内容，手机不会执行任何文件").font(.yzFootnote)
         }
         .foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity)

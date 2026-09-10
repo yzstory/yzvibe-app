@@ -8,7 +8,7 @@ final class YzVibeKitTests: XCTestCase {
         let s = OKLCH(0.64, 0.17, 40).srgb
         XCTAssertGreaterThan(s.r, s.g)
         XCTAssertGreaterThan(s.g, s.b)
-        XCTAssertEqual(s.r, 0.87, accuracy: 0.05)   // oklch(0.64 0.17 40) ≈ rgb(221, 110, 76)
+        XCTAssertEqual(s.r, 0.87, accuracy: 0.05)   // oklch(0.64 0.17 40) ≈ rgb(221, 110, 76)。只验证换算本身；品牌色现在直接用 hex 定义，见 Palette。
     }
 
     func testOKLCHWhiteAndBlack() {

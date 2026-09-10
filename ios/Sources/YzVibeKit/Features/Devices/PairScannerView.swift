@@ -43,7 +43,7 @@ struct PairScannerView: View {
                     Text("扫码配对").font(.yzHeadline).foregroundStyle(.white)
                     Spacer()
                     PhotosPicker(selection: $pickerItem, matching: .images, photoLibrary: .shared()) {
-                        Image(systemName: "photo").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                        Image(systemName: "photo").font(.system(.callout, weight: .semibold)).foregroundStyle(.white)
                             .frame(width: 44, height: 44).background(Circle().fill(.white.opacity(0.12)))
                     }
                     .disabled(busy)
@@ -78,7 +78,7 @@ struct PairScannerView: View {
 
     private func circleButton(_ symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+            Image(systemName: symbol).font(.system(.callout, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 44, height: 44).background(Circle().fill(.white.opacity(0.12)))
         }
     }

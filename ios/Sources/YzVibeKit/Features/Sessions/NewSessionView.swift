@@ -29,21 +29,75 @@ struct NewSessionView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AmbientBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        Text("启动远程会话前，先确认助手、目录和权限模式。").font(.yzSubhead).foregroundStyle(p.labelSecondary)
-                        formCard
-                        Eyebrow("会话模式").padding(.horizontal, 4)
-                        modeCards
-                        summaryCard
+            Form {
+                Section("助手") {
+                    Picker("助手", selection: $req.agent) {
+                        ForEach(AgentKind.allCases, id: \.self) { Text($0.displayName).tag($0) }
                     }
-                    .padding(Spacing.page)
-                    .padding(.bottom, 90)
+                    .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
                 }
-                .scrollDismissesKeyboard(.interactively)
+
+                Section {
+                    HStack(spacing: 10) {
+                        TextField("~/project", text: $req.cwd)
+                            .font(.yzMonoBody).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button { toggleFavorite() } label: {
+                            Image(systemName: isFavorite ? "star.fill" : "star").foregroundStyle(isFavorite ? p.amber : p.labelTertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isFavorite ? "取消收藏此目录" : "收藏此目录")
+                        Button { showPicker = true } label: { Image(systemName: "folder") }
+                            .buttonStyle(.plain).foregroundStyle(p.brand)
+                            .accessibilityLabel("浏览目录")
+                    }
+                    if !suggestedDirs.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(suggestedDirs, id: \.self) { f in
+                                    Button { req.cwd = f } label: {
+                                        Chip((f as NSString).lastPathComponent, tone: f == req.cwd ? .brand : .fill,
+                                             icon: prefs.favoriteDirs.contains(f) ? "star.fill" : nil, mono: true)
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                } header: {
+                    Text("工作目录")
+                }
+
+                Section {
+                    TextField("例如：整理这些笔记，摘要日志，或继续上次的远程会话", text: $firstMessage, axis: .vertical)
+                        .lineLimit(3...6).font(.yzSubhead)
+                } header: {
+                    HStack {
+                        Text("首句消息")
+                        Spacer()
+                        Menu {
+                            ForEach(prefs.recentPrompts, id: \.self) { t in Button(String(t.prefix(40))) { firstMessage = t } }
+                            Divider()
+                            Button("清空历史", role: .destructive) { prefs.recentPrompts = []; prefs.save() }
+                        } label: { Image(systemName: "clock") }
+                        .disabled(prefs.recentPrompts.isEmpty)
+                        .accessibilityLabel("最近用过的首句")
+                        Menu {
+                            ForEach(LocalPrefs.templates, id: \.title) { t in Button(t.title) { firstMessage = t.body } }
+                        } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("从模板插入")
+                    }
+                    .textCase(nil)
+                } footer: {
+                    Text("可选。填写后，会在会话创建成功后自动发送。")
+                }
+
+                Section("会话模式") { modeRows }
+
+                Section("启动摘要") { summaryRow }
             }
+            .paperBackground()
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("新建会话")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
@@ -63,7 +117,7 @@ struct NewSessionView: View {
                 Button { Task { await start() } } label: {
                     if busy { ProgressView().tint(p.brandInk) } else { Label("开始会话", systemImage: "arrow.right") }
                 }
-                .buttonStyle(PrimaryButtonStyle(height: 54))
+                .buttonStyle(PrimaryButtonStyle(height: 52))
                 .disabled(req.cwd.isEmpty || busy)
                 .padding(.horizontal, Spacing.page).padding(.bottom, 8)
             }
@@ -73,69 +127,16 @@ struct NewSessionView: View {
         }
     }
 
-    // MARK: 表单卡：助手 / 工作目录 / 首句消息
-
-    private var formCard: some View {
-        PaperCard {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Eyebrow("助手")
-                    SegmentedPills(items: AgentKind.allCases.map { ($0, $0.displayName) }, selection: $req.agent)
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Eyebrow("工作目录")
-                        Spacer()
-                        Button { showPicker = true } label: { smallIcon("folder") }
-                    }
-                    HStack(spacing: 10) {
-                        TextField("~/project", text: $req.cwd).font(.yzMonoBody).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        Button { toggleFavorite() } label: {
-                            Image(systemName: isFavorite ? "star.fill" : "star").foregroundStyle(isFavorite ? p.amber : p.labelTertiary)
-                                .frame(width: 34, height: 34).background(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(p.border, lineWidth: 1))
-                        }
-                    }
-                    .padding(.leading, 16).padding(.trailing, 9).frame(height: 52)
-                    .background(fieldBackground)
-                    if !suggestedDirs.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(suggestedDirs, id: \.self) { f in
-                                    Button { req.cwd = f } label: {
-                                        Chip((f as NSString).lastPathComponent, tone: f == req.cwd ? .brand : .fill, icon: prefs.favoriteDirs.contains(f) ? "star.fill" : nil, mono: true)
-                                    }.buttonStyle(.plain)
-                                }
-                            }
-                        }
-                    }
-                }
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Eyebrow("首句消息")
-                        Spacer()
-                        Menu {
-                            ForEach(prefs.recentPrompts, id: \.self) { t in Button(String(t.prefix(40))) { firstMessage = t } }
-                            Divider()
-                            Button("清空历史", role: .destructive) { prefs.recentPrompts = []; prefs.save() }
-                        } label: { smallIcon("clock") }
-                        .disabled(prefs.recentPrompts.isEmpty)
-                        Menu {
-                            ForEach(LocalPrefs.templates, id: \.title) { t in Button(t.title) { firstMessage = t.body } }
-                        } label: { smallIcon("plus") }
-                    }
-                    TextField("例如：整理这些笔记，摘要日志，或继续上次的远程会话", text: $firstMessage, axis: .vertical)
-                        .lineLimit(3...6).font(.yzSubhead).padding(14).background(fieldBackground)
-                    Text("可选。填写后，会在会话创建成功后自动发送。").font(.yzFootnote).foregroundStyle(p.labelTertiary)
-                }
-            }
-        }
-    }
-
     // MARK: 会话模式：继续上次 / 模式 / 模型 / 思考强度
 
-    private var modeCards: some View {
-        VStack(spacing: 12) {
-            modeRow("继续上次", "进入该目录最近一次会话") { Toggle("", isOn: $req.continueLast).labelsHidden().tint(p.brand) }
+    private var modeRows: some View {
+        Group {
+            Toggle(isOn: $req.continueLast) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("继续上次").font(.yzBody).foregroundStyle(p.label)
+                    Text("进入该目录最近一次会话").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                }
+            }
             modeRow("模式", caps.modeInfo(req.mode)?.description ?? req.mode.subtitle, danger: req.mode == .trust) {
                 ModeMenu(agent: req.agent, caps: caps, mode: $req.mode)
             }
@@ -149,47 +150,39 @@ struct NewSessionView: View {
     }
 
     private func modeRow<T: View>(_ title: String, _ subtitle: String, danger: Bool = false, @ViewBuilder trailing: @escaping () -> T) -> some View {
-        PaperCard(padding: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.yzHeadline).foregroundStyle(p.label)
-                    if !subtitle.isEmpty { Text(subtitle).font(.yzFootnote).foregroundStyle(danger ? p.danger : p.labelSecondary).lineLimit(2) }
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.yzBody).foregroundStyle(p.label)
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.yzFootnote).foregroundStyle(danger ? p.danger : p.labelSecondary).lineLimit(2)
                 }
-                Spacer(minLength: 8)
-                trailing()
             }
-            .padding(.horizontal, Spacing.card).frame(minHeight: 64).padding(.vertical, 6)
+            Spacer(minLength: 8)
+            trailing()
         }
     }
 
     // MARK: 启动摘要
 
-    private var summaryCard: some View {
-        PaperCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Eyebrow("启动摘要")
-                Text("\(req.agent.displayName) · \(caps.label(forModel: req.model))").font(.yzTitle2).foregroundStyle(p.label)
-                Text(req.cwd.isEmpty ? "未选择工作目录" : req.cwd).font(.yzMono).foregroundStyle(p.labelSecondary).lineLimit(2).truncationMode(.middle)
-                HStack(spacing: 8) {
-                    Chip(req.mode.displayName, tone: req.mode == .trust ? .danger : req.mode == .plan ? .custom : .brand, icon: req.mode.symbol)
-                    if req.effort != nil { Chip("思考 \(EffortLevel.displayName(req.effort))", tone: .codex) }
-                    if req.continueLast { Chip("继续上次", tone: .sage) }
-                }
-                if let flag = caps.modeInfo(req.mode)?.flag { Text(flag).font(.yzCaption).monospaced().foregroundStyle(p.labelTertiary) }
+    private var summaryRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(req.agent.displayName) · \(caps.label(forModel: req.model))").font(.yzTitle3).foregroundStyle(p.label)
+            Text(req.cwd.isEmpty ? "未选择工作目录" : req.cwd)
+                .font(.yzMono).foregroundStyle(p.labelSecondary).lineLimit(2).truncationMode(.middle)
+            HStack(spacing: 6) {
+                Chip(req.mode.displayName, tone: req.mode == .trust ? .danger : req.mode == .plan ? .warning : .brand, icon: req.mode.symbol)
+                if req.effort != nil { Chip("思考 \(EffortLevel.displayName(req.effort))", tone: .fill) }
+                if req.continueLast { Chip("继续上次", tone: .sage) }
+            }
+            if let flag = caps.modeInfo(req.mode)?.flag {
+                Text(flag).font(.yzCaption).monospaced().foregroundStyle(p.labelTertiary)
             }
         }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: helpers
-
-    private var fieldBackground: some View {
-        RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.fill)
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1))
-    }
-    private func smallIcon(_ name: String) -> some View {
-        Image(systemName: name).font(.system(size: 14, weight: .semibold)).foregroundStyle(p.label)
-            .frame(width: 34, height: 34).background(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(p.border, lineWidth: 1))
-    }
 
     private func toggleFavorite() {
         guard !req.cwd.isEmpty else { return }

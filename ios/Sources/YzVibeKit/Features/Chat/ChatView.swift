@@ -15,6 +15,10 @@ struct ChatView: View {
     @State private var newSessionSeed: String?
 
     private var session: Session? { store.session(sessionId) }
+    private var subtitle: String {
+        guard let s = session else { return "" }
+        return [s.status.displayName, s.agent.displayName, s.folderName].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
 
     var body: some View {
@@ -41,17 +45,27 @@ struct ChatView: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text(session?.title ?? "会话").font(.yzHeadline).lineLimit(1)
-                    Text("\(session?.status.displayName ?? "") · \(session?.folderName ?? "")").font(.yzCaption).foregroundStyle(p.labelSecondary)
+                    Text(subtitle).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1)
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if session?.status == .running {
-                    Button { Task { await store.stop(sessionId) } } label: { Image(systemName: "stop.fill").foregroundStyle(p.danger) }
+                    Button { Task { await store.stop(sessionId) } } label: { Image(systemName: "stop.circle") }
+                        .tint(p.danger)
+                        .accessibilityLabel("停止当前任务")
                 }
                 Button { showUsage = true } label: { UsageGauge(fraction: session?.usage?.turn.contextFraction) }
-                Button { showDiff = true } label: { Image(systemName: "plusminus.circle") }
-                Button { showFiles = true } label: { Image(systemName: "folder") }
-                if let s = session { Chip.agent(s.agent, suffix: s.model.map { store.capabilities(for: s).label(forModel: $0) }) }
+                    .accessibilityLabel("上下文用量")
+                // 其余动作收进菜单：工具栏平铺五个按钮在 iOS 上会挤掉标题
+                Menu {
+                    Button { showDiff = true } label: { Label("改动", systemImage: "plusminus.circle") }
+                    Button { showFiles = true } label: { Label("文件", systemImage: "folder") }
+                    Button { showCommands = true } label: { Label("命令与 Skill", systemImage: "slash.circle") }
+                    if let s = session, let m = s.model {
+                        Section("当前模型") { Text(store.capabilities(for: s).label(forModel: m)) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel("更多")
             }
         }
         .safeAreaInset(edge: .bottom) { composer }
@@ -220,13 +234,12 @@ struct UserBubble: View {
             }
             if !message.text.isEmpty {
                 Text(message.text)
-                    .font(.system(size: 16))
+                    .font(.yzBody)
                     .foregroundStyle(p.brandInk)
-                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(
-                        UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                        UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous)
                             .fill(p.brand)
-                            .shadow(color: p.brand.opacity(0.25), radius: 9, y: 6)
                     )
                     .textSelection(.enabled)
             }
@@ -253,7 +266,7 @@ struct AttachmentThumb: View {
                 Image(uiImage: img).resizable().scaledToFill()
             } else if store.failedAttachments.contains(id) {
                 VStack(spacing: 4) {
-                    Image(systemName: "photo.badge.exclamationmark").font(.system(size: 18)).foregroundStyle(p.labelTertiary)
+                    Image(systemName: "photo.badge.exclamationmark").font(.system(.headline)).foregroundStyle(p.labelTertiary)
                     Text("图片不可用").font(.yzCaption).foregroundStyle(p.labelTertiary)
                 }
             } else {
@@ -284,11 +297,14 @@ struct AssistantBubble: View {
                 HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(p.labelTertiary).frame(width: 6, height: 6) } }
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 14)
+        .padding(.horizontal, 14).padding(.vertical, 12)
         .background(
-            UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 6, bottomTrailingRadius: 22, topTrailingRadius: 22, style: .continuous)
+            UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous)
                 .fill(p.surfaceElevated)
-                .shadow(color: p.shadow.opacity(0.07), radius: 10, y: 6)
+        )
+        .overlay(
+            UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous)
+                .strokeBorder(p.border, lineWidth: 1)
         )
         .contextMenu { Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }
     }
@@ -332,7 +348,7 @@ struct InputBar<Accessory: View>: View {
                                     .frame(width: 72, height: 72)
                                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 Button { pending.removeAll { $0.id == img.id } } label: {
-                                    Image(systemName: "xmark.circle.fill").font(.system(size: 18)).symbolRenderingMode(.palette)
+                                    Image(systemName: "xmark.circle.fill").font(.system(.headline)).symbolRenderingMode(.palette)
                                         .foregroundStyle(.white, Color.black.opacity(0.6))
                                 }
                                 .offset(x: 5, y: -5)
@@ -347,12 +363,12 @@ struct InputBar<Accessory: View>: View {
             }
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...5)
-                .font(.system(size: 16))
+                .font(.system(.callout))
                 .focused($focused)
                 .padding(.horizontal, 12).padding(.top, 8)
             HStack(spacing: 8) {
                 PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
-                    Image(systemName: "photo.on.rectangle").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                    Image(systemName: "photo.on.rectangle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
                         .frame(width: 36, height: 36).background(Circle().fill(p.fill))
                 }
                 .onChange(of: pickerItems) { _, items in
@@ -371,7 +387,7 @@ struct InputBar<Accessory: View>: View {
                 }
                 if let onCommands {
                     Button(action: onCommands) {
-                        Image(systemName: "slash.circle").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                        Image(systemName: "slash.circle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
                             .frame(width: 36, height: 36).background(Circle().fill(p.fill))
                     }
                 }
@@ -379,13 +395,13 @@ struct InputBar<Accessory: View>: View {
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
-                        .font(.system(size: 16, weight: .bold)).foregroundStyle(p.brandInk)
-                        .frame(width: 40, height: 40)
-                        .liquidGlass(in: Circle(), tint: p.brand, interactive: true)
-                        .background(Circle().fill(p.brand.opacity(0.85)))
+                        .font(.system(.callout, weight: .bold)).foregroundStyle(p.brandInk)
+                        .frame(width: 38, height: 38)
+                        .background(Circle().fill(p.brand))
                 }
                 .disabled(empty)
-                .opacity(empty ? 0.5 : 1)
+                .opacity(empty ? 0.45 : 1)
+                .accessibilityLabel(sendHint == .queue ? "排队发送" : "发送")
                 .contextMenu {
                     if let onSendNow {
                         Button { onSend() } label: { Label("排队发送", systemImage: "text.line.first.and.arrowtriangle.forward") }
@@ -395,7 +411,7 @@ struct InputBar<Accessory: View>: View {
             }
         }
         .padding(8)
-        .liquidGlass(in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 }
 
@@ -417,26 +433,26 @@ struct QueuedBubble: View {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .trailing, spacing: 6) {
                     if !item.text.isEmpty {
-                        Text(item.text).font(.system(size: 16)).foregroundStyle(p.labelSecondary).multilineTextAlignment(.trailing)
+                        Text(item.text).font(.system(.callout)).foregroundStyle(p.labelSecondary).multilineTextAlignment(.trailing)
                     }
                     HStack(spacing: 5) {
-                        Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
+                        Image(systemName: "clock").font(.system(.caption2, weight: .semibold))
                         Text(item.deliveryState == "uncertain" ? "发送结果待确认，检查历史后移除" : item.deliveryState == "dispatching" ? "正在发送" : "排队中")
                             .font(.yzCaption).fontWeight(.semibold)
                     }
                     .foregroundStyle(p.labelTertiary)
                 }
                 Button(action: onCancel) {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 18))
+                    Image(systemName: "xmark.circle.fill").font(.system(.headline))
                         .symbolRenderingMode(.hierarchical).foregroundStyle(p.labelTertiary)
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
             .background(
-                UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous)
                     .fill(p.fill)
                     .overlay(
-                        UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                        UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous)
                             .strokeBorder(p.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                     )
             )

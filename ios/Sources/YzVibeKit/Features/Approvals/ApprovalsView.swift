@@ -6,31 +6,52 @@ struct ApprovalsView: View {
     @Environment(\.palette) private var p
     @State private var segment = 0
 
+    private var list: [Approval] { segment == 0 ? store.pendingApprovals : store.resolvedApprovals }
+
     var body: some View {
         NavigationStack {
-            PageScaffold(eyebrow: "全部设备", title: "审批") {
-                Image(systemName: "faceid").font(.system(size: 20)).foregroundStyle(p.label)
-                    .frame(width: 44, height: 44).liquidGlass(in: Circle())
-            } content: {
-                SegmentedPills(items: [(0, "待处理 \(store.pendingApprovals.count)"), (1, "历史")], selection: $segment)
-                let list = segment == 0 ? store.pendingApprovals : store.resolvedApprovals
-                if list.isEmpty {
-                    PaperCard {
-                        VStack(spacing: 10) {
-                            Image(systemName: "checkmark.shield").font(.system(size: 36, weight: .light)).foregroundStyle(p.sage)
-                            Text(segment == 0 ? "没有待处理的审批" : "还没有历史记录").font(.yzHeadline).foregroundStyle(p.label)
-                            Text("Agent 需要执行敏感操作时会出现在这里。").font(.yzSubhead).foregroundStyle(p.labelSecondary)
-                        }.frame(maxWidth: .infinity)
+            List {
+                Section {
+                    Picker("范围", selection: $segment) {
+                        Text("待处理 \(store.pendingApprovals.count)").tag(0)
+                        Text("历史").tag(1)
                     }
-                } else {
-                    ForEach(list) { a in ApprovalCardView(approval: a, showsContext: true) }
+                    .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets(top: 4, leading: Spacing.page, bottom: 8, trailing: Spacing.page))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
                 }
-                HStack(spacing: 12) {
-                    Image(systemName: "lock").foregroundStyle(p.sage)
-                    Text("高风险审批默认需要 Face ID 确认，可在「我 › 安全」中调整。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+
+                ForEach(list) { a in
+                    ApprovalCardView(approval: a, showsContext: true)
+                        .listRowInsets(EdgeInsets(top: 5, leading: Spacing.page, bottom: 5, trailing: Spacing.page))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 }
-                .padding(16)
-                .liquidGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+
+                if !list.isEmpty {
+                    Section {
+                        Label("高风险审批默认需要 Face ID 确认，可在「我 › 安全」中调整。", systemImage: "lock")
+                            .font(.yzFootnote)
+                            .foregroundStyle(p.labelSecondary)
+                            .listRowInsets(EdgeInsets(top: 10, leading: Spacing.page, bottom: 20, trailing: Spacing.page))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .paperBackground()
+            .navigationTitle("审批")
+            .overlay {
+                if list.isEmpty {
+                    ContentUnavailableView {
+                        Label(segment == 0 ? "没有待处理的审批" : "还没有历史记录", systemImage: "checkmark.shield")
+                    } description: {
+                        Text("Agent 需要执行敏感操作时会出现在这里。")
+                    }
+                }
             }
         }
     }
@@ -45,12 +66,12 @@ struct ApprovalCardView: View {
     @State private var busy = false
 
     private var riskColor: Color { approval.risk == .high ? p.danger : approval.risk == .medium ? p.amber : p.sage }
-    private var riskTone: ChipTone { approval.risk == .high ? .danger : approval.risk == .medium ? .claude : .sage }
+    private var riskTone: ChipTone { approval.risk == .high ? .danger : approval.risk == .medium ? .warning : .sage }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: approval.kind.symbol).font(.system(size: 14, weight: .semibold)).foregroundStyle(riskColor)
+                Image(systemName: approval.kind.symbol).font(.system(.footnote, weight: .semibold)).foregroundStyle(riskColor)
                     .frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(riskColor.opacity(0.14)))
                 Text(approval.status == .pending ? "需要你的批准" : approval.kind.displayName).font(.yzHeadline).foregroundStyle(p.label)
                 Spacer(minLength: 4)
@@ -78,8 +99,8 @@ struct ApprovalCardView: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: "checkmark.shield").font(.system(size: 12, weight: .semibold))
-                            Text("总是允许…").font(.system(size: 14, weight: .semibold))
+                            Image(systemName: "checkmark.shield").font(.system(.caption, weight: .semibold))
+                            Text("总是允许…").font(.yzFootnoteStrong)
                         }
                         .foregroundStyle(p.labelSecondary)
                         .padding(.horizontal, 12).frame(height: 34)
@@ -89,9 +110,19 @@ struct ApprovalCardView: View {
                 }
             }
         }
-        .padding(16)
-        .overlay(alignment: .leading) { RoundedRectangle(cornerRadius: 2).fill(riskColor).frame(width: 4).padding(.vertical, 14) }
-        .liquidGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(14)
+        .padding(.leading, 4)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.card, style: .continuous).fill(p.surfaceElevated)
+        )
+        .overlay(alignment: .leading) {
+            // 风险色条：贴着卡片左缘，替代旧版的整块玻璃着色
+            UnevenRoundedRectangle(topLeadingRadius: Radius.card, bottomLeadingRadius: Radius.card, style: .continuous)
+                .fill(riskColor)
+                .frame(width: 4)
+        }
+        .overlay(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).strokeBorder(p.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
     private var statusChip: some View {
@@ -99,7 +130,7 @@ struct ApprovalCardView: View {
         case .allowed: Chip("已允许", tone: .sage)
         case .denied: Chip("已拒绝", tone: .danger)
         case .expired: Chip("已过期", tone: .fill)
-        case .pending: Chip("待处理", tone: .claude)
+        case .pending: Chip("待处理", tone: .warning)
         }
     }
 

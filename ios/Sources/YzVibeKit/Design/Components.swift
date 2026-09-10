@@ -1,30 +1,21 @@
 import SwiftUI
 import UIKit
 
-// MARK: - 背景：纸感 + 三个装饰球
+// MARK: - 背景：暖纸
 
+/// 页面底色。方向 B 去掉了旧版的三个柔焦装饰球 —— 它们是「不像 iOS」最主要的来源，
+/// 也让系统玻璃没法正确折射。现在只保留一层暖纸底，层级完全交给系统的 List / 材质。
 public struct AmbientBackground: View {
     @Environment(\.palette) private var p
     public init() {}
     public var body: some View {
-        ZStack {
-            p.surface.ignoresSafeArea()
-            GeometryReader { geo in
-                ZStack {
-                    Circle().fill(p.brandSoft).frame(width: 360, height: 360).offset(x: -120, y: -140)
-                    Circle().fill(p.amberSoft).frame(width: 300, height: 300).offset(x: geo.size.width - 170, y: -40)
-                    Circle().fill(p.sageSoft).frame(width: 420, height: 420).offset(x: (geo.size.width - 420) / 2, y: geo.size.height - 160)
-                }
-                .blur(radius: 60)
-                .opacity(p.orbAlpha)
-            }
-            .ignoresSafeArea()
-        }
+        p.surface.ignoresSafeArea()
     }
 }
 
 // MARK: - 纸感卡片
 
+/// 内容卡：暖纸白 + 发丝描边 + 几乎不可见的投影。深度靠描边而不是阴影，和系统列表同一个语言。
 public struct PaperCard<Content: View>: View {
     @Environment(\.palette) private var p
     var padding: CGFloat
@@ -34,14 +25,12 @@ public struct PaperCard<Content: View>: View {
         self.padding = padding; self.radius = radius; self.content = content
     }
     public var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content()
             .padding(padding)
-            .background(
-                RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .fill(p.surfaceElevated)
-                    .shadow(color: p.shadow.opacity(0.05), radius: 1, y: 1)
-                    .shadow(color: p.shadow.opacity(0.07), radius: 10, y: 6)
-            )
+            .background(shape.fill(p.surfaceElevated))
+            .overlay(shape.strokeBorder(p.border, lineWidth: 1))
+            .shadow(color: p.shadow.opacity(0.04), radius: 2, y: 1)
     }
 }
 
@@ -55,14 +44,15 @@ public struct Eyebrow: View {
     public var body: some View {
         Text(text.uppercased())
             .font(.yzEyebrow)
-            .kerning(1.2)
+            .kerning(0.8)
             .foregroundStyle(color ?? p.labelSecondary)
     }
 }
 
 // MARK: - 胶囊标签
 
-public enum ChipTone { case claude, codex, custom, sage, brand, fill, danger }
+/// 方向 B 收敛了强调色：Claude 用品牌橙，其余 Agent 一律中性，避免界面出现五种彩色胶囊。
+public enum ChipTone { case claude, codex, custom, sage, brand, fill, danger, warning }
 
 public struct Chip: View {
     @Environment(\.palette) private var p
@@ -75,23 +65,21 @@ public struct Chip: View {
     }
     private var colors: (bg: Color, fg: Color, stroke: Color?) {
         switch tone {
-        case .claude: return (p.amberSoft, p.amberText, p.amber.opacity(0.6))
-        case .codex: return (p.purpleSoft, p.purple, p.purple.opacity(0.4))
-        case .custom: return (p.blueSoft, p.blue, p.blue.opacity(0.4))
-        case .sage: return (p.sageSoft, p.sage, p.sage.opacity(0.5))
-        case .brand: return (p.brandSoft, p.brand, p.brand.opacity(0.4))
-        case .danger: return (p.dangerSoft, p.danger, p.danger.opacity(0.45))
-        case .fill: return (p.fill, p.labelSecondary, nil)
+        case .claude, .brand: return (p.brandSoft, p.brandText, nil)
+        case .codex, .custom, .fill: return (p.fill, p.labelSecondary, nil)
+        case .sage: return (p.sageSoft, p.sage, nil)
+        case .warning: return (p.amberSoft, p.amberText, nil)
+        case .danger: return (p.dangerSoft, p.danger, nil)
         }
     }
     public var body: some View {
         let c = colors
-        HStack(spacing: 5) {
-            if let icon { Image(systemName: icon).font(.system(size: 11, weight: .semibold)) }
-            Text(text).font(mono ? .yzMono : .system(size: 13, weight: .semibold))
+        HStack(spacing: 4) {
+            if let icon { Image(systemName: icon).font(.system(.caption2, weight: .semibold)) }
+            Text(text).font(mono ? .yzMono : .yzFootnoteStrong)
         }
-        .padding(.horizontal, 11)
-        .frame(height: 28)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
         .foregroundStyle(c.fg)
         .background(Capsule().fill(c.bg))
         .overlay { if let s = c.stroke { Capsule().strokeBorder(s, lineWidth: 1) } }
@@ -110,9 +98,8 @@ public extension Chip {
     }
     static func mode(_ mode: ConnectionMode) -> Chip {
         switch mode {
-        case .tunnel: return Chip(mode.displayName, tone: .brand)
         case .local: return Chip(mode.displayName, tone: .sage)
-        case .p2p, .tailscale, .relay: return Chip(mode.displayName, tone: .custom)
+        default: return Chip(mode.displayName, tone: .fill)
         }
     }
 }
@@ -121,52 +108,31 @@ public extension Chip {
 
 public struct StatusDot: View {
     @Environment(\.palette) private var p
-    public enum Tone { case sage, amber, danger, off }
+    public enum Tone { case sage, brand, amber, danger, off }
     let tone: Tone
     public init(_ tone: Tone) { self.tone = tone }
+    /// 空闲=绿，运行中=品牌橙，待审批/出错=红，已关闭=灰。
     public init(session status: SessionStatus) {
         switch status {
         case .idle: tone = .sage
-        case .running: tone = .amber
+        case .running: tone = .brand
         case .waitingApproval, .error: tone = .danger
         case .closed: tone = .off
         }
     }
     private var color: Color {
-        switch tone { case .sage: p.sage; case .amber: p.amber; case .danger: p.danger; case .off: p.labelTertiary }
-    }
-    public var body: some View {
-        Circle().fill(color).frame(width: 9, height: 9)
-            .overlay(Circle().stroke(color.opacity(tone == .off ? 0 : 0.25), lineWidth: 3))
-    }
-}
-
-// MARK: - 分段控件（玻璃/胶囊）
-
-public struct SegmentedPills<T: Hashable>: View {
-    @Environment(\.palette) private var p
-    let items: [(T, String)]
-    @Binding var selection: T
-    public init(items: [(T, String)], selection: Binding<T>) { self.items = items; _selection = selection }
-    public var body: some View {
-        HStack(spacing: 4) {
-            ForEach(items, id: \.0) { item in
-                let on = item.0 == selection
-                Button { withAnimation(Motion.quick) { selection = item.0 } } label: {
-                    Text(item.1)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(on ? p.brand : p.labelSecondary)
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(
-                            Capsule().fill(on ? p.brandSoft : .clear)
-                                .overlay(Capsule().strokeBorder(on ? p.brand : .clear, lineWidth: 1.5))
-                        )
-                }
-                .buttonStyle(.plain)
-            }
+        switch tone {
+        case .sage: p.sage
+        case .brand: p.brand
+        case .amber: p.amber
+        case .danger: p.danger
+        case .off: p.labelTertiary
         }
-        .padding(4)
-        .background(Capsule().fill(p.fill).overlay(Capsule().strokeBorder(p.border, lineWidth: 1)))
+    }
+    public var body: some View {
+        Circle().fill(color).frame(width: 8, height: 8)
+            .overlay(Circle().stroke(color.opacity(tone == .off ? 0 : 0.22), lineWidth: 3))
+            .accessibilityHidden(true)
     }
 }
 
@@ -201,26 +167,26 @@ public struct CodeBlock: View {
                     .lineLimit(lines)
                     .truncationMode(lines == nil ? .tail : .middle)
                     .textSelection(.enabled)
-                    .foregroundStyle(dark ? Color(oklch: 0.92, 0.02, 80) : p.labelSecondary)
+                    .foregroundStyle(dark ? Color(hex: 0xE8E2DA) : p.labelSecondary)
                     .frame(maxWidth: copyable ? nil : .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
             }
             .scrollDisabled(!copyable)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(dark ? Color(oklch: 0.20, 0.02, 50) : p.fillSecondary)
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(dark ? .clear : p.border, lineWidth: 1))
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(dark ? Color(hex: 0x2A2724) : p.fillSecondary)
+                .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(dark ? .clear : p.border, lineWidth: 1))
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
     }
 
     private var header: some View {
         HStack {
             Text(language?.isEmpty == false ? language! : "text")
                 .font(.yzCaption)
-                .foregroundStyle(dark ? Color(oklch: 0.68, 0.02, 80) : p.labelTertiary)
+                .foregroundStyle(dark ? Color(hex: 0xA9A199) : p.labelTertiary)
             Spacer(minLength: 8)
             Button {
                 UIPasteboard.general.string = text
@@ -231,44 +197,51 @@ public struct CodeBlock: View {
                 Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
                     .font(.yzCaption)
                     .labelStyle(.titleAndIcon)
-                    .foregroundStyle(dark ? Color(oklch: 0.88, 0.02, 80) : p.labelSecondary)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .foregroundStyle(dark ? Color(hex: 0xE8E2DA) : p.labelSecondary)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(Capsule().fill(dark ? Color.white.opacity(0.10) : p.fill))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(copied ? "已复制" : "复制代码")
         }
-        .padding(.leading, 12).padding(.trailing, 8).padding(.top, 8).padding(.bottom, 2)
+        .padding(.leading, 10).padding(.trailing, 8).padding(.top, 7).padding(.bottom, 1)
     }
 }
 
 // MARK: - 设置行
 
+/// 放在系统 `List` 里时用 `inset: 0`（List 自己会给行内边距）；放在 PaperCard 里时保留内边距。
 public struct SettingRow<Trailing: View>: View {
     @Environment(\.palette) private var p
+    @ScaledMetric(relativeTo: .body) private var glyph: CGFloat = 30
     let icon: String
     let color: Color
     let title: String
     var subtitle: String?
+    var inset: CGFloat
     let trailing: () -> Trailing
-    public init(icon: String, color: Color, title: String, subtitle: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing) {
-        self.icon = icon; self.color = color; self.title = title; self.subtitle = subtitle; self.trailing = trailing
+    public init(icon: String, color: Color, title: String, subtitle: String? = nil,
+                inset: CGFloat = Spacing.card, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.icon = icon; self.color = color; self.title = title
+        self.subtitle = subtitle; self.inset = inset; self.trailing = trailing
     }
     public var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(.subheadline, weight: .semibold))
                 .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(color))
-            VStack(alignment: .leading, spacing: 2) {
+                .frame(width: glyph, height: glyph)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(color))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.yzBody).foregroundStyle(p.label)
                 if let subtitle { Text(subtitle).font(.yzFootnote).foregroundStyle(p.labelSecondary) }
             }
             Spacer(minLength: 8)
             trailing()
         }
-        .padding(.horizontal, Spacing.card)
-        .frame(minHeight: 56)
+        .padding(.horizontal, inset)
+        .padding(.vertical, 6)
     }
 }
 
@@ -277,7 +250,7 @@ public struct SectionCard<Content: View>: View {
     let content: () -> Content
     public init(_ title: String, @ViewBuilder content: @escaping () -> Content) { self.title = title; self.content = content }
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Eyebrow(title).padding(.horizontal, 4)
             PaperCard(padding: 0) { VStack(spacing: 0) { content() }.padding(.vertical, 4) }
         }
@@ -287,5 +260,5 @@ public struct SectionCard<Content: View>: View {
 public struct Divider_: View {
     @Environment(\.palette) private var p
     public init() {}
-    public var body: some View { Rectangle().fill(p.border).frame(height: 1).padding(.horizontal, Spacing.card) }
+    public var body: some View { Rectangle().fill(p.border).frame(height: 1).padding(.leading, Spacing.card) }
 }

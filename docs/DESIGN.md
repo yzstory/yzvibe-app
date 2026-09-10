@@ -1,115 +1,122 @@
 # YzVibe 设计规范（多端共用）
 
-> 风格：Apple iOS 26 Liquid Glass（液态玻璃） × yukiTrace 暖调纸感配色
+> **方向 B「焦橙纸感」** —— 结构全部交给系统（大标题 / List / Tab 栏），品牌只通过一个焦橙和一层暖纸出现。
 > 本文是 iOS / Android / 小程序三端的视觉唯一来源；各端把 token 映射到自己的原生系统。
+> 备选方向与决策依据见 [design/directions/](../design/directions/)。
 
 ## 1. 设计立场
 
-- **玻璃只用于「漂浮层」**：导航条、Tab 栏、浮动输入条、审批卡、Toast。内容层永远是不透明的纸感卡片，保证可读性。
-- **暖而不腻**：底色是偏暖的米色纸（oklch 0.975 / hue 80），不是纯白；主色是赭红，克制使用，只给主按钮、选中态、状态强调。
-- **三种强调色各司其职**：赭红 = 行动 / 用户消息；鼠尾草 = 在线 / 成功 / 已批准；琥珀 = Claude 标签 / 等待中 / 警示。
-- **背景装饰球**：三个巨大的柔焦圆（brand-soft、sage-soft、amber-soft）固定在页面角落，玻璃层折射它们才有「液态」感。
-- **圆角大、阴影暖**：卡片 22-26pt，胶囊全圆，阴影用暖棕色而非纯黑。
+- **结构还给系统。** 大标题、搜索、Section、侧滑、Tab 栏一律用平台原生组件，不自绘。用户已经会用它们了。
+- **只有一个强调色。** 焦橙 `#C75015` 承担 tint、主按钮、用户气泡、选中态。其余状态用中性或语义色，界面上不出现第五种彩色胶囊。
+- **橙的面积控制在 10% 以内。** 大面积橙块只有一处：用户消息气泡（对应 Messages 的蓝气泡）。
+- **暖纸中性。** 底色是偏暖的纸 `#F9F6F2`，不是系统的冷灰，也不是纯白。深度靠**发丝描边**而不是投影。
+- **玻璃只给真正漂浮的东西。** 输入条、Toast、扫码取景框。内容层永远不透明。
+- **不做背景装饰。** 上一版的三个柔焦装饰球已移除 —— 它们是「不像 iOS」的主要来源，也让系统玻璃没有正确的折射对象。
 
 ## 2. 颜色 Token
 
+颜色**直接用 sRGB hex 定义**。上一版用 oklch 换算，文档标注的 `#C2573A` 和实际渲染的 `#DE602F` 差了整整一档、深色底比设计意图暗了一档；改用 hex 后文档与代码不会再漂。
+唯一来源：[Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift)。每次改色都要跑 `PaletteContrastTests`。
+
 ### 2.1 品牌与语义色
 
-| Token | Light | Dark | 用途 |
-|---|---|---|---|
-| `brand` | `oklch(0.64 0.17 40)` ≈ #C2573A | `oklch(0.72 0.15 42)` ≈ #E07A5A | 主按钮、用户气泡、选中态、链接 |
-| `brand-soft` | `oklch(0.94 0.04 45)` ≈ #F7E3DA | `oklch(0.30 0.06 40)` | 主色淡底、胶囊标签底 |
-| `sage` | `oklch(0.60 0.09 165)` ≈ #4E9A7E | `oklch(0.70 0.09 165)` | 在线、Connected、Allowed |
-| `sage-soft` | `oklch(0.93 0.035 165)` ≈ #DFF0E8 | `oklch(0.28 0.04 165)` | 绿色胶囊底 |
-| `amber` | `oklch(0.82 0.13 80)` ≈ #E6B54A | `oklch(0.85 0.12 82)` | Claude 标签、运行中状态点、等待审批 |
-| `amber-soft` | `oklch(0.96 0.05 85)` ≈ #FBF0D2 | `oklch(0.30 0.05 80)` | 琥珀胶囊底 |
-| `danger` | `oklch(0.60 0.20 25)` ≈ #D2453E | `oklch(0.70 0.18 25)` | Deny、Stop、YOLO 警示 |
-| `purple` | `oklch(0.55 0.15 310)` | `oklch(0.70 0.14 310)` | Codex 标签 |
-| `blue` | `oklch(0.58 0.13 235)` | `oklch(0.70 0.12 235)` | 自定义 Agent 标签、文件类型 |
+| Token | Light | Dark | 对比度 | 用途 |
+|---|---|---|---|---|
+| `brand` | `#C75015` | `#FF9868` | 白字 4.58:1 / 深字 8.19:1 | 主按钮、用户气泡、tint、选中态 |
+| `brandText` | `#A63D02` | `#FFB08A` | 浅橙底 5.30:1 | 胶囊里的橙色文字、小字强调 |
+| `brandSoft` | `#FFE5D8` | `#3A2A22` | — | 胶囊底、选中底 |
+| `brandInk` | `#FFFFFF` | `#241812` | — | 压在 brand 上的文字 |
+| `sage` | `#1B7046` | `#5FD08E` | 纸底 5.65:1 | 在线、空闲、已允许 |
+| `danger` | `#C4261C` | `#FF6961` | 纸底 5.35:1 | 拒绝、停止、待审批 |
+| `amber` | `#B0761A` | `#E8B45C` | 纸底 3.58:1 | 中风险色条、图标（不承载正文） |
+| `amberText` | `#8A5A0E` | `#E8B45C` | 琥珀底 5.19:1 | 琥珀胶囊里的文字 |
+| `purple` / `blue` | `#6E4B9E` / `#1F6FA8` | `#C09AE8` / `#6FB6E8` | — | 设置页图标底，不用于状态语义 |
+
+**橙色的使用规则**：`brand` 用于填充和 tint；小字、链接、胶囊文字一律用 `brandText`。
+这是苹果自己的做法 —— `systemOrange #FF9500` 配白字只有 2.20:1，苹果从不让橙色承担文字对比。
 
 ### 2.2 纸感分层（Surface）
 
 | Token | Light | Dark | 用途 |
 |---|---|---|---|
-| `surface` | `oklch(0.975 0.009 80)` ≈ #F8F5F0 | `oklch(0.16 0.008 60)` ≈ #262422 | 页面底 |
-| `surface-elevated` | `oklch(0.995 0.004 85)` ≈ #FEFDFB | `oklch(0.215 0.01 60)` ≈ #34312E | 卡片 |
-| `fill` | `oklch(0.935 0.012 75)` ≈ #EDE8DF | `oklch(0.29 0.012 60)` | 输入框、次级按钮 |
-| `fill-secondary` | `oklch(0.958 0.01 78)` | `oklch(0.25 0.01 60)` | 分组底、代码块底 |
-| `border` | `oklch(0.90 0.014 70)` | `oklch(1 0 0 / 9%)` | 分割线、描边 |
-| `label` | `oklch(0.22 0.02 45)` ≈ #34302B | `oklch(0.96 0.008 80)` | 主文字 |
-| `label-secondary` | `oklch(0.50 0.02 55)` ≈ #7A7268 | `oklch(0.72 0.015 70)` | 副文字 |
-| `label-tertiary` | `oklch(0.68 0.018 60)` ≈ #A9A196 | `oklch(0.52 0.012 60)` | 占位、时间戳 |
+| `surface` | `#F9F6F2` | `#201E1B` | 页面底（暖纸 / 暖灰棕，都不用纯白或纯黑） |
+| `surfaceElevated` | `#FFFDFA` | `#2C2A27` | 卡片、气泡 |
+| `fill` | `#EFEAE2` | `#383530` | 输入框、次级按钮、中性胶囊 |
+| `fillSecondary` | `#F4F0E9` | `#322F2B` | 代码块底 |
+| `border` | `#E6DFD5` | `white 12%` | 发丝描边、分割线 |
+| `label` | `#231813` | `#F5F2EE` | 主文字（16.1:1 / 14.9:1） |
+| `labelSecondary` | `#6D6059` | `#B5AEA6` | 副文字（5.62:1 / 7.58:1） |
+| `labelTertiary` | `#877E78` | `#8A837B` | 时间戳、占位（3.69:1 / 4.44:1） |
 
-### 2.3 玻璃（Liquid Glass）
+### 2.3 增强对比度
+
+系统「增强对比度」开关打开时切到 `lightHighContrast` / `darkHighContrast`：
+主色压到 `#A83B00`（白字 6.38:1），三级文字提到 `#6F675F`（5.16:1），描边加深。
+由 `PaletteProvider` 读 `\.colorSchemeContrast` 自动完成，视图层不用管。
+
+### 2.4 玻璃（只给漂浮层）
 
 | Token | 值 | 说明 |
 |---|---|---|
-| `glass-fill` | `surface-elevated @ 62%` | 玻璃底色（iOS 26 用 `.glassEffect(.regular)`，其它端用 blur+半透明） |
-| `glass-blur` | 24px, saturate 180% | |
-| `glass-stroke` | 内描边 0.5pt `white @ 55%`（dark: `white @ 12%`） | 顶部高光 |
-| `glass-shadow` | `0 0 0 0.5px oklch(0.3 0.03 50/0.1), 0 10px 30px oklch(0.3 0.03 50/0.10)` | 暖阴影 |
-| `glass-tint-brand` | brand @ 18% | 主按钮玻璃变体（发送键、Allow 键） |
-
-### 2.4 装饰球（Ambient Orbs）
-- 左上：`brand-soft`，直径 360pt，偏移 (-120, -140)
-- 右上：`amber-soft`，直径 300pt，偏移 (+140, -40)
-- 底部中：`sage-soft`，直径 420pt，偏移 (0, +220)
-- 模糊半径 60pt，opacity 0.8（dark 0.35）
+| 材质 | iOS 26 `.glassEffect(.regular)`；< 26 用 `.regularMaterial` | 不再手绘白色高光渐变 |
+| 描边 | 0.5pt `border` | 系统材质自带高光，只补一圈边 |
+| 降低透明度 | `accessibilityReduceTransparency` 打开时换成不透明 `surfaceElevated` | 必须处理，否则文字读不清 |
+| 用在哪 | 输入条、Toast、配对遮罩、扫码取景框 | 仅此四处 |
 
 ## 3. 字体
 
-| 样式 | iOS | 大小/字重 | 用途 |
-|---|---|---|---|
-| Large Title | SF Pro Display / 苹方 | 34 / Bold, tracking -0.5 | 页面大标题 |
-| Title 1 | | 28 / Bold | 卡片大标题 |
-| Title 2 | | 22 / Semibold | 会话名 |
-| Headline | | 17 / Semibold | 列表主文字 |
-| Body | | 17 / Regular | 消息正文 |
-| Callout | | 16 | 按钮 |
-| Subhead | | 15 | 副文字 |
-| Footnote | | 13 | 时间、说明 |
-| Caption / Eyebrow | | 12 / Semibold, tracking +1.2, 大写 | 分组标题（如 AGENT） |
-| Mono | SF Mono / Menlo | 14 | 路径、命令、代码块 |
-| Display（可选） | Fraunces / New York | 仅用于拉丁字母数字的大数字 | 待审批计数 |
+全部基于系统文本样式，**跟随动态字体缩放**。不再写死 pt —— 需要固定尺寸的控件用 `@ScaledMetric`。
+
+| 语义 | 映射 | 用途 |
+|---|---|---|
+| `yzLargeTitle` | `.largeTitle` bold | 系统大标题（由 `.navigationTitle` 提供） |
+| `yzTitle2` / `yzTitle3` | `.title2` / `.title3` semibold | 卡片标题、会话名 |
+| `yzHeadline` | `.headline` | 列表主文字 |
+| `yzBody` | `.body` | 消息正文、设置行 |
+| `yzCallout` | `.callout` semibold | 按钮 |
+| `yzSubhead` / `yzSubheadStrong` | `.subheadline` | 副文字 |
+| `yzFootnote` / `yzFootnoteStrong` | `.footnote` | 时间、说明、胶囊 |
+| `yzCaption` / `yzEyebrow` | `.caption` | 分组标题、辅助信息 |
+| `yzMono` / `yzMonoBody` | `.footnote` / `.subheadline` + `.monospaced` | 路径、命令、代码 |
 
 ## 4. 形状、间距、动效
 
-- 圆角：sm 10 / md 14 / lg 18 / xl 22 / 2xl 26 / 胶囊 999
-- 页面横向边距 20pt；卡片内边距 18pt；列表项高 56pt；Tab 栏高 64pt（玻璃胶囊，悬浮距底 12pt）
-- 触控目标 ≥ 44pt
-- 动效：`ease-out cubic-bezier(0.23,1,0.32,1)` 220ms；抽屉 `cubic-bezier(0.32,0.72,0,1)` 400ms；按压 scale 0.97 160ms
-- 玻璃元素滚动时保持 morph（iOS 26 `GlassEffectContainer`）
+- 圆角：sm 8 / md 10 / lg 14 / xl 16 / 2xl 20 / 卡片 16 / 胶囊全圆。比上一版整体收紧一档，贴近系统列表。
+- 页面横向边距 20pt；卡片内边距 14–16pt；触控目标 ≥ 44pt
+- 动效：`ease-out cubic-bezier(0.23,1,0.32,1)` 220ms；抽屉 `cubic-bezier(0.32,0.72,0,1)` 400ms；按压 scale 0.97
+- 阴影几乎不用：卡片只有 `shadow 4% / radius 2`，层级靠描边和留白
 
 ## 5. 组件规范
 
 | 组件 | 规格 |
 |---|---|
-| GlassNavBar | 高 52，圆角 26 胶囊，玻璃；左返回圆钮 44，中标题，右动作 |
-| GlassTabBar | 4 项，胶囊玻璃，选中项 brand 圆底 + 白图标；审批项带 amber 角标 |
-| PaperCard | surface-elevated，圆角 24，暖阴影 card |
-| StatusDot | 8pt 圆：sage=在线/空闲，amber=运行中，danger=需审批，tertiary=离线 |
-| AgentChip | 胶囊 28 高；Claude=amber-soft/amber 字，Codex=purple-soft，Custom=blue-soft |
-| SessionCard | StatusDot + AgentChip + 来源 Chip + 时间；标题 Title2；路径 mono 在 fill-secondary 块中 |
-| ApprovalCard | 玻璃卡 + danger/amber 左侧色条；命令 mono 块；三键：Deny（danger 描边）/ Allow once（fill）/ Allow（brand 实心） |
-| MessageBubble | 用户：brand 实心，白字，圆角 22 右下 6；助手：surface-elevated，label 字，圆角 22 左下 6，带 Copy 按钮 |
-| ToolCallCard | 折叠：图标 + 工具名 + 状态；展开：参数 mono |
-| QuickReplyChip | 胶囊 fill 底，border 描边，Subhead |
-| GlassInputBar | 胶囊玻璃，内含文本域 + 相机 + 发送圆钮（brand） |
-| SegmentedGlass | 分段：选中项 brand-soft 底 + brand 描边 |
-| Toggle | on=brand |
-| DeviceCard | 设备名 Title2 + 连接方式 Chip（Tunnel/LAN/P2P/TS）+ 在线点 + 会话数 |
-| QRScanner | 全屏相机，中央 260pt 玻璃取景框，四角 brand 高光 |
+| 导航 | 系统 `NavigationStack` + `.navigationTitle` + `.searchable`；不自绘导航条 |
+| Tab 栏 | 系统 `TabView`，`.tint(brand)`，审批项用系统 `.badge` |
+| 列表 | 会话 / 审批用 `List(.plain)` + 每行一张 `PaperCard`；设置类用 `List(.insetGrouped)` |
+| PaperCard | `surfaceElevated`，圆角 16，1pt `border` 描边，阴影 4% |
+| StatusDot | 8pt：`sage`=空闲/在线，`brand`=运行中，`danger`=待审批/出错，`labelTertiary`=已关闭 |
+| Chip | 胶囊，`.footnote` semibold；Claude=`brandSoft`/`brandText`，Codex 与自定义=`fill`/`labelSecondary` |
+| SessionCard | StatusDot + AgentChip + 来源 + 时间；标题 `.title3`；路径 mono 块；侧滑=停止 / 复制路径 |
+| ApprovalCard | 纸卡 + 左侧 4pt 风险色条；命令 mono 块；拒绝（描边）/ 允许（brand 实心）/ 总是允许…（菜单） |
+| MessageBubble | 用户：`brand` 实心 + `brandInk`，圆角 20 右下 6；助手：`surfaceElevated` + 描边，圆角 20 左下 6 |
+| GlassInputBar | 圆角 22 玻璃；相机 / 命令 / 会话选项胶囊 / 发送圆钮（brand 实心 38pt） |
+| 空状态 | 一律 `ContentUnavailableView`，不自绘 |
+| 分段控件 | 一律系统 `Picker(.segmented)` |
 
 ## 6. 各端映射
 
 | 概念 | iOS | Android | 小程序 |
 |---|---|---|---|
-| 玻璃 | iOS 26 `.glassEffect()`；<26 `.ultraThinMaterial` + 描边 | `Modifier.blur` + 半透明 Surface（Compose 1.7 `graphicsLayer` RenderEffect） | `backdrop-filter: blur(24px)`（Skyline 支持） |
-| 颜色 | Asset Catalog 或 Color(oklch→sRGB) | `Color(…)` Material 3 自定义 scheme | CSS 变量 |
-| 字体 | SF Pro / 苹方 | Roboto / 思源黑体 | 系统字体 |
+| 结构 | `NavigationStack` / `List` / `TabView` | `Scaffold` + `LargeTopAppBar` + `LazyColumn` + `NavigationBar` | 原生导航栏 + `scroll-view` |
+| 颜色 | `Palette`（hex） | Material 3 自定义 scheme | CSS 变量 |
+| 字体 | 系统文本样式 + 动态字体 | `MaterialTheme.typography` + `fontScale` | `rpx` + 系统字号设置 |
+| 玻璃 | `.glassEffect()` / `.regularMaterial` | `Modifier.hazeEffect` 或半透明 Surface | `backdrop-filter: blur(24px)` |
 | 圆角 | `RoundedRectangle(cornerRadius:, style: .continuous)` | `RoundedCornerShape` | `border-radius` |
 
-## 7. 深色模式
-- 底色偏暖灰棕，不用纯黑；玻璃改为 `white @ 8%` 底 + `white @ 12%` 描边
-- 装饰球 opacity 降到 0.35
-- brand 提亮到 0.72 L 保证对比度
+## 7. 无障碍红线
+
+1. **动态字体**：不写死字号。违反了在大字号下会截断。
+2. **对比度**：正文 4.5:1、非文本 3:1。由 [PaletteContrastTests](../ios/Tests/YzVibeKitTests/PaletteContrastTests.swift) 在 CI 上守住。
+3. **降低透明度**：玻璃必须有不透明回落。
+4. **增强对比度**：走 `lightHighContrast` / `darkHighContrast`。
+5. 纯图标按钮必须有 `accessibilityLabel`；纯装饰元素 `accessibilityHidden(true)`。

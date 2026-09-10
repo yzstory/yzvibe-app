@@ -11,51 +11,35 @@ struct RulesView: View {
     private var rules: [ApprovalRule] { store.rules(for: device?.id) }
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("这些规则会让同类请求不再发到手机上。删掉之后，下次又会正常询问。")
-                        .font(.yzSubhead).foregroundStyle(p.labelSecondary)
-                    if rules.isEmpty {
-                        PaperCard {
-                            VStack(spacing: 10) {
-                                Image(systemName: "checkmark.shield").font(.system(size: 34, weight: .light)).foregroundStyle(p.sage)
-                                Text(loading ? "正在读取…" : "还没有规则").font(.yzHeadline).foregroundStyle(p.label)
-                                Text("在审批卡上点「总是允许…」就会在这里出现。").font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
-                            }.frame(maxWidth: .infinity)
+        List {
+            Section {
+                ForEach(rules) { rule in
+                    RuleRow(rule: rule)
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                Task { if let d = device { await store.deleteRule(rule, on: d.id) } }
+                            } label: { Label("撤销", systemImage: "trash") }
                         }
-                    } else {
-                        ForEach(rules) { rule in
-                            PaperCard(padding: 16) {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    HStack(spacing: 8) {
-                                        Chip(rule.scope == "global" ? "所有会话" : "本会话", tone: rule.scope == "global" ? .custom : .brand)
-                                        if let t = rule.tool { Chip(t, tone: .fill, mono: true) }
-                                        Spacer(minLength: 4)
-                                        if let r = rule.remaining { Text(r).font(.yzFootnote).foregroundStyle(p.labelTertiary) }
-                                    }
-                                    Text(rule.description).font(.yzBody).foregroundStyle(p.label)
-                                    HStack {
-                                        Text(rule.hits > 0 ? "已自动放行 \(rule.hits) 次" : "还没用到过").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                                        Spacer()
-                                        Button(role: .destructive) {
-                                            Task { if let d = device { await store.deleteRule(rule, on: d.id) } }
-                                        } label: {
-                                            Label("撤销", systemImage: "trash").font(.system(size: 14, weight: .semibold))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
-                .padding(Spacing.page)
-                .padding(.bottom, 40)
+            } footer: {
+                Text("这些规则会让同类请求不再发到手机上。左滑撤销后，下次又会正常询问。")
+                    .font(.yzFootnote)
+                    .padding(.top, 6)
             }
         }
+        .listStyle(.insetGrouped)
+        .paperBackground()
         .navigationTitle("审批规则")
         .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if rules.isEmpty {
+                ContentUnavailableView {
+                    Label(loading ? "正在读取…" : "还没有规则", systemImage: "checkmark.shield")
+                } description: {
+                    Text("在审批卡上点「总是允许…」就会在这里出现。")
+                }
+            }
+        }
         .task { await load() }
         .refreshable { await load() }
     }
@@ -65,6 +49,27 @@ struct RulesView: View {
         loading = true
         await store.loadRules(for: d)
         loading = false
+    }
+}
+
+/// 一条规则：范围 + 工具 + 命中次数。
+struct RuleRow: View {
+    @Environment(\.palette) private var p
+    let rule: ApprovalRule
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Chip(rule.scope == "global" ? "所有会话" : "本会话", tone: rule.scope == "global" ? .fill : .brand)
+                if let t = rule.tool { Chip(t, tone: .fill, mono: true) }
+                Spacer(minLength: 4)
+                if let r = rule.remaining { Text(r).font(.yzFootnote).foregroundStyle(p.labelTertiary) }
+            }
+            Text(rule.description).font(.yzBody).foregroundStyle(p.label)
+            Text(rule.hits > 0 ? "已自动放行 \(rule.hits) 次" : "还没用到过")
+                .font(.yzFootnote).foregroundStyle(p.labelSecondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 

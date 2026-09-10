@@ -19,25 +19,20 @@ struct SessionDiffView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if store.session(sessionId)?.baseCommit != nil {
-                        SegmentedPills(items: [("working", "全部未提交"), ("session", "这次会话")], selection: $scope)
+                        Picker("范围", selection: $scope) {
+                            Text("全部未提交").tag("working")
+                            Text("这次会话").tag("session")
+                        }
+                        .pickerStyle(.segmented)
                     }
                     if loading && diff == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 60)
                     } else if let d = diff, !d.repo {
-                        PaperCard {
-                            VStack(spacing: 10) {
-                                Image(systemName: "questionmark.folder").font(.system(size: 34, weight: .light)).foregroundStyle(p.labelTertiary)
-                                Text(d.reason ?? "看不到改动对比").font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
-                            }.frame(maxWidth: .infinity)
-                        }
+                        ContentUnavailableView("看不到改动对比", systemImage: "questionmark.folder",
+                                               description: Text(d.reason ?? "这个工作目录不是 Git 仓库。"))
                     } else if let d = diff, d.files.isEmpty {
-                        PaperCard {
-                            VStack(spacing: 10) {
-                                Image(systemName: "checkmark.seal").font(.system(size: 34, weight: .light)).foregroundStyle(p.sage)
-                                Text("工作目录是干净的").font(.yzHeadline).foregroundStyle(p.label)
-                                Text(scope == "session" ? "这次会话还没有改动任何文件。" : "没有未提交的改动。").font(.yzSubhead).foregroundStyle(p.labelSecondary)
-                            }.frame(maxWidth: .infinity)
-                        }
+                        ContentUnavailableView("工作目录是干净的", systemImage: "checkmark.seal",
+                                               description: Text(scope == "session" ? "这次会话还没有改动任何文件。" : "没有未提交的改动。"))
                     } else if let d = diff {
                         summary(d)
                         ForEach(d.files) { f in fileCard(f) }
@@ -85,7 +80,7 @@ struct SessionDiffView: View {
                     withAnimation(Motion.quick) { if open { expanded.remove(f.path) } else { expanded.insert(f.path) } }
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: icon(for: f)).font(.system(size: 14, weight: .semibold)).foregroundStyle(color(for: f))
+                        Image(systemName: icon(for: f)).font(.system(.footnote, weight: .semibold)).foregroundStyle(color(for: f))
                             .frame(width: 30, height: 30)
                             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(color(for: f).opacity(0.14)))
                         VStack(alignment: .leading, spacing: 2) {
@@ -104,7 +99,7 @@ struct SessionDiffView: View {
                             Text("二进制").font(.yzCaption).foregroundStyle(p.labelTertiary)
                         }
                         if f.diff != nil {
-                            Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold))
+                            Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))
                                 .foregroundStyle(p.labelTertiary).rotationEffect(.degrees(open ? 0 : -90))
                         }
                     }

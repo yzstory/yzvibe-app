@@ -37,74 +37,65 @@ struct DirectoryPickerView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AmbientBackground()
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "folder").font(.system(size: 22)).foregroundStyle(p.brand)
-                            .frame(width: 52, height: 52).background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.brandSoft))
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("选择目录").font(.yzTitle2).foregroundStyle(p.label)
-                            Text("在电脑文件系统中浏览并选择一个文件夹。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                        }
-                        Spacer()
-                        Button { showNewFolder = true } label: {
-                            Image(systemName: "folder.badge.plus").font(.system(size: 16, weight: .semibold)).foregroundStyle(p.label)
-                                .frame(width: 44, height: 44).background(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(p.border, lineWidth: 1))
-                        }
-                        .disabled(listing == nil)
-                    }
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.turn.down.right").font(.system(size: 12)).foregroundStyle(p.labelTertiary)
-                        Text(listing?.path ?? initialPath ?? "…").font(.yzMono).foregroundStyle(p.label).lineLimit(1).truncationMode(.head)
-                    }
-                    .padding(.horizontal, 14).frame(height: 46).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fill).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
-                    HStack(spacing: 8) {
-                        if let parent = listing?.parent {
-                            Button { Task { await load(parent) } } label: { Chip("上级目录 \((parent as NSString).lastPathComponent)", tone: .brand, icon: "arrow.up") }.buttonStyle(.plain)
-                        }
-                        if let home = listing?.home, home != listing?.path {
-                            Button { Task { await load(home) } } label: { Chip("主目录", tone: .fill, icon: "house") }.buttonStyle(.plain)
-                        }
-                    }
-                    if let error { Text(error).font(.yzFootnote).foregroundStyle(p.danger) }
-                    PaperCard(padding: 0) {
-                        if loading && listing == nil {
-                            ProgressView().frame(maxWidth: .infinity).padding(30)
-                        } else if let entries = listing?.entries, !entries.isEmpty {
-                            ScrollView {
-                                LazyVStack(spacing: 0) {
-                                    ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
-                                        Button { Task { await load(e.path) } } label: {
-                                            HStack(spacing: 12) {
-                                                Image(systemName: "folder").foregroundStyle(p.brand)
-                                                Text(e.name).font(.yzMonoBody).foregroundStyle(p.label).lineLimit(1)
-                                                Spacer()
-                                                Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(p.labelTertiary)
-                                            }
-                                            .padding(.horizontal, Spacing.card).frame(minHeight: 52)
-                                        }.buttonStyle(.plain)
-                                        if i < entries.count - 1 { Divider_() }
-                                    }
+            List {
+                Section {
+                    if loading && listing == nil {
+                        HStack { Spacer(); ProgressView(); Spacer() }
+                    } else if let entries = listing?.entries, !entries.isEmpty {
+                        ForEach(entries) { e in
+                            Button { Task { await load(e.path) } } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "folder").foregroundStyle(p.brand)
+                                    Text(e.name).font(.yzMonoBody).foregroundStyle(p.label).lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "chevron.right").font(.system(.caption, weight: .semibold)).foregroundStyle(p.labelTertiary)
                                 }
-                                .padding(.vertical, 4)
                             }
-                        } else {
-                            Text("这个目录下没有子文件夹").font(.yzSubhead).foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity).padding(30)
+                            .buttonStyle(.plain)
+                        }
+                    } else {
+                        Text("这个目录下没有子文件夹").font(.yzSubhead).foregroundStyle(p.labelTertiary)
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(listing?.path ?? initialPath ?? "…")
+                            .font(.yzMono).foregroundStyle(p.label).lineLimit(1).truncationMode(.head)
+                        HStack(spacing: 6) {
+                            if let parent = listing?.parent {
+                                Button { Task { await load(parent) } } label: {
+                                    Chip("上级 \((parent as NSString).lastPathComponent)", tone: .brand, icon: "arrow.up")
+                                }.buttonStyle(.plain)
+                            }
+                            if let home = listing?.home, home != listing?.path {
+                                Button { Task { await load(home) } } label: { Chip("主目录", tone: .fill, icon: "house") }
+                                    .buttonStyle(.plain)
+                            }
                         }
                     }
-                    .frame(maxHeight: .infinity)
+                    .textCase(nil)
+                    .padding(.bottom, 4)
+                } footer: {
+                    if let error { Text(error).foregroundStyle(p.danger) }
                 }
-                .padding(Spacing.page)
             }
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 10) {
-                    Button("取消") { dismiss() }.buttonStyle(OutlineButtonStyle(height: 52)).frame(maxWidth: 150)
-                    Button { if let path = listing?.path { onPick(path); dismiss() } } label: { Label("选择此文件夹", systemImage: "checkmark") }
-                        .buttonStyle(PrimaryButtonStyle(height: 52)).disabled(listing == nil)
+            .listStyle(.insetGrouped)
+            .paperBackground()
+            .navigationTitle("选择目录")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showNewFolder = true } label: { Image(systemName: "folder.badge.plus") }
+                        .disabled(listing == nil)
+                        .accessibilityLabel("新建文件夹")
                 }
+            }
+            .safeAreaInset(edge: .bottom) {
+                Button { if let path = listing?.path { onPick(path); dismiss() } } label: {
+                    Label("选择此文件夹", systemImage: "checkmark")
+                }
+                .buttonStyle(PrimaryButtonStyle(height: 52))
+                .disabled(listing == nil)
                 .padding(.horizontal, Spacing.page).padding(.bottom, 8)
             }
             .alert("新建文件夹", isPresented: $showNewFolder) {

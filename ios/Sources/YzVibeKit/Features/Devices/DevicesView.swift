@@ -10,35 +10,52 @@ struct DevicesView: View {
 
     var body: some View {
         NavigationStack {
-            PageScaffold(eyebrow: "YzVibe", title: "设备", subtitle: "已配对的电脑保存在本机，离开桌面也能一键重连。") {
+            List {
                 if store.devices.isEmpty {
                     emptyState
+                        .listRowInsets(EdgeInsets(top: 8, leading: Spacing.page, bottom: 8, trailing: Spacing.page))
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
                 } else {
-                    VStack(spacing: 14) {
+                    Section {
                         ForEach(store.devices) { device in
                             Button {
                                 store.selectedDeviceId = device.id
                                 onOpenSessions()
                             } label: { DeviceCard(device: device) }
                             .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 6, leading: Spacing.page, bottom: 6, trailing: Spacing.page))
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) { store.remove(device) } label: { Label("移除", systemImage: "trash") }
+                                Button { Task { await store.refresh(device) } } label: { Label("刷新", systemImage: "arrow.clockwise") }
+                                    .tint(p.labelSecondary)
+                            }
                             .contextMenu {
-                                Button("刷新") { Task { await store.refresh(device) } }
-                                Button("移除设备", role: .destructive) { store.remove(device) }
+                                Button { Task { await store.refresh(device) } } label: { Label("刷新", systemImage: "arrow.clockwise") }
+                                Button(role: .destructive) { store.remove(device) } label: { Label("移除设备", systemImage: "trash") }
                             }
                         }
+                    } footer: {
+                        Text("已配对的电脑保存在本机，离开桌面也能一键重连。")
+                            .font(.yzFootnote)
+                            .padding(.horizontal, Spacing.page).padding(.top, 6)
                     }
                 }
             }
+            .listStyle(.plain)
+            .environment(\.defaultMinListRowHeight, 0)
+            .paperBackground()
+            .navigationTitle("设备")
+            .refreshable { for d in store.devices { await store.refresh(d) } }
             .safeAreaInset(edge: .bottom) {
-                GlassGroup {
-                    HStack(spacing: 10) {
-                        Button { showScanner = true } label: { Label("扫码配对", systemImage: "qrcode.viewfinder") }
-                            .buttonStyle(.yzPrimary)
-                            .frame(maxWidth: .infinity)
-                        Button { showManual = true } label: { Label("手动添加", systemImage: "pencil") }
-                            .buttonStyle(.yzGlass)
-                            .frame(width: 150)
-                    }
+                HStack(spacing: 10) {
+                    Button { showScanner = true } label: { Label("扫码配对", systemImage: "qrcode.viewfinder") }
+                        .buttonStyle(.yzPrimary)
+                    Button { showManual = true } label: { Label("手动添加", systemImage: "pencil") }
+                        .buttonStyle(.yzSecondary)
+                        .frame(width: 148)
                 }
                 .padding(.horizontal, Spacing.page)
                 .padding(.bottom, 8)
@@ -50,14 +67,16 @@ struct DevicesView: View {
 
     private var emptyState: some View {
         PaperCard {
-            VStack(spacing: 14) {
-                Image(systemName: "qrcode.viewfinder").font(.system(size: 44, weight: .light)).foregroundStyle(p.brand)
+            VStack(spacing: 12) {
+                Image(systemName: "qrcode.viewfinder").font(.system(size: 42, weight: .light)).foregroundStyle(p.brand)
                 Text("还没有配对的电脑").font(.yzHeadline).foregroundStyle(p.label)
-                Text("在电脑上运行下面命令，然后扫描终端里的二维码。").font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
+                Text("在电脑上运行下面命令，然后扫描终端里的二维码。")
+                    .font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
                 CodeBlock("npx yzvibe")
                 Button("先看看演示数据") { store.loadDemo() }.font(.yzSubhead).foregroundStyle(p.brand)
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
         }
     }
 }
@@ -67,23 +86,23 @@ struct DeviceCard: View {
     let device: Device
 
     var body: some View {
-        PaperCard {
-            VStack(alignment: .leading, spacing: 14) {
+        PaperCard(padding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
                     Image(systemName: "desktopcomputer")
-                        .font(.system(size: 20))
+                        .font(.system(.title3))
                         .foregroundStyle(p.labelSecondary)
-                        .frame(width: 44, height: 44)
-                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fill))
+                        .frame(width: 42, height: 42)
+                        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(p.fill))
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 8) {
                             StatusDot(device.online ? .sage : .off)
-                            Text(device.name).font(.yzTitle2).foregroundStyle(p.label).lineLimit(1)
+                            Text(device.name).font(.yzTitle3).foregroundStyle(p.label).lineLimit(1)
                         }
                         Text(device.endpoint).font(.yzMono).foregroundStyle(p.labelSecondary).lineLimit(1).truncationMode(.middle)
                     }
                     Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).foregroundStyle(p.labelTertiary)
+                    Image(systemName: "chevron.right").font(.system(.footnote, weight: .semibold)).foregroundStyle(p.labelTertiary)
                 }
                 HStack(spacing: 8) {
                     Chip.mode(device.mode)
@@ -114,70 +133,69 @@ struct ManualEndpointView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                AmbientBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        pasteCard
-                        PaperCard {
-                            VStack(alignment: .leading, spacing: 16) {
-                                Eyebrow("或者手填")
-                                Text("支持局域网 IP、Tailscale IP，或 https:// 开头的 relay 地址。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                                HStack(spacing: 10) {
-                                    field("Host", text: $host, placeholder: "192.168.0.11")
-                                    field("Port", text: $port, placeholder: String(Device.defaultPort)).frame(width: 110).keyboardType(.numberPad)
-                                }
-                                field("Token", text: $token, placeholder: "终端里显示的配对 Token", secure: true)
-                                if let error { Text(error).font(.yzFootnote).foregroundStyle(p.danger) }
+            Form {
+                Section {
+                    TextEditor(text: $pasted)
+                        .font(.yzMono)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .scrollContentBackground(.hidden)
+                        .frame(height: 96)
+                        .overlay(alignment: .topLeading) {
+                            if pasted.isEmpty {
+                                Text("{ \"yzvibe\": 1, \"host\": …, \"token\": … }")
+                                    .font(.yzMono).foregroundStyle(p.labelTertiary)
+                                    .padding(.top, 8).allowsHitTesting(false)
                             }
                         }
-                        Button {
-                            Task { await connect() }
-                        } label: {
-                            if busy { ProgressView().tint(p.brandInk) } else { Label("连接", systemImage: "arrow.right") }
-                        }
-                        .buttonStyle(.yzPrimary)
-                        .disabled(host.isEmpty || token.isEmpty || busy)
+                    HStack(spacing: 16) {
+                        Button { pasteFromClipboard() } label: { Label("从剪贴板粘贴", systemImage: "doc.on.clipboard") }
+                        Spacer(minLength: 0)
+                        Button { applyPasted() } label: { Label("填入", systemImage: "wand.and.stars") }
+                            .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .padding(Spacing.page)
+                    .buttonStyle(.borderless)
+                    .font(.yzSubhead)
+                } header: {
+                    Text("粘贴配置")
+                } footer: {
+                    if let notice { Text(notice).foregroundStyle(p.sage) }
+                    else { Text("在电脑上运行 yzvibe qr，把 JSON 配置或链接粘到这里，字段会自动填好。") }
+                }
+
+                Section {
+                    LabeledContent("Host") {
+                        TextField("192.168.0.11", text: $host)
+                            .font(.yzMonoBody).multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                    LabeledContent("Port") {
+                        TextField(String(Device.defaultPort), text: $port)
+                            .font(.yzMonoBody).multilineTextAlignment(.trailing).keyboardType(.numberPad)
+                    }
+                    LabeledContent("Token") {
+                        SecureField("终端里显示的配对 Token", text: $token)
+                            .font(.yzMonoBody).multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                } header: {
+                    Text("或者手填")
+                } footer: {
+                    if let error { Text(error).foregroundStyle(p.danger) }
+                    else { Text("支持局域网 IP、Tailscale IP，或 https:// 开头的 relay 地址。") }
                 }
             }
+            .paperBackground()
             .navigationTitle("手动添加")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-        }
-    }
-
-    /// 粘贴区：接受 `yzvibe qr --json` 的 JSON、浏览器外链，或 yzvibe:// 深链。
-    private var pasteCard: some View {
-        PaperCard {
-            VStack(alignment: .leading, spacing: 14) {
-                Eyebrow("粘贴配置")
-                Text("在电脑上运行 yzvibe qr，把 JSON 配置或链接粘到这里，字段会自动填好。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                CodeBlock("yzvibe qr --json")
-                TextEditor(text: $pasted)
-                    .font(.yzMono)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 108)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.fill).overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
-                    .overlay(alignment: .topLeading) {
-                        if pasted.isEmpty {
-                            Text("{ \"yzvibe\": 1, \"host\": …, \"token\": … }")
-                                .font(.yzMono).foregroundStyle(p.labelTertiary)
-                                .padding(.horizontal, 15).padding(.vertical, 14).allowsHitTesting(false)
-                        }
-                    }
-                HStack(spacing: 10) {
-                    Button { pasteFromClipboard() } label: { Label("从剪贴板粘贴", systemImage: "doc.on.clipboard") }
-                        .buttonStyle(.yzGlass)
-                    Button { applyPasted() } label: { Label("填入", systemImage: "wand.and.stars") }
-                        .buttonStyle(.yzGlass)
-                        .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .safeAreaInset(edge: .bottom) {
+                Button { Task { await connect() } } label: {
+                    if busy { ProgressView().tint(p.brandInk) } else { Label("连接", systemImage: "arrow.right") }
                 }
-                if let notice { Text(notice).font(.yzFootnote).foregroundStyle(p.sage) }
+                .buttonStyle(.yzPrimary)
+                .disabled(host.isEmpty || token.isEmpty || busy)
+                .padding(.horizontal, Spacing.page).padding(.bottom, 8)
             }
         }
     }
@@ -198,21 +216,6 @@ struct ManualEndpointView: View {
         port = String(payload.port)
         token = payload.token
         notice = "已填入\(payload.name.map { "：" + $0 } ?? "")，点「连接」即可"
-    }
-
-    private func field(_ label: String, text: Binding<String>, placeholder: String, secure: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(label).font(.yzSubhead).fontWeight(.semibold).foregroundStyle(p.label)
-            Group {
-                if secure { SecureField(placeholder, text: text) } else { TextField(placeholder, text: text) }
-            }
-            .font(.yzMonoBody)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.fill).overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
-        }
     }
 
     private func connect() async {

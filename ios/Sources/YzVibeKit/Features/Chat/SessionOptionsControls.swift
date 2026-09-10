@@ -21,9 +21,9 @@ struct OptionPill: View {
     var body: some View {
         let c = colors
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 12, weight: .semibold))
-            Text(text).font(.system(size: 14, weight: .semibold)).lineLimit(1)
-            Image(systemName: "chevron.up").font(.system(size: 9, weight: .bold)).opacity(0.7)
+            Image(systemName: icon).font(.system(.caption, weight: .semibold))
+            Text(text).font(.system(.footnote, weight: .semibold)).lineLimit(1)
+            Image(systemName: "chevron.up").font(.system(.caption2, weight: .bold)).opacity(0.7)
         }
         .padding(.horizontal, 11)
         .frame(height: 36)

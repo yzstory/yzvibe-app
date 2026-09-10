@@ -1,11 +1,14 @@
 import SwiftUI
 
-/// App 入口：四个 Tab（设备 / 会话 / 审批 / 我）。iOS 26 的 TabView 自带液态玻璃浮动 Tab 栏。
+/// App 入口：四个 Tab（设备 / 会话 / 审批 / 我）。Tab 栏、导航栏、列表全部用系统组件，
+/// 品牌只通过 `.tint` 和内容里的强调色出现。
 public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .devices
     @State private var pairingFromLink = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @AppStorage("yz.appearance") private var appearanceRaw = Settings.Appearance.auto.rawValue
 
     public enum Tab: Hashable { case devices, sessions, approvals, me }
@@ -13,6 +16,10 @@ public struct RootTabView: View {
     public init(store: AppStore? = nil) {
         _store = State(initialValue: store ?? AppStore.live())
     }
+
+    private var appearance: Settings.Appearance { Settings.Appearance(rawValue: appearanceRaw) ?? .auto }
+    /// `.preferredColorScheme` 只作用于子树，这里要自己算出生效的模式，否则深色下 tint 会取错色板。
+    private var effectiveScheme: ColorScheme { appearance.colorScheme ?? systemScheme }
 
     public var body: some View {
         PaletteProvider {
@@ -31,9 +38,9 @@ public struct RootTabView: View {
                     .tabItem { Label("我", systemImage: "person.crop.circle") }
                     .tag(Tab.me)
             }
-            .tint(Palette.light.brand)
+            .tint(Palette.current(effectiveScheme, contrast).brand)
             .environment(store)
-            .preferredColorScheme(Settings.Appearance(rawValue: appearanceRaw)?.colorScheme)
+            .preferredColorScheme(appearance.colorScheme)
             .overlay(alignment: .top) { ToastView(text: $store.toast) }
             .overlay { if pairingFromLink { pairingOverlay } }
             // 手机浏览器打开连接器的 /pair 外链后，落地页跳到 yzvibe://pair?… 唤起这里
@@ -68,7 +75,7 @@ public struct RootTabView: View {
                 Text("正在配对…").font(.yzSubhead)
             }
             .padding(24)
-            .liquidGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .liquidGlass(in: RoundedRectangle(cornerRadius: Radius.xxl, style: .continuous))
         }
         .transition(.opacity)
     }
@@ -100,10 +107,11 @@ struct ToastView: View {
             Text(text)
                 .font(.yzSubhead)
                 .foregroundStyle(p.label)
-                .padding(.horizontal, 18).padding(.vertical, 12)
+                .padding(.horizontal, 16).padding(.vertical, 10)
                 .liquidGlass(in: Capsule())
                 .padding(.top, 8)
                 .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityAddTraits(.isStaticText)
                 .task {
                     try? await Task.sleep(nanoseconds: 3_000_000_000)
                     withAnimation(Motion.quick) { self.text = nil }
@@ -112,42 +120,18 @@ struct ToastView: View {
     }
 }
 
-/// 通用页面容器：装饰球背景 + 大标题。
-struct PageScaffold<Content: View, Trailing: View>: View {
+/// 页面统一背景：系统 List / ScrollView 之下的一层暖纸。
+/// 大标题、搜索、工具栏一律交给各页自己的 `NavigationStack` + 系统修饰符，不再自绘。
+struct PaperBackground: ViewModifier {
     @Environment(\.palette) private var p
-    let eyebrow: String
-    let title: String
-    var subtitle: String?
-    let trailing: () -> Trailing
-    let content: () -> Content
-
-    init(eyebrow: String, title: String, subtitle: String? = nil,
-         @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() },
-         @ViewBuilder content: @escaping () -> Content) {
-        self.eyebrow = eyebrow; self.title = title; self.subtitle = subtitle; self.trailing = trailing; self.content = content
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
+            .background(p.surface.ignoresSafeArea())
     }
+}
 
-    var body: some View {
-        ZStack {
-            AmbientBackground()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(alignment: .bottom) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Eyebrow(eyebrow, color: p.brand)
-                            Text(title).font(.yzLargeTitle).foregroundStyle(p.label)
-                            if let subtitle { Text(subtitle).font(.yzSubhead).foregroundStyle(p.labelSecondary) }
-                        }
-                        Spacer()
-                        trailing()
-                    }
-                    .padding(.top, 8)
-                    content()
-                }
-                .padding(.horizontal, Spacing.page)
-                .padding(.bottom, 120)
-            }
-        }
-        .toolbar(.hidden, for: .navigationBar)
-    }
+extension View {
+    /// 给 List / ScrollView 换上暖纸底色（系统默认是冷灰）。
+    func paperBackground() -> some View { modifier(PaperBackground()) }
 }

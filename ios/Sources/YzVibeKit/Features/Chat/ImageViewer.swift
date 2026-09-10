@@ -11,12 +11,12 @@ struct ImageViewer: View {
             Color.black.ignoresSafeArea()
             ZoomableImage(image: image).ignoresSafeArea()
             HStack {
-                Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40).background(Circle().fill(.white.opacity(0.18))) }
+                Button { dismiss() } label: { Image(systemName: "xmark").font(.system(.subheadline, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40).background(Circle().fill(.white.opacity(0.18))) }
                 Spacer()
                 Text("\(Int(image.size.width)) × \(Int(image.size.height))").font(.yzCaption).monospacedDigit().foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 ShareLink(item: Image(uiImage: image), preview: SharePreview("图片", image: Image(uiImage: image))) {
-                    Image(systemName: "square.and.arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40).background(Circle().fill(.white.opacity(0.18)))
+                    Image(systemName: "square.and.arrow.up").font(.system(.subheadline, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40).background(Circle().fill(.white.opacity(0.18)))
                 }
             }
             .padding(.horizontal, 16).padding(.top, 8)

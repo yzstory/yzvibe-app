@@ -39,7 +39,7 @@ struct ToolCallCard: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelSecondary)
+            Image(systemName: symbol).font(.system(.footnote, weight: .semibold)).foregroundStyle(p.labelSecondary)
                 .frame(width: 28, height: 28).background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(p.surfaceElevated))
             VStack(alignment: .leading, spacing: 1) {
                 Text(call.name).font(.yzFootnote).fontWeight(.semibold).foregroundStyle(p.label)
@@ -52,7 +52,7 @@ struct ToolCallCard: View {
             case .error: Chip("失败", tone: .danger)
             }
             if hasOutput {
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold))
+                Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))
                     .foregroundStyle(p.labelTertiary).rotationEffect(.degrees(expanded ? 0 : -90))
             }
         }
@@ -77,7 +77,7 @@ struct ToolOutputView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                         Text(line.isEmpty ? " " : String(line))
-                            .font(.system(size: 12, design: .monospaced))
+                            .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(color(for: line))
                             .padding(.horizontal, 8).padding(.vertical, 1)
                             .frame(maxWidth: .infinity, alignment: .leading)
