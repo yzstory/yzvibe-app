@@ -40,3 +40,9 @@
 - 连接器：`agents/usage.js` 归一每轮 token（Claude result / Codex turn.completed），`Session.usage` 含本轮与累计；`quota.js` 用本机 OAuth token 调 `api/oauth/usage`（含 Fable 本周额度 `weekly_scoped`），失败退回 `rate_limit_event`；`GET /quota?agent=`
 - iOS：导航栏环形表（上下文占比）→「上下文详情」面板：上下文进度条、账号剩余用量（5 小时 / 本周 / 本周 Fable，含重置时间与来源）、本轮与累计 tokens、费用；图片上传前缩到 1568px JPEG
 - 验证：connector 10 个测试、YzVibeKit 15 个测试
+
+## 2026-09-10 终端会话导入 / 模型列表 / 去掉快捷回复
+- 连接器 `transcripts.js`：列出 ~/.claude/projects 与 ~/.codex/sessions 里的会话（标题、cwd、分支、来源），手机打开时解析 transcript 接管，之后 --resume 续聊；Codex 额度从 rollout 的 token_count.rate_limits 取
+- Claude 预置模型改为带版本的完整 ID：claude-fable-5-1 / claude-opus-5 / claude-sonnet-5 / claude-haiku-4-5-20251001（Haiku 5 尚不存在）
+- iOS：会话卡显示「终端 / SDK」来源与 git 分支，「我」页可关闭终端会话显示；「模型列表」编辑器按 Agent 增删改模型 ID 与显示名，可恢复默认；聊天页去掉快捷回复
+- 验证：connector 11 个测试，YzVibeKit 18 个测试

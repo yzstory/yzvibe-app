@@ -17,7 +17,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /fs/dirs?path= | 目录浏览（选工作目录用）：`{ path, parent, home, entries:[{name,path}] }`，只列目录、跳过隐藏项；path 缺省为主目录 |
 | POST | /fs/mkdir | `{ parent, name }` → `{ path }`（201）；名字含路径分隔符或以 . 开头 → 400 |
 | GET | /quota?agent=claude\|codex | 账号剩余额度，见下文「用量与额度」 |
-| GET | /sessions | 会话列表 |
+| GET | /sessions | 会话列表：手机建的 + 电脑终端里跑过的（见「终端会话导入」），按更新时间倒序 |
 | POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, mode?, model?, effort? }` → Session（201）；cwd 不存在 → 400。旧字段 `yolo:true` 等价 `mode:'trust'` |
 | GET | /sessions/:id | 单个会话 |
 | PATCH | /sessions/:id | `{ mode?, model?, effort? }` 改会话选项 → Session；`model`/`effort` 传 `null` 或空串恢复默认；广播 `session.updated` |
@@ -61,7 +61,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 ## 数据模型（三端共用）
 ```ts
 type Device  = { id, name, host, port, mode: 'tunnel'|'local'|'p2p'|'tailscale'|'relay', online: boolean, lastSeen }
-type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null, usage: SessionUsage|null }
+type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null, usage: SessionUsage|null, source: 'phone'|'terminal'|'sdk', branch: string|null }
 type SessionUsage = { model, turn: TurnUsage, total: { input, cacheWrite, cacheRead, output, thinking, costUSD|null, turns }, updatedAt }
 type TurnUsage = { model, input, cacheWrite, cacheRead, output, thinking, contextTokens, contextWindow, costUSD|null, durationMs|null }
 type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, attachments?, toolCall?, createdAt }
@@ -100,3 +100,13 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
   接口失败时退回最近一次流式输出里的 `rate_limit_event`（`unifiedWindows.five_hour / seven_day / seven_day_overage_included(Fable)`），并带 `warning`。结果缓存 60 秒，`?force=1` 强刷。
   Codex 返回 `unavailable`：非交互模式没有额度接口。
 - **手机端图片**：上传前长边缩到 1568px 并转 JPEG（`ios/…/ImagePrep.swift`），与 API 的缩放阈值一致，避免原图超过 5MB 被拒绝。
+
+## 终端会话导入
+
+连接器把本机 CLI 里已经进行过的会话也列出来（`connector/src/transcripts.js`），手机上可以直接接着聊：
+- Claude Code：`~/.claude/projects/<cwd 编码>/<sessionId>.jsonl`（`CLAUDE_CONFIG_DIR` 可改）。标题取 `ai-title`，没有则取第一条用户消息；`cwd` / `gitBranch` / `entrypoint` 来自记录头。`entrypoint = cli` → `source: terminal`，其他（SDK / 其他工具的 headless 调用）→ `sdk`。
+- Codex：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（`CODEX_HOME` 可改）。标题取第一条 `user_message`，`cwd` 来自 `session_meta`。
+- 列表阶段只读文件头（最近 45 天、每种 Agent 最多 80 个文件，按 mtime 缓存）；id 形如 `claude:<sessionId>` / `codex:<threadId>`。
+- 手机第一次访问某个终端会话（取消息、发消息、改选项）时连接器**接管**它：以同一 id 入库、把 transcript 翻译成消息历史（最多 300 条，工具调用变成工具卡），之后发消息走 `--resume <sessionId>` / `codex exec resume <threadId>`，与手机自建会话无异。接管后列表里不再重复。
+- 已被本连接器创建的会话（agentSessionId 已知）不会被当成终端会话重复列出。`createConnector({ importTerminal: false })` 可关闭。
+- Codex 额度：`GET /quota?agent=codex` 从最近的 rollout 里的 `token_count.rate_limits` 取（5 小时 / 本周窗口），带 `warning` 说明不是实时值。

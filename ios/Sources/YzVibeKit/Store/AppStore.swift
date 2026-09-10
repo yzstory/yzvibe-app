@@ -62,12 +62,17 @@ public final class AppStore {
         capabilities[deviceId ?? ""]?[agent.rawValue] ?? .fallback(for: agent)
     }
     public func capabilities(for session: Session) -> AgentCapabilities { capabilities(for: session.agent, on: session.deviceId) }
+    /// 模型菜单用的列表：用户在「模型列表」里改过就用用户的，否则用连接器 / 内置的。
+    public func modelOptions(for agent: AgentKind, caps: AgentCapabilities) -> [ModelOption] {
+        settings.modelPresets(for: agent) ?? caps.models
+    }
 
     public func sessions(for device: Device?, activeOnly: Bool, query: String) -> [Session] {
         guard let device else { return [] }
         return sessions
             .filter { $0.deviceId == device.id }
             .filter { !activeOnly || $0.status != .closed }
+            .filter { settings.showTerminalSessions || $0.source == .phone }
             .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.cwd.localizedCaseInsensitiveContains(query) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
@@ -332,7 +337,22 @@ public struct Settings: Codable, Sendable {
     public var customModels: [String: [String]]?
     /// 每种 Agent 上次用的模式 / 模型 / 强度，作为新建会话的默认值。
     public var sessionDefaults: [String: SessionOptions]?
+    /// 用户手动维护的模型列表（覆盖连接器 / 内置列表）；nil 表示用默认。
+    public var modelPresets: [String: [ModelOption]]?
+    /// 会话列表里是否显示电脑终端里跑过的会话。
+    public var showTerminalSessionsRaw: Bool?
     public init() {}
+
+    public var showTerminalSessions: Bool {
+        get { showTerminalSessionsRaw ?? true }
+        set { showTerminalSessionsRaw = newValue }
+    }
+    public func modelPresets(for agent: AgentKind) -> [ModelOption]? { modelPresets?[agent.rawValue] }
+    public mutating func setModelPresets(_ list: [ModelOption]?, for agent: AgentKind) {
+        var map = modelPresets ?? [:]
+        if let list { map[agent.rawValue] = list } else { map.removeValue(forKey: agent.rawValue) }
+        modelPresets = map.isEmpty ? nil : map
+    }
 
     public func customModels(for agent: AgentKind) -> [String] { customModels?[agent.rawValue] ?? [] }
     public mutating func addCustomModel(_ id: String, for agent: AgentKind) {

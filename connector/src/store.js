@@ -22,7 +22,7 @@ export class Store extends EventEmitter {
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
     this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, createdAt }]
-    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
+    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.autoAllow = new Map();                                             // `${sessionId}:${toolName}:${summary}` → true
@@ -47,7 +47,7 @@ export class Store extends EventEmitter {
   // ---------- 会话 ----------
   createSession({ agent, cwd, title, mode = 'normal', model = null, effort = null }) {
     const now = new Date().toISOString();
-    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort, usage: null };
+    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort, usage: null, source: 'phone', branch: null };
     this.sessions.unshift(s);
     this.messages.set(s.id, []);
     this.#saveSessions();
@@ -55,7 +55,19 @@ export class Store extends EventEmitter {
     return s;
   }
   session(id) { return this.sessions.find((s) => s.id === id) ?? null; }
-  publicSession(s) { const { agentSessionId, ...rest } = s; return rest; }
+  /** 接管一个终端里的会话：以它的 id 入库并预填历史消息，之后发消息走 --resume。 */
+  adoptSession(imported, messages = []) {
+    if (this.session(imported.id)) return this.session(imported.id);
+    const { file, ...rest } = imported;
+    const s = { ...rest, status: 'idle', pendingApprovals: 0 };
+    this.sessions.unshift(s);
+    this.messages.set(s.id, messages.map((m) => ({ ...m, sessionId: s.id })));
+    this.#saveMessages(s.id);
+    this.#saveSessions();
+    this.emit('event', { type: 'session.created', session: this.publicSession(s) });
+    return s;
+  }
+  publicSession(s) { const { agentSessionId, file, ...rest } = s; return rest; }
   listSessions() { return this.sessions.map((s) => this.publicSession(s)); }
   setStatus(id, status) {
     const s = this.session(id); if (!s) return;

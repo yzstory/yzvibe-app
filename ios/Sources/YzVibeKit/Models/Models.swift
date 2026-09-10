@@ -106,8 +106,8 @@ public struct AgentCapabilities: Codable, Hashable, Sendable {
                         "normal": .init(flag: "--permission-prompt-tool", description: "敏感操作发到手机审批"),
                         "trust": .init(flag: "--dangerously-skip-permissions", description: "跳过所有权限检查，不再产生审批")],
                 efforts: ["low", "medium", "high", "xhigh", "max"],
-                models: [ModelOption(id: "fable", label: "Fable 5.1"), ModelOption(id: "opus", label: "Opus"),
-                         ModelOption(id: "sonnet", label: "Sonnet"), ModelOption(id: "haiku", label: "Haiku")])
+                models: [ModelOption(id: "claude-fable-5-1", label: "Fable 5.1"), ModelOption(id: "claude-opus-5", label: "Opus 5"),
+                         ModelOption(id: "claude-sonnet-5", label: "Sonnet 5"), ModelOption(id: "claude-haiku-4-5-20251001", label: "Haiku 4.5")])
         }
     }
 }
@@ -283,19 +283,23 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var model: String?
     public var effort: String?
     public var usage: SessionUsage?
+    /// phone = 手机建的；terminal = 电脑终端里跑过的；sdk = 其他工具以 SDK/headless 方式跑的
+    public var source: SessionSource
+    public var branch: String?
 
     public init(id: String = UUID().uuidString, deviceId: String, agent: AgentKind, cwd: String, title: String,
                 status: SessionStatus = .idle, createdAt: Date = .now, updatedAt: Date = .now, pendingApprovals: Int = 0,
-                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil, usage: SessionUsage? = nil) {
+                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil, usage: SessionUsage? = nil,
+                source: SessionSource = .phone, branch: String? = nil) {
         self.id = id; self.deviceId = deviceId; self.agent = agent; self.cwd = cwd; self.title = title
         self.status = status; self.createdAt = createdAt; self.updatedAt = updatedAt; self.pendingApprovals = pendingApprovals
-        self.mode = mode; self.model = model; self.effort = effort; self.usage = usage
+        self.mode = mode; self.model = model; self.effort = effort; self.usage = usage; self.source = source; self.branch = branch
     }
 
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -312,7 +316,14 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }
         effort = try c.decodeIfPresent(String.self, forKey: .effort).flatMap { $0.isEmpty ? nil : $0 }
         usage = try? c.decodeIfPresent(SessionUsage.self, forKey: .usage)
+        source = SessionSource(rawValue: try c.decodeIfPresent(String.self, forKey: .source) ?? "") ?? .phone
+        branch = try c.decodeIfPresent(String.self, forKey: .branch).flatMap { $0.isEmpty ? nil : $0 }
     }
+}
+
+public enum SessionSource: String, Codable, Sendable {
+    case phone, terminal, sdk
+    public var displayName: String { switch self { case .phone: "手机"; case .terminal: "终端"; case .sdk: "SDK" } }
 }
 
 public enum MessageRole: String, Codable, Sendable { case user, assistant, tool, system }

@@ -33,6 +33,14 @@ struct MeView: View {
                     SettingRow(icon: "folder", color: p.amberText, title: "按文件夹分组") { Toggle("", isOn: $store.settings.groupByFolder).labelsHidden().tint(p.brand) }
                     Divider_()
                     SettingRow(icon: "bolt", color: p.brand, title: "仅显示活跃") { Toggle("", isOn: $store.settings.activeOnly).labelsHidden().tint(p.brand) }
+                    Divider_()
+                    SettingRow(icon: "terminal", color: p.sage, title: "显示终端里的会话", subtitle: "电脑上用 claude / codex 跑过的会话也能接着聊") { Toggle("", isOn: $store.settings.showTerminalSessions).labelsHidden().tint(p.brand) }
+                }
+                SectionCard("Agent") {
+                    NavigationLink { ModelListEditorView() } label: {
+                        SettingRow(icon: "cpu", color: p.purple, title: "模型列表", subtitle: "会话里可选的模型 ID 与版本") { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(p.labelTertiary) }
+                    }
+                    .buttonStyle(.plain)
                 }
                 SectionCard("外观") {
                     SegmentedPills(items: [(Settings.Appearance.auto, "自动"), (.light, "浅色"), (.dark, "深色")],

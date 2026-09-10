@@ -73,7 +73,7 @@ struct ModelMenu: View {
     @State private var customText = ""
 
     private var options: [ModelOption] {
-        var list = caps.models
+        var list = store.modelOptions(for: agent, caps: caps)
         for id in store.settings.customModels(for: agent) where !list.contains(where: { $0.id == id }) { list.append(ModelOption(id: id)) }
         if let m = model, !m.isEmpty, !list.contains(where: { $0.id == m }) { list.append(ModelOption(id: m)) }
         return list

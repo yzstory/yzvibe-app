@@ -17,7 +17,7 @@ public enum MockData {
                                     turn: TurnUsage(model: "claude-fable-5-1", input: 32, cacheWrite: 741, cacheRead: 127_602, output: 1089, thinking: 210, contextTokens: 128_375, contextWindow: 200_000, costUSD: 0.42, durationMs: 18_400),
                                     total: TotalUsage(input: 1_204, cacheWrite: 41_300, cacheRead: 610_000, output: 6_820, thinking: 900, costUSD: 2.31, turns: 6), updatedAt: .now)),
         Session(id: "s2", deviceId: "d1", agent: .codex, cwd: "~/devops/aigc/yukiTrace", title: "修复 iOS Safari 日期输入溢出",
-                status: .idle, updatedAt: .now.addingTimeInterval(-1560)),
+                status: .idle, updatedAt: .now.addingTimeInterval(-1560), source: .terminal, branch: "main"),
         Session(id: "s3", deviceId: "d1", agent: .claude, cwd: "~/devops/aigc/YzVibe", title: "生成 iOS 设计 token",
                 status: .running, updatedAt: .now.addingTimeInterval(-60)),
         Session(id: "s4", deviceId: "d2", agent: .claude, cwd: "~/work/api-docs", title: "补充 API 文档",
@@ -50,6 +50,5 @@ public enum MockData {
         FileEntry(name: "marker-preview.png", path: "src/components/map/marker-preview.png", kind: .image, size: 318_000, modifiedAt: .now.addingTimeInterval(-3 * 86400)),
     ]
 
-    public static let quickReplies = ["继续", "LGTM，执行", "解释一下", "撤销上一步"]
     public static let recentFolders = ["~/devops/aigc/yukiTrace", "~/devops/aigc/YzVibe", "~/devops/aigc/lobehub"]
 }

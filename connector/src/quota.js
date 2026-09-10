@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { codexRateLimits } from './transcripts.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 const CACHE_TTL = 60_000;
@@ -75,7 +76,11 @@ export function quotaFromRateLimit(info) {
 
 /** GET /quota?agent=claude|codex 的实现。失败时返回 { error } 而不是抛，方便手机端展示。 */
 export async function agentQuota(agent = 'claude', { fetchImpl = fetch, force = false } = {}) {
-  if (agent === 'codex') return { agent: 'codex', source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: 'Codex 非交互模式暂无额度接口；请在终端里运行 codex 查看 /status' };
+  if (agent === 'codex') {
+    let rl = null; try { rl = codexRateLimits(); } catch {}
+    if (!rl) return { agent: 'codex', source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: '本机还没有 Codex 会话记录，先在终端或手机上跑一轮 Codex 后这里会显示额度' };
+    return { agent: 'codex', source: 'codex_session', fetchedAt: new Date(rl.at).toISOString(), limits: rl.limits.map(({ window, ...l }) => l), extraUsage: null, warning: '来自最近一次 Codex 对话时记录的额度，不是实时值' };
+  }
   if (!force && cache && Date.now() - cache.at < CACHE_TTL) return cache.quota;
   let quota;
   try {

@@ -253,7 +253,75 @@ test('额度：OAuth usage 归一 / rate_limit_event 兜底 / Codex 不可用', 
   rememberRateLimit({ unifiedWindows: { five_hour: { utilization: 0.5 } } });
   const fb = await agentQuota('claude', { fetchImpl: async () => ({ ok: false, status: 503 }), force: true });
   assert.equal(fb.source, 'rate_limit_event'); assert.equal(fb.limits[0].percent, 50); assert.ok(fb.warning);
-  const cx = await agentQuota('codex');
-  assert.equal(cx.limits.length, 0); assert.ok(cx.unavailable);
+  const cx = await agentQuota('codex');   // 本机有 Codex 记录时给额度，否则给 unavailable
+  assert.ok(cx.limits.length > 0 ? cx.source === 'codex_session' : cx.unavailable);
   resetQuotaCache();
+});
+
+test('导入终端会话：Claude / Codex transcript → 列表 → 接管 → 历史消息 / Codex 额度', async () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yz-claude-home-'));
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yz-codex-home-'));
+  const proj = path.join(claudeHome, 'projects', '-tmp-proj'); fs.mkdirSync(proj, { recursive: true });
+  const sid = '11111111-2222-3333-4444-555555555555';
+  fs.writeFileSync(path.join(proj, `${sid}.jsonl`), [
+    JSON.stringify({ type: 'attachment', cwd, gitBranch: 'main', entrypoint: 'cli', sessionId: sid, timestamp: '2026-09-09T10:00:00.000Z', uuid: 'x0' }),
+    JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: '<local-command-caveat>meta</local-command-caveat>' }, uuid: 'x1', timestamp: '2026-09-09T10:00:01.000Z', cwd }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '把地图组件拆开' }] }, uuid: 'x2', timestamp: '2026-09-09T10:00:02.000Z', cwd }),
+    JSON.stringify({ type: 'assistant', message: { id: 'msg1', role: 'assistant', content: [{ type: 'text', text: '好，先读文件。' }] }, uuid: 'x3', timestamp: '2026-09-09T10:00:03.000Z' }),
+    JSON.stringify({ type: 'assistant', message: { id: 'msg1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'src/a.ts' } }] }, uuid: 'x4', timestamp: '2026-09-09T10:00:04.000Z' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', is_error: true }] }, uuid: 'x5', timestamp: '2026-09-09T10:00:05.000Z', cwd }),
+    JSON.stringify({ type: 'ai-title', aiTitle: '拆分地图组件', sessionId: sid }),
+    JSON.stringify({ type: 'assistant', message: { id: 'msg2', role: 'assistant', content: [{ type: 'text', text: '文件不存在。' }] }, uuid: 'x6', timestamp: '2026-09-09T10:00:06.000Z' }),
+  ].join('\n') + '\n'.padEnd(200, ' '));
+  const day = path.join(codexHome, 'sessions', '2026', '09', '09'); fs.mkdirSync(day, { recursive: true });
+  const tid = '01a0aaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  fs.writeFileSync(path.join(day, `rollout-2026-09-09T10-00-00-${tid}.jsonl`), [
+    JSON.stringify({ timestamp: '2026-09-09T10:00:00.000Z', type: 'session_meta', payload: { id: tid, cwd, timestamp: '2026-09-09T10:00:00.000Z', originator: 'codex_cli_rs', source: 'cli' } }),
+    JSON.stringify({ timestamp: '2026-09-09T10:00:01.000Z', type: 'event_msg', payload: { type: 'user_message', message: '修复日期输入溢出' } }),
+    JSON.stringify({ timestamp: '2026-09-09T10:00:02.000Z', type: 'response_item', payload: { type: 'function_call', name: 'shell', arguments: '{"cmd":"ls"}', call_id: 'c1' } }),
+    JSON.stringify({ timestamp: '2026-09-09T10:00:03.000Z', type: 'event_msg', payload: { type: 'agent_message', message: '已修复。' } }),
+    JSON.stringify({ timestamp: '2026-09-09T10:00:04.000Z', type: 'event_msg', payload: { type: 'token_count', info: {}, rate_limits: { limit_id: 'codex', primary: { used_percent: 12.4, window_minutes: 300, resets_at: 1789112912 }, secondary: { used_percent: 3, window_minutes: 10080, resets_at: 1789500000 } } } }),
+  ].join('\n') + '\n'.padEnd(200, ' '));
+
+  const c = await createConnector({ port: 0, name: 'T', defaultAgent: 'mock', home: fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-imp-')), log: () => {}, claudeHome, codexHome });
+  const port = await c.listen(); const base = `http://127.0.0.1:${port}`;
+  const pair = await (await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ token: c.pairing.token }) })).json();
+  const H = { authorization: `Bearer ${pair.deviceToken}`, 'content-type': 'application/json' };
+
+  const list = await (await fetch(`${base}/sessions`, { headers: H })).json();
+  const cl = list.find((s) => s.id === `claude:${sid}`); const cx = list.find((s) => s.id === `codex:${tid}`);
+  assert.ok(cl && cx);
+  assert.equal(cl.title, '拆分地图组件'); assert.equal(cl.branch, 'main'); assert.equal(cl.source, 'terminal'); assert.equal(cl.cwd, cwd);
+  assert.equal(cx.title, '修复日期输入溢出'); assert.equal(cx.source, 'terminal');
+  assert.ok(!('file' in cl) && !('agentSessionId' in cl));
+
+  // 打开 → 接管 → 历史消息
+  const msgs = await (await fetch(`${base}/sessions/${cl.id}/messages`, { headers: H })).json();
+  assert.deepEqual(msgs.map((m) => [m.role, m.text]), [['user', '把地图组件拆开'], ['assistant', '好，先读文件。'], ['assistant', '文件不存在。']]);
+  assert.deepEqual(msgs[1].toolCalls.map((t) => [t.name, t.detail, t.state]), [['Read', 'src/a.ts', 'error']]);
+  assert.equal(c.store.session(cl.id).agentSessionId, sid);
+  const cxm = await (await fetch(`${base}/sessions/${cx.id}/messages`, { headers: H })).json();
+  assert.deepEqual(cxm.map((m) => [m.role, m.text, m.toolCalls.length]), [['user', '修复日期输入溢出', 0], ['assistant', '', 1], ['assistant', '已修复。', 0]]);
+  // 接管后列表里不再重复
+  const list2 = await (await fetch(`${base}/sessions`, { headers: H })).json();
+  assert.equal(list2.filter((s) => s.id === cl.id).length, 1);
+
+  // Codex Desktop 格式：没有 user_message 事件，只有 response_item
+  const tid2 = '01a0ffff-1111-2222-3333-444444444444';
+  fs.writeFileSync(path.join(day, `rollout-2026-09-09T11-00-00-${tid2}.jsonl`), [
+    JSON.stringify({ timestamp: '2026-09-09T11:00:00.000Z', type: 'session_meta', payload: { id: tid2, cwd, timestamp: '2026-09-09T11:00:00.000Z', originator: 'Codex Desktop', source: 'vscode' } }),
+    JSON.stringify({ timestamp: '2026-09-09T11:00:01.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>x</recommended_plugins>' }] } }),
+    JSON.stringify({ timestamp: '2026-09-09T11:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '帮我写周报' }] } }),
+    JSON.stringify({ timestamp: '2026-09-09T11:00:03.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '好的，周报如下。' }] } }),
+  ].join('\n') + '\n'.padEnd(200, ' '));
+  const { scanCodexSessions, parseCodexTranscript } = await import('../src/transcripts.js');
+  const desk = scanCodexSessions({ codexHome }).find((s) => s.id === `codex:${tid2}`);
+  assert.equal(desk.title, '帮我写周报'); assert.equal(desk.source, 'terminal');
+  assert.deepEqual(parseCodexTranscript(desk.file, desk.id).map((m) => [m.role, m.text]), [['user', '帮我写周报'], ['assistant', '好的，周报如下。']]);
+
+  // Codex 额度来自 rollout 里的 token_count
+  const { codexRateLimits } = await import('../src/transcripts.js');
+  const rl = codexRateLimits({ codexHome });
+  assert.deepEqual(rl.limits.map((l) => [l.id, l.percent]), [['session', 12], ['weekly_all', 3]]);
+  await c.close();
 });

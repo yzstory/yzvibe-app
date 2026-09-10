@@ -14,13 +14,14 @@ import { CodexAgent } from './agents/codex.js';
 import { MockAgent } from './agents/mock.js';
 import { normalizeOptions, agentCapabilities } from './agents/options.js';
 import { agentQuota } from './quota.js';
+import { scanTerminalSessions, parseTranscript } from './transcripts.js';
 import { listDirectories, makeDirectory } from './fs.js';
 
 const VERSION = '0.1.0';
 
 export const DEFAULT_PORT = 19876;
 
-export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true } = {}) {
+export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true, importTerminal = true, claudeHome, codexHome } = {}) {
   const store = new Store(home);
   const pairing = new Pairing();
   const internalSecret = randomBytes(16).toString('hex');
@@ -39,6 +40,28 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       : new ClaudeAgent({ session, store, internalURL, internalSecret, home, options });
     agents.set(session.id, a);
     return a;
+  }
+
+  // ---------- 终端会话导入 ----------
+  const scanOpts = { ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) };
+  /** 终端里的会话（未被接管的），与 store 会话合并成列表。 */
+  function terminalSessions() {
+    if (!importTerminal) return [];
+    try {
+      const adopted = new Set(store.sessions.map((s) => s.agentSessionId).filter(Boolean));
+      return scanTerminalSessions(scanOpts).filter((t) => !store.session(t.id) && !adopted.has(t.agentSessionId));
+    } catch (e) { log(`[yzvibe] 扫描终端会话失败：${e.message}`); return []; }
+  }
+  function allSessions() {
+    const list = [...store.listSessions(), ...terminalSessions().map(({ file, agentSessionId, ...rest }) => rest)];
+    return list.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+  /** 按 id 取会话；是终端会话就先接管（解析 transcript 预填历史）。 */
+  function resolveSession(id) {
+    const s = store.session(id); if (s || !importTerminal) return s;
+    const t = scanTerminalSessions(scanOpts).find((x) => x.id === id); if (!t) return null;
+    log(`[yzvibe] 接管终端会话：${t.agent} ${t.title}`);
+    return store.adoptSession(t, parseTranscript(t));
   }
 
   // ---------- WS 广播 ----------
@@ -85,7 +108,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (req.method === 'GET' && p === '/quota') return json(res, 200, await agentQuota(url.searchParams.get('agent') ?? 'claude', { force: url.searchParams.get('force') === '1' }));
       if (req.method === 'GET' && p === '/fs/dirs') return json(res, 200, listDirectories(url.searchParams.get('path')));
       if (req.method === 'POST' && p === '/fs/mkdir') { const { parent, name } = await readJSON(req); return json(res, 201, makeDirectory(parent, name)); }
-      if (req.method === 'GET' && p === '/sessions') return json(res, 200, store.listSessions());
+      if (req.method === 'GET' && p === '/sessions') return json(res, 200, allSessions());
       if (req.method === 'POST' && p === '/sessions') {
         const body = await readJSON(req);
         const agent = body.agent ?? defaultAgent;
@@ -99,13 +122,13 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       let m;
       if ((m = p.match(/^\/sessions\/([^/]+)$/))) {
-        const s = store.session(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         if (req.method === 'GET') return json(res, 200, store.publicSession(s));
         if (req.method === 'PATCH') { configureSession(s, await readJSON(req)); return json(res, 200, store.publicSession(s)); }
         if (req.method === 'DELETE') { agents.get(s.id)?.dispose(); agents.delete(s.id); store.closeSession(s.id); return json(res, 200, { ok: true }); }
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/messages$/))) {
-        const s = store.session(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         if (req.method === 'GET') {
           const after = url.searchParams.get('after');
           const list = store.messagesOf(s.id);
@@ -115,7 +138,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (req.method === 'POST') { const { text, attachments = [] } = await readJSON(req); await handleSend(s, text, attachments); return json(res, 202, { ok: true }); }
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/stop$/)) && req.method === 'POST') {
-        const s = store.session(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
@@ -126,7 +149,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       // 文件
       if (p === '/files' || p === '/files/preview' || p === '/files/download') {
-        const s = store.session(url.searchParams.get('sessionId') ?? ''); if (!s) return json(res, 400, { error: '需要 sessionId' });
+        const s = resolveSession(url.searchParams.get('sessionId') ?? ''); if (!s) return json(res, 400, { error: '需要 sessionId' });
         const rel = url.searchParams.get('path') ?? '';
         if (p === '/files') return json(res, 200, listDir(s.cwd, rel));
         if (p === '/files/preview') { const { mime, body } = previewFile(s.cwd, rel); res.writeHead(200, { 'content-type': mime }); return res.end(body); }
@@ -174,7 +197,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       ws.on('close', () => sockets.delete(ws));
       ws.on('message', async (raw) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
-        const s = msg.sessionId ? store.session(msg.sessionId) : null;
+        const s = msg.sessionId ? resolveSession(msg.sessionId) : null;
         try {
           switch (msg.type) {
             case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? []); break;

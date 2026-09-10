@@ -120,12 +120,19 @@ struct SessionCard: View {
                 HStack(spacing: 8) {
                     StatusDot(session: session.status)
                     Chip.agent(session.agent)
+                    if session.source != .phone { Chip(session.source.displayName, tone: .sage, icon: session.source == .terminal ? "terminal" : "shippingbox") }
                     if session.pendingApprovals > 0 { Chip("\(session.pendingApprovals) 待审批", tone: .danger) }
                     Spacer(minLength: 4)
                     Text("\(session.status.displayName) · \(RelativeTime.string(from: session.updatedAt))").font(.yzFootnote).foregroundStyle(p.labelTertiary)
                 }
                 Text(session.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(p.label).lineLimit(2)
-                CodeBlock(session.cwd)
+                HStack(spacing: 8) {
+                    if let b = session.branch {
+                        HStack(spacing: 4) { Image(systemName: "arrow.triangle.branch").font(.system(size: 11, weight: .semibold)); Text(b).font(.yzMono) }
+                            .foregroundStyle(p.labelSecondary).lineLimit(1)
+                    }
+                    CodeBlock(session.cwd)
+                }
             }
         }
     }

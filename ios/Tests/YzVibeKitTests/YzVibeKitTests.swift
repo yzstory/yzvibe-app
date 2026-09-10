@@ -159,3 +159,38 @@ final class UsageTests: XCTestCase {
         XCTAssertNil(ImagePrep.downscale(Data([1, 2, 3])))
     }
 }
+
+// MARK: - 终端会话 / 模型列表
+
+final class TerminalSessionTests: XCTestCase {
+    func testSessionDecodesSourceAndBranch() throws {
+        let json = #"{"id":"claude:abc","agent":"claude","cwd":"/x","title":"t","status":"idle","source":"terminal","branch":"main"}"#
+        let s = try JSONDecoder.yz.decode(Session.self, from: Data(json.utf8))
+        XCTAssertEqual(s.source, .terminal); XCTAssertEqual(s.branch, "main")
+        let old = try JSONDecoder.yz.decode(Session.self, from: Data(#"{"id":"s","agent":"codex","cwd":"/x","title":"t","status":"idle"}"#.utf8))
+        XCTAssertEqual(old.source, .phone); XCTAssertNil(old.branch)
+    }
+
+    @MainActor
+    func testTerminalSessionsCanBeHidden() {
+        let store = AppStore()
+        let all = store.sessions(for: MockData.macStudio, activeOnly: false, query: "")
+        XCTAssertTrue(all.contains { $0.source == .terminal })
+        store.settings.showTerminalSessions = false
+        XCTAssertFalse(store.sessions(for: MockData.macStudio, activeOnly: false, query: "").contains { $0.source == .terminal })
+    }
+
+    @MainActor
+    func testModelPresetsOverrideCapabilities() throws {
+        let store = AppStore()
+        let caps = AgentCapabilities.fallback(for: .claude)
+        XCTAssertEqual(store.modelOptions(for: .claude, caps: caps).map(\.id), ["claude-fable-5-1", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"])
+        store.settings.setModelPresets([ModelOption(id: "claude-opus-5-20260901", label: "Opus 5 (0901)")], for: .claude)
+        XCTAssertEqual(store.modelOptions(for: .claude, caps: caps).map(\.label), ["Opus 5 (0901)"])
+        XCTAssertEqual(store.modelOptions(for: .codex, caps: .fallback(for: .codex)).count, 4)   // 另一个 Agent 不受影响
+        let round = try JSONDecoder().decode(Settings.self, from: JSONEncoder().encode(store.settings))
+        XCTAssertEqual(round.modelPresets(for: .claude)?.first?.id, "claude-opus-5-20260901")
+        store.settings.setModelPresets(nil, for: .claude)
+        XCTAssertNil(store.settings.modelPresets(for: .claude))
+    }
+}

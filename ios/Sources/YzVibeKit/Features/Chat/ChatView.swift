@@ -86,17 +86,6 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(MockData.quickReplies, id: \.self) { q in
-                        Button { Task { await store.send(q, in: sessionId) } } label: {
-                            Text(q).font(.system(size: 14, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                                .padding(.horizontal, 14).frame(height: 36).background(Capsule().fill(p.fill))
-                        }.buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
             InputBar(text: $draft, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onPickImage: { raw, rawMime, rawName in
                 Task {
                     // 先缩到 1568px 长边再上传：省流量、省 token，也避免原图超过 5MB 被 API 拒绝

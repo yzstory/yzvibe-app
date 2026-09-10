@@ -7,11 +7,12 @@ export const MODES = ['plan', 'normal', 'trust'];
 /** Claude Code：--permission-mode / --dangerously-skip-permissions / --effort / --model */
 export const CLAUDE = {
   efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  // 显式版本号，避免别名随 CLI 升级漂移；手机端「模型列表」里可手动改
   models: [
-    { id: 'fable', label: 'Fable 5.1' },
-    { id: 'opus', label: 'Opus' },
-    { id: 'sonnet', label: 'Sonnet' },
-    { id: 'haiku', label: 'Haiku' },
+    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+    { id: 'claude-opus-5', label: 'Opus 5' },
+    { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
   ],
   modes: {
     plan: { flag: '--permission-mode plan', description: '只读分析并给出计划，批准计划后才开始改动' },

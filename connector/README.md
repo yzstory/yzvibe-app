@@ -25,6 +25,8 @@ node bin/yzvibe.js --agent=mock         # 不调用 Claude，用内置假 Agent 
 - `src/mcp-approve.js`：最小 MCP 服务器；Claude 通过 `--permission-prompt-tool mcp__yzvibe__approve` 把权限请求交给它，它转发到手机等待批准
 - `src/agents/mock.js`：演示用假 Agent（流式回复 → 工具调用 → 高风险审批 → 完成）
 - `src/files.js`：只读文件列表 / 预览 / 下载，限制在会话工作目录内
+- `src/transcripts.js`：扫描 `~/.claude/projects` 与 `~/.codex/sessions`，把终端里跑过的会话列进会话列表；手机打开时翻译历史并接管（之后 `--resume` 续聊）
+- `src/quota.js`：账号额度，Claude 走 `api/oauth/usage`（本机钥匙串 token），Codex 取最近 rollout 里的 rate_limits
 
 ## 测试
 ```bash
