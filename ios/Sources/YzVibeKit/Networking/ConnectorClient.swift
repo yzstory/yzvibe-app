@@ -553,7 +553,21 @@ extension JSONEncoder {
     static let yz: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e }()
 }
 extension JSONDecoder {
-    static let yz: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
+    // Node 的 toISOString() 总是包含毫秒；旧 Foundation 的 .iso8601 不接受这种形式。
+    static var yz: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let text = try container.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: text) { return date }
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: text) { return date }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO 8601 date")
+        }
+        return decoder
+    }
 }
 
 // MARK: - Token 存储（Keychain；找不到 Security 时退回 UserDefaults 仅用于预览）

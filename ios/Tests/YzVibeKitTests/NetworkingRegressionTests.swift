@@ -33,6 +33,16 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
 @Suite(.serialized)
 @MainActor
 struct NetworkingRegressionTests {
+    @Test func datesAcceptMillisecondsAndWholeSeconds() throws {
+        struct Value: Decodable { let date: Date }
+        let whole = try JSONDecoder.yz.decode(Value.self, from: Data(#"{"date":"2026-09-10T10:00:00Z"}"#.utf8))
+        let fractional = try JSONDecoder.yz.decode(Value.self, from: Data(#"{"date":"2026-09-10T10:00:00.123Z"}"#.utf8))
+        #expect(abs(fractional.date.timeIntervalSince(whole.date) - 0.123) < 0.001)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder.yz.decode(Value.self, from: Data(#"{"date":"not-a-date"}"#.utf8))
+        }
+    }
+
     private func fixture(host: String = "primary.fail", backups: [String] = ["https://backup.good"]) -> (HTTPConnectorClient, Device, URLSession) {
         FixtureProtocol.requests.reset()
         let config = URLSessionConfiguration.ephemeral

@@ -13,6 +13,7 @@
 | diff 遗漏或覆盖 | 基线范围按 diff 文件集生成；工作区分开显示暂存与未暂存内容；基线在启动 Agent 前保存 | 已提交修改、混合修改、中文重命名、嵌套工作目录和新文件 |
 | 重连不能更新旧消息 | 对已打开会话取完整快照，替换旧消息正文与工具结果 | 相同消息 ID 的 streaming、正文、工具状态与输出更新 |
 | CI 旧 SDK / 未编译 App | 明确选择 Xcode 26.3；测试保留退出码和 xcresult；新增 App + Widget 无签名构建 | 本地 Xcode 26.6 模拟器测试与完整 App 构建 |
+| 旧 Foundation 无法解析毫秒时间 | 明确兼容带毫秒和整秒的 ISO 8601 时间，拒绝非法值 | 时间精度回归及原有用量、文件信息解码测试 |
 | XcodeGen 清空推送 entitlement | 在 project.yml 显式声明 aps-environment，重新生成仍保留 | 工程生成后检查 entitlement + 完整构建 |
 
 CI 的 Xcode 选择依据 [GitHub 托管镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md#xcode)。
@@ -41,6 +42,6 @@ Android / 小程序可以继续保留路线图，但建议等真实网络集成�
 ## 本地验证
 
 - 连接器：46 项测试通过，包括 5 组新增回归场景。
-- iOS：45 项原有 XCTest + 6 项 Swift Testing 网络与同步回归，通过 iPhone 17 Pro 模拟器运行。
+- iOS：45 项原有 XCTest + 7 项 Swift Testing 网络与同步回归，通过 iPhone 17 Pro 模拟器运行。
 - XcodeGen 生成工程后，完整 App 与 Widget 扩展无签名模拟器构建通过。
 - 真机签名安装、真实 Agent 和 APNs 端到端交互不在本次本地测试范围内。
