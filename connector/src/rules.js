@@ -10,6 +10,17 @@ export const SCOPES = ['session', 'global'];
 
 const FILE = (home) => path.join(home, 'rules.json');
 
+/** 仅匹配简单 shell 单词。复杂语法保守地回到逐次审批，不尝试用字符串猜 shell 语义。 */
+export function matchesCommandPrefix(command, prefix) {
+  const simple = /^[A-Za-z0-9_./:@%+,=\-]+(?:[ \t]+[A-Za-z0-9_./:@%+,=\-]+)*$/;
+  if (typeof command !== 'string' || typeof prefix !== 'string') return false;
+  if (!simple.test(command) || !simple.test(prefix)) return false;
+  const words = command.split(/[ \t]+/), allowed = prefix.split(/[ \t]+/);
+  // 不把环境变量赋值误认成可执行命令。
+  if (words[0].includes('=') || allowed[0].includes('=')) return false;
+  return allowed.every((word, i) => words[i] === word);
+}
+
 /** 命令的「前缀」建议：git status --short → `git status`，npm test → `npm test`，./x.sh → `./x.sh` */
 export function commandPrefix(summary = '') {
   const words = String(summary).trim().split(/\s+/).filter(Boolean);
@@ -94,7 +105,7 @@ export class Rules {
       if (r.tool && r.tool !== toolName) return false;
       if (r.match === 'tool') return true;
       if (r.match === 'exact') return summary === r.value;
-      if (r.match === 'prefix') return typeof summary === 'string' && summary.startsWith(r.value);
+      if (r.match === 'prefix') return matchesCommandPrefix(summary, r.value);
       return false;
     });
     if (!hit) return null;

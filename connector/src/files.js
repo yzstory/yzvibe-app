@@ -7,21 +7,44 @@ const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.md', 
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.heic']);
 const MAX_PREVIEW = 2 * 1024 * 1024;
 
-/** 会话工作目录之外、但仍在用户主目录内的敏感文件：一律不给手机读。 */
+/** 无论是否在工作目录内，已知凭据都不通过文件接口提供。 */
 const SENSITIVE = [
   /(^|\/)\.ssh(\/|$)/, /(^|\/)\.gnupg(\/|$)/, /(^|\/)\.aws(\/|$)/, /(^|\/)\.kube(\/|$)/,
   /(^|\/)Library\/Keychains(\/|$)/, /(^|\/)\.netrc$/, /(^|\/)\.npmrc$/, /(^|\/)\.pypirc$/,
   /(^|\/)id_(rsa|dsa|ecdsa|ed25519)(\.pub)?$/, /\.credentials\.json$/, /(^|\/)credentials(\.json)?$/,
   /(^|\/)\.docker\/config\.json$/, /(^|\/)\.config\/gh(\/|$)/, /(^|\/)\.git-credentials$/,
+  /(^|\/)\.yzvibe\/(devices\.json|daemon\.json|apns\.json|mcp-[^/]+\.json)$/, /\.p8$/,
+  /(^|\/)\.codex\/auth\.json$/,
 ];
+
+const inside = (base, target) => target === base || target.startsWith(base + path.sep);
+const forbidden = () => Object.assign(new Error('路径越界或文件包含敏感凭据'), { status: 403 });
+export function assertNotSensitive(target) {
+  if (SENSITIVE.some((re) => re.test(target))) throw forbidden();
+}
+
+// 不存在的路径也解析最近存在的父目录，避免经符号链接创建/查询到边界之外。
+function realPath(target) {
+  try { return fs.realpathSync(target); }
+  catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    const parent = path.dirname(target);
+    if (parent === target) throw e;
+    return path.join(realPath(parent), path.basename(target));
+  }
+}
 
 export function expandHome(p) { return p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p; }
 
 /** 把相对路径解析到 root 内，越界抛错。 */
 export function resolveInside(root, rel = '') {
-  const base = path.resolve(expandHome(root));
-  const target = path.resolve(base, rel.replace(/^\/+/, ''));
-  if (target !== base && !target.startsWith(base + path.sep)) throw Object.assign(new Error('路径越界'), { status: 403 });
+  const base = realPath(path.resolve(expandHome(root)));
+  const lexical = path.resolve(base, rel.replace(/^\/+/, ''));
+  assertNotSensitive(lexical);
+  if (!inside(base, lexical)) throw forbidden();
+  const target = realPath(lexical);
+  assertNotSensitive(target);
+  if (!inside(base, target)) throw forbidden();
   return { base, target };
 }
 
@@ -34,21 +57,24 @@ export function kindOf(name, isDir) {
   return 'other';
 }
 
-/** 解析可读文件：会话工作目录内一律放行；目录外只允许主目录内的非敏感文件（聊天里点文件路径会用到）。 */
+/** 相对路径/工作区别名不能越界；显式绝对路径还允许读取主目录内的非敏感文件。 */
 export function resolveReadable(root, rel = '') {
   const raw = String(rel ?? '');
   const expanded = expandHome(raw);
   // 相对路径仍按工作目录解析，保持原有行为
   if (!path.isAbsolute(expanded)) return { ...resolveInside(root, raw), inCwd: true };
 
-  const base = path.resolve(expandHome(root));
-  const target = path.resolve(expanded);
-  if (target === base || target.startsWith(base + path.sep)) return { base, target, inCwd: true };
+  const lexicalBase = path.resolve(expandHome(root));
+  const lexical = path.resolve(expanded);
+  assertNotSensitive(lexical);
+  if (inside(lexicalBase, lexical)) return { ...resolveInside(root, path.relative(lexicalBase, lexical)), inCwd: true };
+  const base = realPath(lexicalBase);
+  const target = realPath(lexical);
+  assertNotSensitive(target);
+  if (inside(base, lexical)) return { ...resolveInside(base, path.relative(base, lexical)), inCwd: true };
 
-  const home = path.resolve(os.homedir());
-  const inHome = target === home || target.startsWith(home + path.sep);
-  const rest = inHome ? target.slice(home.length) : '';
-  if (!inHome || SENSITIVE.some((re) => re.test(rest))) {
+  const home = realPath(path.resolve(os.homedir()));
+  if (!inside(home, target)) {
     throw Object.assign(new Error('这个文件不在会话工作目录里，出于安全不提供访问'), { status: 403 });
   }
   return { base: home, target, inCwd: false };
@@ -79,8 +105,8 @@ export function listDir(root, rel) {
     .filter((e) => !e.name.startsWith('.') && e.name !== 'node_modules')
     .map((e) => {
       const full = path.join(target, e.name);
-      let st; try { st = fs.statSync(full); } catch { return null; }
-      return { name: e.name, path: path.relative(base, full), kind: kindOf(e.name, e.isDirectory()), size: e.isDirectory() ? 0 : st.size, modifiedAt: st.mtime.toISOString() };
+      let st; try { st = fs.statSync(resolveInside(base, path.relative(base, full)).target); } catch { return null; }
+      return { name: e.name, path: path.relative(base, full), kind: kindOf(e.name, st.isDirectory()), size: st.isDirectory() ? 0 : st.size, modifiedAt: st.mtime.toISOString() };
     })
     .filter(Boolean)
     .sort((a, b) => (a.kind === 'folder') === (b.kind === 'folder') ? a.name.localeCompare(b.name) : a.kind === 'folder' ? -1 : 1);

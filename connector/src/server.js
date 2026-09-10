@@ -318,7 +318,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         try { resolveInside(cwd, ''); if (!fs.existsSync(resolveInside(cwd, '').base)) throw new Error(); } catch { return json(res, 400, { error: `工作目录不存在：${cwd}` }); }
         const title = body.firstMessage ? String(body.firstMessage).slice(0, 40) : '新会话';
         const s = store.createSession({ agent, cwd, title, ...normalizeOptions(body, agent) });
-        headCommit(cwd).then((sha) => { if (sha) { s.baseCommit = sha; store.emit('event', { type: 'session.updated', session: store.publicSession(s) }); } }).catch(() => {});
+        store.setBaseline(s.id, await headCommit(cwd));
         const a = agentFor(s, { continueLast: Boolean(body.continueLast) });
         if (body.firstMessage) { store.addMessage(s.id, { role: 'user', text: body.firstMessage }); a.send(body.firstMessage).catch(() => {}); }
         return json(res, 201, store.publicSession(s));
@@ -354,13 +354,20 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         return json(res, 200, sessionCommands(s.agent, s.cwd, { session: s, ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) }));
       }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/queue\/resume$/)) && req.method === 'POST') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        store.resumeQueue(s.id);
+        if (s.status === 'error') store.setStatus(s.id, 'idle');
+        void drainQueue(s.id);
+        return json(res, 200, store.publicSession(s));
+      }
       if ((m = p.match(/^\/sessions\/([^/]+)\/queue\/([^/]+)$/)) && req.method === 'DELETE') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         return json(res, store.cancelQueued(s.id, m[2]) ? 200 : 404, { ok: true });
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/stop$/)) && req.method === 'POST') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
-        agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
+        store.pauseQueue(s.id); agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
       if ((m = p.match(/^\/approvals\/([^/]+)$/)) && req.method === 'POST') {
@@ -413,10 +420,11 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     if (!text?.trim() && !attachments.length) return { queued: false };
     if (s.status === 'closed') store.setStatus(s.id, 'idle');
 
-    if (busy(s) && mode !== 'never') {
+    if ((busy(s) || s.queuePaused || s.queue?.length || mode === 'queue') && mode !== 'never') {
       const front = mode === 'now';
       const item = store.enqueue(s.id, { text: text ?? '', attachments }, { front });
-      if (front) agents.get(s.id)?.stop();     // 打断当前轮，结束后 drainQueue 会立刻把它发出去
+      if (front && !s.queuePaused) agents.get(s.id)?.stop();     // 打断当前轮，结束后 drainQueue 会立刻把它发出去
+      if (!busy(s) && !s.queuePaused) void drainQueue(s.id);
       return { queued: true, item };
     }
     store.addMessage(s.id, { role: 'user', text: text ?? '', attachments });
@@ -424,21 +432,33 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     return { queued: false };
   }
 
-  // 本轮结束（回到 idle）就把排队的消息接上去
+  // 出队后才崩溃会丢失消息：先持久化 dispatching，交给 Agent 后再移除。
+  let closing = false;
   const draining = new Set();
-  store.on('event', async (ev) => {
-    if (ev.type !== 'session.status' || ev.status !== 'idle') return;
-    const s = store.session(ev.sessionId);
-    if (!s?.queue?.length || draining.has(s.id)) return;
+  async function drainQueue(sessionId) {
+    const s = store.session(sessionId);
+    if (closing || !s?.queue?.length || s.queuePaused || s.status !== 'idle' || draining.has(s.id)) return;
+    const item = s.queue[0];
+    if (item.deliveryState !== 'queued') return;
     draining.add(s.id);
+    store.markQueued(s.id, item.id, 'dispatching');
     try {
-      const item = store.dequeue(s.id);
-      if (item) {
-        log(`[yzvibe] 会话 ${s.id.slice(0, 8)} 发送排队中的消息（还剩 ${s.queue.length} 条）`);
-        await handleSend(s, item.text, item.attachments, 'never');
-      }
-    } catch (e) { log(`[yzvibe] 发送排队消息失败：${e.message}`); }
-    finally { draining.delete(s.id); }
+      await handleSend(s, item.text, item.attachments, 'never');
+      store.cancelQueued(s.id, item.id);
+    } catch (e) {
+      store.markQueued(s.id, item.id, 'uncertain');
+      store.pauseQueue(s.id);
+      store.addMessage(s.id, { role: 'system', text: `排队消息发送结果待确认：${e.message}` });
+      store.setStatus(s.id, 'error');
+    } finally {
+      draining.delete(s.id);
+      if (s.status === 'idle' && !s.queuePaused && s.queue.length) setImmediate(() => void drainQueue(s.id));
+    }
+  }
+  store.on('event', (ev) => {
+    if (ev.type !== 'session.status') return;
+    if (ev.status === 'error' || ev.status === 'closed') store.pauseQueue(ev.sessionId);
+    if (ev.status === 'idle') setImmediate(() => void drainQueue(ev.sessionId));
   });
 
   // ---------- WebSocket ----------
@@ -458,7 +478,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           switch (msg.type) {
             case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? [], msg.mode ?? 'auto'); break;
             case 'message.cancel': if (s && msg.itemId) store.cancelQueued(s.id, msg.itemId); break;
-            case 'session.stop': if (s) agents.get(s.id)?.stop(); break;
+            case 'session.stop': if (s) { store.pauseQueue(s.id); agents.get(s.id)?.stop(); } break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
             case 'session.configure': if (s) configureSession(s, msg); break;
             case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision, 'phone', msg.remember ?? null); break;
@@ -490,7 +510,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     endpoints: () => collectEndpoints({ host: api.access.host, port: api.port, mode: api.access.mode }),
     listen: listenWithFallback,
     rules, pusher,
-    close: () => new Promise((resolve) => { stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
+    close: () => new Promise((resolve) => { closing = true; stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
   return api;

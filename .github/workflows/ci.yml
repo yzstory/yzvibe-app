@@ -21,7 +21,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: connector/package-lock.json
-      - run: npm ci || npm install
+      - run: npm ci
         working-directory: connector
       - run: npm test
         working-directory: connector
@@ -34,16 +34,32 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: 选 Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
-      - name: 编译 YzVibeKit（iOS 模拟器）
+      # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md#xcode
+      - name: 选择 Xcode 26.3（Liquid Glass SDK）
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+      - name: iOS 单元测试
         working-directory: ios
         run: |
-          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          swift build --build-tests --triple arm64-apple-ios17.0-simulator --sdk "$SDK"
-      - name: 跑单元测试
-        working-directory: ios
-        run: |
+          set -euo pipefail
           DEVICE=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];print(next(x['udid'] for v in d.values() for x in v if 'iPhone' in x['name']))")
-          xcodebuild test -scheme YzVibeKit -destination "id=$DEVICE" | xcpretty || \
-          xcodebuild test -scheme YzVibeKit -destination "id=$DEVICE"
+          xcodebuild test -scheme YzVibeKit -destination "id=$DEVICE" \
+            -resultBundlePath "$RUNNER_TEMP/YzVibeKit.xcresult" | tee "$RUNNER_TEMP/ios-tests.log"
+      - name: 编译完整 App 与 Widget
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          xcodebuild -project YzVibe.xcodeproj -scheme YzVibe \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build \
+            | tee "$RUNNER_TEMP/ios-app-build.log"
+      - name: 保存测试与编译结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-validation
+          path: |
+            ${{ runner.temp }}/YzVibeKit.xcresult
+            ${{ runner.temp }}/ios-tests.log
+            ${{ runner.temp }}/ios-app-build.log

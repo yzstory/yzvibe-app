@@ -451,7 +451,7 @@ final class ToolOutputAndRulesTests: XCTestCase {
         let texts = store.messages["s1"]?.map(\.text) ?? []
         XCTAssertEqual(texts, ["历史", "继续", "好的"], "本地乐观消息应被服务端版本取代，而不是重复一条")
         XCTAssertEqual(store.messages["s1"]?.filter(\.isLocal).count, 0)
-        XCTAssertEqual(client.lastAfterCursor, "m1", "应从服务端确认过的游标往后拉，而不是整份重取")
+        XCTAssertNil(client.lastAfterCursor ?? nil, "恢复时需要快照，才能更新已有消息的工具状态")
         XCTAssertTrue(client.reconnected, "回到前台要立刻重连事件通道")
         XCTAssertEqual(store.rules(for: device.id).count, 1)
         XCTAssertEqual(store.push?.ready, false)
@@ -489,7 +489,7 @@ final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
     func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }
     func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] {
         lastAfterCursor = cursor
-        if cursor == nil { return [Message(id: "m1", sessionId: sessionId, role: .user, text: "历史")] }
+        if cursor == nil { return [Message(id: "m1", sessionId: sessionId, role: .user, text: "历史")] + newMessages }
         return newMessages
     }
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}

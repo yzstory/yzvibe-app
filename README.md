@@ -114,7 +114,7 @@ App 已接入新的 `AppIcon` 资源。进入 **设备 → 扫码配对**，扫�
 | 自有隧道              | `--access=https://your-host.example` | 已有反向代理或隧道，使用固定地址  |
 | Tailscale         | `--access=100.x.x.x`                 | 手机和电脑加入同一 tailnet |
 
-临时隧道重建后地址可能变化，需要运行 `qr` 重新配对。连接器会保存访问配置；使用 `--force` 可不复用已保存的 Relay 地址。
+临时隧道重建后地址可能变化。代码已加入候选地址探活切换、Bonjour 发现与静默推送地址更新；若自动恢复失败，可运行 `qr` 重新配对。连接器会保存访问配置；使用 `--force` 可不复用已保存的 Relay 地址。
 
 ```bash
 node bin/yzvibe.js status          # 查看运行状态
@@ -205,7 +205,7 @@ YzVibe/
 
 ## 后续方向
 
-- Live Activity / 灵动岛展示会话状态。
+- 加固消息发送、队列恢复、地址切换与 Live Activity 的异常处理。
 - Android 与微信小程序客户端。
 - 持续完善远程连接、通知和多 Agent 交互体验。
 

@@ -300,6 +300,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var branch: String?
     /// Agent 正忙时发的消息排在这里，本轮结束自动接上。
     public var queue: [QueuedMessage] = []
+    public var queuePaused: Bool = false
     /// 会话开始时的 commit，用来只看「这次会话改了什么」。
     public var baseCommit: String?
 
@@ -316,7 +317,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch, queue, baseCommit }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch, queue, queuePaused, baseCommit }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -333,6 +334,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }
         effort = try c.decodeIfPresent(String.self, forKey: .effort).flatMap { $0.isEmpty ? nil : $0 }
         queue = try c.decodeIfPresent([QueuedMessage].self, forKey: .queue) ?? []
+        queuePaused = try c.decodeIfPresent(Bool.self, forKey: .queuePaused) ?? false
         baseCommit = try c.decodeIfPresent(String.self, forKey: .baseCommit)
         usage = try? c.decodeIfPresent(SessionUsage.self, forKey: .usage)
         source = SessionSource(rawValue: try c.decodeIfPresent(String.self, forKey: .source) ?? "") ?? .phone
@@ -801,16 +803,18 @@ public struct SyncSnapshot: Codable, Sendable {
 /// 排在队列里、还没发出去的消息。
 public struct QueuedMessage: Codable, Hashable, Sendable, Identifiable {
     public var id: String
+    public var deliveryState: String = "queued"
     public var text: String
     public var attachments: [String]
     public var createdAt: Date
     public init(id: String = UUID().uuidString, text: String, attachments: [String] = [], createdAt: Date = .now) {
         self.id = id; self.text = text; self.attachments = attachments; self.createdAt = createdAt
     }
-    enum CodingKeys: String, CodingKey { case id, text, attachments, createdAt }
+    enum CodingKeys: String, CodingKey { case id, text, attachments, createdAt, deliveryState }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
+        deliveryState = try c.decodeIfPresent(String.self, forKey: .deliveryState) ?? "queued"
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         attachments = try c.decodeIfPresent([String].self, forKey: .attachments) ?? []
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now

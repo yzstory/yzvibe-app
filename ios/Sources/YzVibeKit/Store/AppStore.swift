@@ -211,17 +211,16 @@ public final class AppStore {
         }
     }
 
-    /// 从服务端已确认的游标往后补消息，并丢掉已被服务端接手的本地乐观消息。
+    /// 前台恢复时读取已打开会话的完整快照，更新断线期间发生变化的旧消息。
     private func catchUpMessages(_ sessionId: String) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
         do {
-            var fetched = try await client.messages(device: device, sessionId: sessionId, after: syncCursor[sessionId])
+            var fetched = try await client.messages(device: device, sessionId: sessionId, after: nil)
             guard !fetched.isEmpty else { return }
             for i in fetched.indices { fetched[i].sessionId = sessionId }
             let newest = fetched.last?.createdAt ?? .distantPast
-            var merged = (messages[sessionId] ?? []).filter { !$0.isLocal || $0.createdAt > newest }
-            var seen = Set(merged.map(\.id))
-            merged.append(contentsOf: fetched.filter { seen.insert($0.id).inserted })
+            let pending = (messages[sessionId] ?? []).filter { $0.isLocal && $0.createdAt > newest }
+            var merged = fetched + pending
             merged.sort { $0.createdAt < $1.createdAt }
             messages[sessionId] = merged
             syncCursor[sessionId] = fetched.last?.id
@@ -396,7 +395,7 @@ public final class AppStore {
     @discardableResult
     public func send(_ text: String, in sessionId: String, attachments: [String] = [], mode: SendMode = .auto) async -> Bool {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return false }
-        let willQueue = mode != .now && (s.status == .running || s.status == .waitingApproval)
+        let willQueue = s.queuePaused || !s.queue.isEmpty || (mode != .now && (s.status == .running || s.status == .waitingApproval))
         if !willQueue {
             messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments, isLocal: true))
             setStatus(.running, for: sessionId)
@@ -418,6 +417,15 @@ public final class AppStore {
     }
 
     /// 撤掉一条还没发出去的排队消息。
+    public func resumeQueue(in sessionId: String) async {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return }
+        do {
+            var updated = try await client.resumeQueue(device: device, sessionId: sessionId)
+            updated.deviceId = device.id
+            if let i = sessions.firstIndex(where: { $0.id == sessionId }) { sessions[i] = updated }
+        } catch { toast = error.localizedDescription }
+    }
+
     public func cancelQueued(_ itemId: String, in sessionId: String) async {
         guard let i = sessions.firstIndex(where: { $0.id == sessionId }), let device = device(sessions[i].deviceId) else { return }
         let backup = sessions[i].queue

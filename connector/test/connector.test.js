@@ -493,7 +493,7 @@ test('文件接口：/files/stat 与 /files/download 走同一套权限', async 
   assert.equal(st.size, 4);
   assert.equal(st.textual, true);
   assert.equal(st.inCwd, true);
-  assert.equal(st.path, path.join(cwd, 'hello.md'));
+  assert.equal(st.path, fs.realpathSync(path.join(cwd, 'hello.md')));
 
   const dl = await fetch(`${base}/files/download?sessionId=${s.id}&path=hello.md`, { headers: H });
   assert.equal(dl.status, 200);

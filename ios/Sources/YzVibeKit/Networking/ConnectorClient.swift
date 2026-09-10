@@ -39,6 +39,7 @@ public protocol ConnectorClient: Sendable {
     /// 发消息。Agent 正忙时按 `mode` 决定排队还是插队打断，返回是否进了队列。
     func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?)
     /// 撤掉一条还没发出去的排队消息。
+    func resumeQueue(device: Device, sessionId: String) async throws -> Session
     func cancelQueued(device: Device, sessionId: String, itemId: String) async throws
     /// 工作目录的改动；scope = "session" 时只看这次会话改了什么。
     func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff
@@ -141,7 +142,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
                   (resp as? HTTPURLResponse)?.statusCode == 200,
                   let health = try? JSONDecoder.yz.decode(HealthInfo.self, from: data) else { continue }
             // 别连到另一台电脑上去
-            if let cid = health.connectorId, !device.id.isEmpty, cid != device.id { continue }
+            guard health.connectorId == device.id else { continue }
             setBase(url, for: device.id)
             sockets[device.id]?.updateBase(url)
             onEndpointResolved?(device.id, raw)
@@ -152,10 +153,11 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     /// 带故障转移的请求：第一次报「连不上」就换地址重试一次。
     private func perform<T: Decodable>(_ device: Device, _ path: String, method: String = "GET", body: (any Encodable)? = nil, as type: T.Type) async throws -> T {
-        do { return try await perform(device, path, method: method, body: body, as: type) }
+        do { return try await perform(request(device, path, method: method, body: body), as: type) }
         catch ConnectorError.unreachable {
-            guard await failover(device) else { throw ConnectorError.unreachable }
-            return try await perform(device, path, method: method, body: body, as: type)
+            // 写操作可能已执行但响应丢失，不能自动重放。
+            guard method == "GET" || method == "HEAD", await failover(device) else { throw ConnectorError.unreachable }
+            return try await perform(request(device, path, method: method, body: body), as: type)
         }
     }
 
@@ -269,6 +271,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         let r = try await perform(device, "/sessions/\(sessionId)/messages", method: "POST",
                                   body: Body(text: text, attachments: attachments, mode: mode.rawValue), as: Resp.self)
         return (r.queued ?? false, r.item)
+    }
+
+    public func resumeQueue(device: Device, sessionId: String) async throws -> Session {
+        try await perform(device, "/sessions/\(sessionId)/queue/resume", method: "POST", as: Session.self)
     }
 
     public func cancelQueued(device: Device, sessionId: String, itemId: String) async throws {
@@ -578,4 +584,8 @@ public final class TokenStore: @unchecked Sendable {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: deviceId]
         SecItemDelete(query as CFDictionary)
     }
+}
+
+public extension ConnectorClient {
+    func resumeQueue(device: Device, sessionId: String) async throws -> Session { throw ConnectorError.unreachable }
 }

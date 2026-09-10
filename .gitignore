@@ -16,6 +16,7 @@ xcuserdata/
 *.xcuserstate
 ios/YzVibe.xcodeproj/
 ios/App/YzVibe/Info.plist
+ios/Widgets/YzVibeWidgets/Info.plist
 
 # 设计画布：已组装的可打开文件体积 2.6MB，由 design/canvas/build.py + seed 脚本重新生成
 design/canvas/yzvibe-app-design.html

@@ -91,6 +91,12 @@ struct ChatView: View {
                 MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
             }
             // 正忙时发的消息排在这里，本轮结束会自动接上
+            if session?.queuePaused == true, !queued.isEmpty {
+                VStack(spacing: 8) {
+                    Text("队列已暂停，请检查会话后继续").font(.yzFootnote)
+                    Button("继续队列") { Task { await store.resumeQueue(in: sessionId) } }
+                }
+            }
             ForEach(queued) { item in
                 QueuedBubble(item: item) { Task { await store.cancelQueued(item.id, in: sessionId) } }
                     .id("queued-" + item.id)
@@ -115,7 +121,7 @@ struct ChatView: View {
                 }
             }
             let queued = await store.send(t, in: sessionId, attachments: ids, mode: mode)
-            if queued { store.toast = "已排队，本轮结束后自动发送" }
+            if queued { store.toast = session?.queuePaused == true ? "已加入暂停的队列" : "已排队，本轮结束后自动发送" }
         }
     }
 
@@ -415,7 +421,7 @@ struct QueuedBubble: View {
                     }
                     HStack(spacing: 5) {
                         Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
-                        Text(item.attachments.isEmpty ? "排队中" : "排队中 · \(item.attachments.count) 张图")
+                        Text(item.deliveryState == "uncertain" ? "发送结果待确认，检查历史后移除" : item.deliveryState == "dispatching" ? "正在发送" : "排队中")
                             .font(.yzCaption).fontWeight(.semibold)
                     }
                     .foregroundStyle(p.labelTertiary)

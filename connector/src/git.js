@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { expandHome, kindOf } from './files.js';
+import { expandHome, kindOf, resolveInside, assertNotSensitive } from './files.js';
 
 const MAX_DIFF_BYTES = 400 * 1024;
 const MAX_FILE_DIFF = 60 * 1024;
@@ -51,71 +51,67 @@ function parseNumstat(out) {
   return map;
 }
 
-/** 拆 `git diff` 的输出：按文件分块。 */
-function splitDiff(text) {
-  const map = {};
-  const blocks = text.split(/^diff --git /m).slice(1);
-  for (const b of blocks) {
-    const m = b.match(/^a\/(.+?) b\/(.+?)$/m);
-    const file = m?.[2] ?? m?.[1];
-    if (!file) continue;
-    const body = ('diff --git ' + b).slice(0, MAX_FILE_DIFF);
-    map[file] = body.length >= MAX_FILE_DIFF ? body + '\n…（这个文件的 diff 太长，已截断）' : body;
-  }
-  return map;
+/** 一次读取一个文件的 diff，避免从带引号/换行/重命名的 diff 头猜文件名。 */
+async function fileDiff(dir, args, file) {
+  const [patch, stat] = await Promise.all([
+    git(dir, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', ...args, '--', file]),
+    git(dir, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--numstat', '-z', ...args, '--', file]),
+  ]);
+  if (!patch.ok || !stat.ok) throw Object.assign(new Error('无法读取完整 Git diff'), { status: 422 });
+  const stats = parseNumstat(stat.out)[file] ?? { added: 0, removed: 0 };
+  return { ...stats, diff: patch.out || null };
 }
 
-/**
- * 会话工作目录的改动。不是 git 仓库时返回 { repo: false }，手机端会给一句说明而不是空白页。
- * @param base 可选：跟某个基线比（例如会话开始时记下的 commit）
- */
+/** 工作区分开展示暂存与未暂存；会话范围按基线差异建立文件列表。 */
 export async function workingDiff(cwd, { base = null } = {}) {
-  const dir = expandHome(cwd);
-  const root = await git(dir, ['rev-parse', '--show-toplevel']);
+  const root = await git(expandHome(cwd), ['rev-parse', '--show-toplevel']);
   if (!root.ok) return { repo: false, reason: '这个目录不在 git 仓库里，看不到改动对比。' };
-
-  const [branchRes, statusRes, numstatRes, cachedNumstatRes, diffRes, cachedDiffRes, headRes] = await Promise.all([
+  const dir = root.out.trim();
+  const [branch, status, head, baseline] = await Promise.all([
     git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
-    git(dir, ['status', '--porcelain=v1', '-z']),
-    git(dir, base ? ['diff', '--numstat', '-z', base] : ['diff', '--numstat', '-z']),
-    base ? Promise.resolve({ ok: true, out: '' }) : git(dir, ['diff', '--numstat', '-z', '--cached']),
-    git(dir, base ? ['diff', base] : ['diff']),
-    base ? Promise.resolve({ ok: true, out: '' }) : git(dir, ['diff', '--cached']),
+    git(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--no-renames']),
     git(dir, ['log', '-1', '--format=%h %s']),
+    base ? git(dir, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--no-renames', base, '--']) : Promise.resolve(null),
   ]);
-
-  const stats = { ...parseNumstat(numstatRes.out), ...parseNumstat(cachedNumstatRes.out) };
-  const diffs = { ...splitDiff(diffRes.out), ...splitDiff(cachedDiffRes.out) };
-  const entries = parseStatus(statusRes.out);
-
-  let budget = MAX_DIFF_BYTES;
-  const files = entries.map((e) => {
-    const st = stats[e.path] ?? { added: null, removed: null };
-    let diff = diffs[e.path] ?? null;
-    // 新文件 git diff 里没有内容，直接把正文当成全是 + 的改动显示
-    if (!diff && e.untracked && budget > 0) {
-      const added = newFileDiff(path.join(dir, e.path));
-      if (added) { diff = added.diff; st.added = added.lines; st.removed = 0; }
+  if (!status.ok || (baseline && !baseline.ok)) throw Object.assign(new Error('Git 状态或会话基线不可用'), { status: 422 });
+  let entries = parseStatus(status.out);
+  if (baseline) {
+    const current = new Map(entries.map((e) => [e.path, e]));
+    const parts = baseline.out.split('\0');
+    entries = [];
+    for (let i = 0; i + 1 < parts.length; i += 2) {
+      const file = parts[i + 1];
+      entries.push({ path: file, staged: false, unstaged: false, untracked: false, ...current.get(file), status: STATUS_LABEL[parts[i][0]] ?? '已修改' });
     }
-    if (diff && budget <= 0) diff = null;
-    if (diff) budget -= diff.length;
-    return { ...e, added: st.added, removed: st.removed, diff, binary: st.added === null && st.removed === null && !e.untracked };
+    entries.push(...[...current.values()].filter((e) => e.untracked));
+  }
+  const visible = entries.filter((e) => {
+    try { assertNotSensitive(path.join(dir, e.path)); resolveInside(dir, e.path); return true; } catch { return false; }
   });
-
-  return {
-    repo: true,
-    root: root.out.trim(),
-    branch: branchRes.out.trim() || null,
-    head: headRes.out.trim() || null,
-    base: base ?? null,
-    files,
-    totals: {
-      files: files.length,
-      added: files.reduce((n, f) => n + (f.added ?? 0), 0),
-      removed: files.reduce((n, f) => n + (f.removed ?? 0), 0),
-    },
-    truncated: budget <= 0,
-  };
+  let budget = MAX_DIFF_BYTES, truncated = visible.length > 200;
+  const files = [];
+  for (const e of visible.slice(0, 200)) {
+    let added = 0, removed = 0, diff = null;
+    if (budget <= 0) { truncated = true; files.push({ ...e, added: null, removed: null, diff: null, binary: false }); continue; }
+    if (e.untracked) {
+      const fresh = newFileDiff(resolveInside(dir, e.path).target);
+      if (fresh) { diff = fresh.diff; added = fresh.lines; }
+    } else {
+      const sections = base ? [await fileDiff(dir, [base], e.path)] : await Promise.all([
+        fileDiff(dir, ['--cached'], e.path), fileDiff(dir, [], e.path),
+      ]);
+      const labels = base ? ['基线以来'] : ['已暂存', '未暂存'];
+      diff = sections.map((s, i) => s.diff ? `--- ${labels[i]} ---\n${s.diff}` : '').filter(Boolean).join('\n') || null;
+      added = sections.some((s) => s.added === null) ? null : sections.reduce((n, s) => n + s.added, 0);
+      removed = sections.some((s) => s.removed === null) ? null : sections.reduce((n, s) => n + s.removed, 0);
+    }
+    const limit = Math.min(MAX_FILE_DIFF, budget);
+    if (diff && diff.length > limit) { diff = diff.slice(0, limit) + '\n…（diff 已截断）'; truncated = true; }
+    if (diff) budget -= diff.length;
+    files.push({ ...e, added, removed, diff, binary: added === null && removed === null && !e.untracked });
+  }
+  return { repo: true, root: dir, branch: branch.out.trim() || null, head: head.out.trim() || null, base,
+    files, totals: { files: files.length, added: files.reduce((n, f) => n + (f.added ?? 0), 0), removed: files.reduce((n, f) => n + (f.removed ?? 0), 0) }, truncated };
 }
 
 /** 未跟踪的新文件：小的文本文件直接展示全文（全是 + 行），大的或二进制的跳过。 */

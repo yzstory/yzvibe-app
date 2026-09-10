@@ -108,4 +108,6 @@ Codex 驱动每轮运行 `codex exec --json`，后续通过 `resume` 续聊；�
 - **通知内容**：推送可包含审批或回复摘要，不能将“本地优先”理解成没有外部数据传输。
 - **访问控制**：一次性配对码用于签发设备 Token；撤销设备会使其凭据失效。具体接口、鉴权方式和数据模型见 [共享协议](../shared/protocol.md)。
 
-Android、小程序和 Live Activity 不属于当前已实现的主链路。
+Live Activity 已通过 WidgetKit 扩展和 `SessionActivity.swift` 接入，连接器接收活动 Token 后通过 APNs 更新状态。消息队列、Git 改动视图、命令 / Skill 面板和候选地址切换也已加入主链路。Android 与小程序仍为规划。
+
+本图展示组件关系，不表示所有异常路径均已验证。当前检查发现的问题见 [优化与拓展检查报告](REVIEW.md)。

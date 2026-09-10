@@ -198,3 +198,13 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 - 手机第一次访问某个终端会话（取消息、发消息、改选项）时连接器**接管**它：以同一 id 入库、把 transcript 翻译成消息历史（最多 300 条，工具调用变成工具卡），之后发消息走 `--resume <sessionId>` / `codex exec resume <threadId>`，与手机自建会话无异。接管后列表里不再重复。
 - 已被本连接器创建的会话（agentSessionId 已知）不会被当成终端会话重复列出。`createConnector({ importTerminal: false })` 可关闭。
 - Codex 额度：`GET /quota?agent=codex` 从最近的 rollout 里的 `token_count.rate_limits` 取（5 小时 / 本周窗口），带 `warning` 说明不是实时值。
+
+
+## 可靠性行为补充
+
+- Session 新增 `queuePaused: boolean`；队列项新增 `deliveryState`（`queued` / `dispatching` / `uncertain`），旧数据缺省为 queued。
+- 重启后保留队列并暂停，原 dispatching 转为 uncertain。`POST /sessions/:id/queue/resume` 主动恢复并返回 Session；有 uncertain 项时返回 409，需先检查历史并通过原 DELETE 队列接口移除该项。
+- 手动停止、Agent 错误会暂停尚未发送的队列。拒绝单个工具审批不代表整轮已结束，只有 Agent 回到 idle 才推进队列。
+- iOS 恢复前台时对已打开会话读取完整消息快照，更新原有消息与工具结果；原 `after` 查询仍可供只需增量追加的调用方使用。
+- HTTP 读取请求可在验证 connectorId 后切换一次候选地址；写请求失败不会自动重放。
+- 工作区 diff 中已暂存与未暂存改动以分节文本展示；会话范围包含基线 commit 以来的已提交修改。

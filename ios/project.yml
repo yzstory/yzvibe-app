@@ -22,6 +22,8 @@ targets:
         embed: true
     entitlements:
       path: App/YzVibe/YzVibe.entitlements
+      properties:
+        aps-environment: development
     info:
       path: App/YzVibe/Info.plist
       properties:

@@ -16,7 +16,9 @@ function readJSON(file, fallback) {
 }
 function writeJSON(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, file);
 }
 /** 工具输出可能是几百 KB 的编译日志，手机上只要看得懂就够了。 */
 export function clampOutput(text, max = MAX_TOOL_OUTPUT) {
@@ -34,7 +36,12 @@ export class Store extends EventEmitter {
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
     this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, push?, createdAt }]
-    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0, queue: [] }));
+    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({
+      mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s,
+      status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0,
+      queue: (s.queue ?? []).map((q) => ({ ...q, deliveryState: q.deliveryState === 'dispatching' ? 'uncertain' : (q.deliveryState ?? 'queued') })),
+      queuePaused: Boolean(s.queue?.length),
+    }));
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.uploads = new Map();                                               // id → { path, mime, name }
@@ -123,6 +130,11 @@ export class Store extends EventEmitter {
     this.#saveSessions();
     this.emit('event', { type: 'session.status', sessionId: id, status });
   }
+  setBaseline(id, sha) {
+    const s = this.session(id); if (!s) return;
+    s.baseCommit = sha;
+    this.#saveSessions();
+  }
   setAgentSessionId(id, agentSessionId) { const s = this.session(id); if (s) { s.agentSessionId = agentSessionId; this.#saveSessions(); } }
   /** Agent 自报的可用斜杠命令 / skill（Claude 的 system.init 事件）。 */
   setSessionCatalog(id, { slashCommands, terminalOnly, skills }) {
@@ -159,7 +171,7 @@ export class Store extends EventEmitter {
   /** @param front true 时插到队首（「立即发送」会配合打断当前轮一起用）。 */
   enqueue(sessionId, { text = '', attachments = [] }, { front = false } = {}) {
     const s = this.session(sessionId); if (!s) return null;
-    const item = { id: randomUUID(), text, attachments, createdAt: new Date().toISOString() };
+    const item = { id: randomUUID(), text, attachments, createdAt: new Date().toISOString(), deliveryState: 'queued' };
     s.queue = s.queue ?? [];
     if (front) s.queue.unshift(item); else s.queue.push(item);
     s.updatedAt = item.createdAt;
@@ -174,11 +186,32 @@ export class Store extends EventEmitter {
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
     return item;
   }
+  pauseQueue(sessionId) {
+    const s = this.session(sessionId); if (!s) return;
+    s.queuePaused = Boolean(s.queue?.length);
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+  }
+  resumeQueue(sessionId) {
+    const s = this.session(sessionId); if (!s) return;
+    if (s.queue?.some((q) => q.deliveryState === 'uncertain')) throw Object.assign(new Error('有发送结果待确认的消息，请先检查历史并移除此项'), { status: 409 });
+    s.queuePaused = false;
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+  }
+  markQueued(sessionId, itemId, deliveryState) {
+    const s = this.session(sessionId), item = s?.queue?.find((q) => q.id === itemId);
+    if (!item) return;
+    item.deliveryState = deliveryState;
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+  }
   cancelQueued(sessionId, itemId) {
     const s = this.session(sessionId); if (!s?.queue?.length) return false;
     const before = s.queue.length;
     s.queue = s.queue.filter((x) => x.id !== itemId);
     if (s.queue.length === before) return false;
+    if (!s.queue.length) s.queuePaused = false;
     this.#saveSessions();
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
     return true;
@@ -296,7 +329,7 @@ export class Store extends EventEmitter {
    */
   resolveApproval(id, decision, by = 'phone', remember = null) {
     const a = this.approvals.find((x) => x.id === id);
-    if (!a || a.status !== 'pending') return false;
+    if (!a || a.status !== 'pending' || !['allow', 'deny', 'allow_once'].includes(decision)) return false;
     clearTimeout(a.timer);
     a.status = by === 'timeout' ? 'expired' : decision === 'deny' ? 'denied' : 'allowed';
     let rule = null;
@@ -309,7 +342,8 @@ export class Store extends EventEmitter {
       } catch (e) { this.addMessage(a.sessionId, { role: 'system', text: `规则未保存：${e.message}` }); }
     }
     const s = this.session(a.sessionId); if (s) { s.pendingApprovals = Math.max(0, s.pendingApprovals - 1); }
-    this.setStatus(a.sessionId, decision === 'deny' ? 'idle' : 'running');
+    // 拒绝工具不代表 Agent 已结束本轮；只有 Agent 的结束事件才能推进队列。
+    this.setStatus(a.sessionId, 'running');
     this.emit('event', { type: 'approval.resolved', approvalId: id, decision, by, rule });
     a.resolve?.(decision);
     return true;
