@@ -16,6 +16,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /agents | 各 Agent 的能力表：`{ claude: { modes, efforts, models, customModel }, codex: {...} }`，见下文「会话选项」 |
 | GET | /fs/dirs?path= | 目录浏览（选工作目录用）：`{ path, parent, home, entries:[{name,path}] }`，只列目录、跳过隐藏项；path 缺省为主目录 |
 | POST | /fs/mkdir | `{ parent, name }` → `{ path }`（201）；名字含路径分隔符或以 . 开头 → 400 |
+| GET | /quota?agent=claude\|codex | 账号剩余额度，见下文「用量与额度」 |
 | GET | /sessions | 会话列表 |
 | POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, mode?, model?, effort? }` → Session（201）；cwd 不存在 → 400。旧字段 `yolo:true` 等价 `mode:'trust'` |
 | GET | /sessions/:id | 单个会话 |
@@ -60,7 +61,9 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 ## 数据模型（三端共用）
 ```ts
 type Device  = { id, name, host, port, mode: 'tunnel'|'local'|'p2p'|'tailscale'|'relay', online: boolean, lastSeen }
-type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null }
+type Session = { id, deviceId, agent: 'claude'|'codex'|string, cwd, title, status, createdAt, updatedAt, mode: 'plan'|'normal'|'trust', model: string|null, effort: string|null, usage: SessionUsage|null }
+type SessionUsage = { model, turn: TurnUsage, total: { input, cacheWrite, cacheRead, output, thinking, costUSD|null, turns }, updatedAt }
+type TurnUsage = { model, input, cacheWrite, cacheRead, output, thinking, contextTokens, contextWindow, costUSD|null, durationMs|null }
 type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, attachments?, toolCall?, createdAt }
 type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other', summary, detail, risk, status: 'pending'|'allowed'|'denied'|'expired', createdAt, expiresAt? }
 ```
@@ -84,3 +87,16 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 
 生效时机：Codex 每轮是独立进程，下一轮即生效；Claude 是常驻进程，连接器在会话空闲时于下一轮用 `--resume <session>` 重启进程带上新参数（运行中时等本轮结束）。
 `GET /agents` 返回的每个 Agent：`modes[plan|normal|trust] = { flag, description }`、`efforts: string[]`、`models: [{ id, label, description?, efforts?, defaultEffort? }]`、`customModel: boolean`。手机端在连接器不可达或版本较旧时使用内置回退表。
+
+## 用量与额度
+
+- **每轮用量**：一轮结束时连接器把 Agent 的原始统计归一成 `Session.usage`（`connector/src/agents/usage.js`）并广播 `session.updated`。
+  Claude 取 `result.usage` / `modelUsage`（含 `contextWindow`、目录价 `costUSD`），上下文大小取最后一条 assistant 消息的 `input + cache_creation + cache_read`；
+  Codex 取 `turn.completed.usage`（`input_tokens` 已含 `cached_input_tokens`），上下文窗口来自 `codex debug models` 的 `context_window`，没有费用估算。
+  `total` 由连接器自己累加，重启进程（切模型等）不会清零。
+- **账号额度** `GET /quota?agent=claude`：连接器用本机 Claude Code 的 OAuth token（macOS 钥匙串 `Claude Code-credentials`，或 `~/.claude/.credentials.json`）调
+  `https://api.anthropic.com/api/oauth/usage`，归一成 `{ agent, source: 'oauth'|'rate_limit_event'|'none', fetchedAt, limits: [{ id, label, percent, resetsAt }], extraUsage, error?, warning?, unavailable? }`。
+  `limits` 里 `session` = 5 小时窗口，`weekly_all` = 本周所有模型，`weekly_fable` 等 = 该模型的本周额度（来自接口 `limits[].kind = weekly_scoped` 的 `scope.model.display_name`）。
+  接口失败时退回最近一次流式输出里的 `rate_limit_event`（`unifiedWindows.five_hour / seven_day / seven_day_overage_included(Fable)`），并带 `warning`。结果缓存 60 秒，`?force=1` 强刷。
+  Codex 返回 `unavailable`：非交互模式没有额度接口。
+- **手机端图片**：上传前长边缩到 1568px 并转 JPEG（`ios/…/ImagePrep.swift`），与 API 的缩放阈值一致，避免原图超过 5MB 被拒绝。

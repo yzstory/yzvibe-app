@@ -183,6 +183,13 @@ public final class AppStore {
         return s
     }
 
+    /// 账号剩余额度；失败时返回带 error 的 QuotaInfo，由面板展示。
+    public func quota(for session: Session) async -> QuotaInfo {
+        guard let device = device(session.deviceId) else { return QuotaInfo(agent: session.agent.rawValue, error: "设备不在线") }
+        do { return try await client.quota(device: device, agent: session.agent) }
+        catch { return QuotaInfo(agent: session.agent.rawValue, error: error.localizedDescription) }
+    }
+
     // MARK: 会话选项（模式 / 模型 / 思考强度）
 
     public func setMode(_ mode: SessionMode, for sessionId: String) async {

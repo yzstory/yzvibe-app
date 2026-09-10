@@ -210,3 +210,50 @@ test('目录浏览 / 新建文件夹（选工作目录用）', async () => {
   assert.equal((await fetch(`${base}/fs/dirs?path=${encodeURIComponent(root)}`)).status, 401);
   await c.close();
 });
+
+test('用量归一：Claude result / Codex turn.completed / 累计', async () => {
+  const { claudeTurnUsage, codexTurnUsage, accumulateUsage } = await import('../src/agents/usage.js');
+  const result = { total_cost_usd: 0.08, duration_ms: 2695, usage: { input_tokens: 10, cache_creation_input_tokens: 39991, cache_read_input_tokens: 0, output_tokens: 41, output_tokens_details: { thinking_tokens: 35 } },
+    modelUsage: { 'claude-haiku-4-5-20251001': { inputTokens: 10, cacheReadInputTokens: 0, contextWindow: 200000 } } };
+  const t1 = claudeTurnUsage(result, { input_tokens: 10, cache_creation_input_tokens: 39991, cache_read_input_tokens: 0 }, 'haiku');
+  assert.equal(t1.model, 'claude-haiku-4-5-20251001'); assert.equal(t1.contextTokens, 40001); assert.equal(t1.contextWindow, 200000);
+  assert.equal(t1.cacheWrite, 39991); assert.equal(t1.thinking, 35); assert.equal(t1.costUSD, 0.08);
+  const t2 = codexTurnUsage({ input_tokens: 40441, cached_input_tokens: 29952, output_tokens: 115, reasoning_output_tokens: 7 }, 'gpt-5.5', 272000);
+  assert.equal(t2.input, 10489); assert.equal(t2.cacheRead, 29952); assert.equal(t2.contextTokens, 40441); assert.equal(t2.contextWindow, 272000);
+  let acc = accumulateUsage(null, t1); acc = accumulateUsage(acc, { ...t1, costUSD: 0.02 });
+  assert.equal(acc.total.turns, 2); assert.equal(acc.total.cacheWrite, 79982); assert.equal(Math.round(acc.total.costUSD * 100), 10); assert.equal(acc.turn.costUSD, 0.02);
+});
+
+test('Codex turn.completed 写入 session.usage 并广播', async () => {
+  const { handleCodexEvent } = await import('../src/agents/codex.js');
+  const { Store } = await import('../src/store.js');
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-cxu-')));
+  const s = store.createSession({ agent: 'codex', cwd, title: 't', model: 'gpt-5.5' });
+  const events = []; store.on('event', (e) => events.push(e));
+  handleCodexEvent({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 5 } }, store, s, { contextWindow: 272000 });
+  assert.equal(store.session(s.id).usage.turn.input, 40);
+  assert.equal(store.session(s.id).usage.total.turns, 1);
+  assert.ok(events.some((e) => e.type === 'session.updated' && e.session.usage?.turn.contextTokens === 100));
+});
+
+test('额度：OAuth usage 归一 / rate_limit_event 兜底 / Codex 不可用', async () => {
+  const { normalizeOAuthUsage, quotaFromRateLimit, agentQuota, rememberRateLimit, resetQuotaCache } = await import('../src/quota.js');
+  const q = normalizeOAuthUsage({ limits: [
+    { kind: 'session', percent: 24, resets_at: '2026-09-10T02:39:59Z' },
+    { kind: 'weekly_all', percent: 26, resets_at: '2026-09-14T14:59:59Z' },
+    { kind: 'weekly_scoped', percent: 45, resets_at: '2026-09-14T14:59:59Z', scope: { model: { display_name: 'Fable' } } },
+  ], extra_usage: { is_enabled: false, monthly_limit: 10000, used_credits: 0, utilization: 0 } });
+  assert.deepEqual(q.limits.map((l) => [l.id, l.label, l.percent]), [['session', '当前会话（5 小时）', 24], ['weekly_all', '本周（所有模型）', 26], ['weekly_fable', '本周（Fable）', 45]]);
+  assert.equal(q.extraUsage.enabled, false);
+  const rl = quotaFromRateLimit({ unifiedWindows: { five_hour: { utilization: 0.23, resetsAt: 1789008000 }, seven_day: { utilization: 0.25, resetsAt: 1789398000 }, seven_day_overage_included: { utilization: 0.4 } } });
+  assert.deepEqual(rl.limits.map((l) => [l.id, l.percent]), [['session', 23], ['weekly_all', 25], ['weekly_fable', 40]]);
+  assert.equal(rl.limits[0].resetsAt, '2026-09-10T02:40:00.000Z');
+  // 接口失败 → 用最近的 rate_limit_event
+  resetQuotaCache();
+  rememberRateLimit({ unifiedWindows: { five_hour: { utilization: 0.5 } } });
+  const fb = await agentQuota('claude', { fetchImpl: async () => ({ ok: false, status: 503 }), force: true });
+  assert.equal(fb.source, 'rate_limit_event'); assert.equal(fb.limits[0].percent, 50); assert.ok(fb.warning);
+  const cx = await agentQuota('codex');
+  assert.equal(cx.limits.length, 0); assert.ok(cx.unavailable);
+  resetQuotaCache();
+});

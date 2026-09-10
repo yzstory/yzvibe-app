@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import YzVibeKit
 
 final class YzVibeKitTests: XCTestCase {
@@ -116,5 +117,45 @@ final class SessionOptionsTests: XCTestCase {
         await store.setEffort("", for: "s1")
         XCTAssertNil(store.session("s1")?.effort)
         XCTAssertEqual(store.settings.defaults(for: .claude).mode, .trust)
+    }
+}
+
+// MARK: - 用量 / 额度 / 图片压缩
+
+final class UsageTests: XCTestCase {
+    func testSessionDecodesUsageFromConnector() throws {
+        let json = #"{"id":"s9","agent":"claude","cwd":"~","title":"t","status":"idle","usage":{"model":"claude-fable-5-1","turn":{"input":32,"cacheWrite":741,"cacheRead":127602,"output":1089,"thinking":35,"contextTokens":128375,"contextWindow":200000,"costUSD":0.08,"durationMs":2695},"total":{"input":100,"cacheWrite":800,"cacheRead":300000,"output":2000,"costUSD":0.5,"turns":3},"updatedAt":"2026-09-10T10:00:00.000Z"}}"#
+        let s = try JSONDecoder.yz.decode(Session.self, from: Data(json.utf8))
+        let u = try XCTUnwrap(s.usage)
+        XCTAssertEqual(u.turn.totalInput, 128_375)
+        XCTAssertEqual(u.turn.contextFraction.map { ($0 * 1000).rounded() / 1000 }, 0.642)
+        XCTAssertEqual(u.total.turns, 3)
+        // 没有 usage 或 usage 为 null 都能解
+        let none = try JSONDecoder.yz.decode(Session.self, from: Data(#"{"id":"s0","agent":"codex","cwd":"~","title":"t","status":"idle","usage":null}"#.utf8))
+        XCTAssertNil(none.usage)
+    }
+
+    func testQuotaDecodes() throws {
+        let json = #"{"agent":"claude","source":"oauth","fetchedAt":"2026-09-10T10:00:00.000Z","limits":[{"id":"session","label":"当前会话（5 小时）","percent":24,"resetsAt":"2026-09-10T02:39:59.000Z"},{"id":"weekly_fable","label":"本周（Fable）","percent":45,"resetsAt":null}],"extraUsage":{"enabled":false,"usedCredits":0,"monthlyLimit":10000,"percent":0,"currency":"USD"}}"#
+        let q = try JSONDecoder.yz.decode(QuotaInfo.self, from: Data(json.utf8))
+        XCTAssertEqual(q.limits.map(\.id), ["session", "weekly_fable"])
+        XCTAssertEqual(q.limits[1].percent, 45); XCTAssertNil(q.limits[1].resetsAt)
+        XCTAssertEqual(q.extraUsage?.enabled, false)
+        let err = try JSONDecoder.yz.decode(QuotaInfo.self, from: Data(#"{"agent":"claude","source":"none","limits":[],"error":"没登录"}"#.utf8))
+        XCTAssertEqual(err.error, "没登录")
+    }
+
+    func testImageDownscaleLimitsLongEdge() throws {
+        let fmt = UIGraphicsImageRendererFormat.default(); fmt.scale = 1   // 按像素算，不受模拟器 3x 屏幕影响
+        let big = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: fmt).image { ctx in UIColor.red.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000)) }
+        let out = try XCTUnwrap(ImagePrep.downscale(try XCTUnwrap(big.pngData())))
+        let img = try XCTUnwrap(UIImage(data: out))
+        XCTAssertEqual(img.size.width, 1568, accuracy: 1); XCTAssertEqual(img.size.height, 1176, accuracy: 1)
+        XCTAssertTrue(out.starts(with: [0xFF, 0xD8]))   // JPEG
+        // 小图不放大
+        let small = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 200), format: fmt).image { _ in }
+        let out2 = try XCTUnwrap(ImagePrep.downscale(try XCTUnwrap(small.pngData())))
+        XCTAssertEqual(UIImage(data: out2)?.size.width, 300)
+        XCTAssertNil(ImagePrep.downscale(Data([1, 2, 3])))
     }
 }

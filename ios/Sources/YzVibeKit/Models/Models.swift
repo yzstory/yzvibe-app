@@ -112,6 +112,128 @@ public struct AgentCapabilities: Codable, Hashable, Sendable {
     }
 }
 
+/// 一轮的 token 用量（连接器已把 Claude / Codex 归一）。上下文口径 = input + cacheWrite + cacheRead。
+public struct TurnUsage: Codable, Hashable, Sendable {
+    public var model: String?
+    public var input: Int
+    public var cacheWrite: Int
+    public var cacheRead: Int
+    public var output: Int
+    public var thinking: Int
+    public var contextTokens: Int?
+    public var contextWindow: Int?
+    public var costUSD: Double?
+    public var durationMs: Int?
+    public init(model: String? = nil, input: Int = 0, cacheWrite: Int = 0, cacheRead: Int = 0, output: Int = 0, thinking: Int = 0,
+                contextTokens: Int? = nil, contextWindow: Int? = nil, costUSD: Double? = nil, durationMs: Int? = nil) {
+        self.model = model; self.input = input; self.cacheWrite = cacheWrite; self.cacheRead = cacheRead; self.output = output; self.thinking = thinking
+        self.contextTokens = contextTokens; self.contextWindow = contextWindow; self.costUSD = costUSD; self.durationMs = durationMs
+    }
+    enum CodingKeys: String, CodingKey { case model, input, cacheWrite, cacheRead, output, thinking, contextTokens, contextWindow, costUSD, durationMs }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        input = try c.decodeIfPresent(Int.self, forKey: .input) ?? 0
+        cacheWrite = try c.decodeIfPresent(Int.self, forKey: .cacheWrite) ?? 0
+        cacheRead = try c.decodeIfPresent(Int.self, forKey: .cacheRead) ?? 0
+        output = try c.decodeIfPresent(Int.self, forKey: .output) ?? 0
+        thinking = try c.decodeIfPresent(Int.self, forKey: .thinking) ?? 0
+        contextTokens = try c.decodeIfPresent(Int.self, forKey: .contextTokens)
+        contextWindow = try c.decodeIfPresent(Int.self, forKey: .contextWindow)
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
+        durationMs = try c.decodeIfPresent(Int.self, forKey: .durationMs)
+    }
+    /// 送进模型的总输入。
+    public var totalInput: Int { input + cacheWrite + cacheRead }
+    public var contextFraction: Double? {
+        guard let t = contextTokens, let w = contextWindow, w > 0 else { return nil }
+        return min(1, Double(t) / Double(w))
+    }
+}
+
+/// 会话累计用量。
+public struct TotalUsage: Codable, Hashable, Sendable {
+    public var input: Int
+    public var cacheWrite: Int
+    public var cacheRead: Int
+    public var output: Int
+    public var thinking: Int
+    public var costUSD: Double?
+    public var turns: Int
+    public init(input: Int = 0, cacheWrite: Int = 0, cacheRead: Int = 0, output: Int = 0, thinking: Int = 0, costUSD: Double? = nil, turns: Int = 0) {
+        self.input = input; self.cacheWrite = cacheWrite; self.cacheRead = cacheRead; self.output = output; self.thinking = thinking; self.costUSD = costUSD; self.turns = turns
+    }
+    enum CodingKeys: String, CodingKey { case input, cacheWrite, cacheRead, output, thinking, costUSD, turns }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input = try c.decodeIfPresent(Int.self, forKey: .input) ?? 0
+        cacheWrite = try c.decodeIfPresent(Int.self, forKey: .cacheWrite) ?? 0
+        cacheRead = try c.decodeIfPresent(Int.self, forKey: .cacheRead) ?? 0
+        output = try c.decodeIfPresent(Int.self, forKey: .output) ?? 0
+        thinking = try c.decodeIfPresent(Int.self, forKey: .thinking) ?? 0
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
+        turns = try c.decodeIfPresent(Int.self, forKey: .turns) ?? 0
+    }
+}
+
+public struct SessionUsage: Codable, Hashable, Sendable {
+    public var model: String?
+    public var turn: TurnUsage
+    public var total: TotalUsage
+    public var updatedAt: Date?
+    public init(model: String? = nil, turn: TurnUsage, total: TotalUsage, updatedAt: Date? = nil) { self.model = model; self.turn = turn; self.total = total; self.updatedAt = updatedAt }
+    enum CodingKeys: String, CodingKey { case model, turn, total, updatedAt }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        turn = try c.decodeIfPresent(TurnUsage.self, forKey: .turn) ?? TurnUsage()
+        total = try c.decodeIfPresent(TotalUsage.self, forKey: .total) ?? TotalUsage()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
+    }
+}
+
+/// 账号额度（GET /quota）。Claude 来自 api/oauth/usage，含 5 小时 / 本周 / 本周 Fable 等窗口。
+public struct QuotaLimit: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var label: String
+    public var percent: Int
+    public var resetsAt: Date?
+    public init(id: String, label: String, percent: Int, resetsAt: Date? = nil) { self.id = id; self.label = label; self.percent = percent; self.resetsAt = resetsAt }
+}
+
+public struct QuotaInfo: Codable, Hashable, Sendable {
+    public struct ExtraUsage: Codable, Hashable, Sendable {
+        public var enabled: Bool
+        public var usedCredits: Double
+        public var monthlyLimit: Double?
+        public var percent: Int
+        public var currency: String
+    }
+    public var agent: String
+    public var source: String
+    public var fetchedAt: Date?
+    public var limits: [QuotaLimit]
+    public var extraUsage: ExtraUsage?
+    public var error: String?
+    public var warning: String?
+    public var unavailable: String?
+    public init(agent: String, source: String = "none", fetchedAt: Date? = nil, limits: [QuotaLimit] = [], extraUsage: ExtraUsage? = nil, error: String? = nil, warning: String? = nil, unavailable: String? = nil) {
+        self.agent = agent; self.source = source; self.fetchedAt = fetchedAt; self.limits = limits; self.extraUsage = extraUsage; self.error = error; self.warning = warning; self.unavailable = unavailable
+    }
+    enum CodingKeys: String, CodingKey { case agent, source, fetchedAt, limits, extraUsage, error, warning, unavailable }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        agent = try c.decodeIfPresent(String.self, forKey: .agent) ?? "claude"
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? "none"
+        fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
+        limits = try c.decodeIfPresent([QuotaLimit].self, forKey: .limits) ?? []
+        extraUsage = try c.decodeIfPresent(ExtraUsage.self, forKey: .extraUsage)
+        error = try c.decodeIfPresent(String.self, forKey: .error)
+        warning = try c.decodeIfPresent(String.self, forKey: .warning)
+        unavailable = try c.decodeIfPresent(String.self, forKey: .unavailable)
+    }
+}
+
 public enum SessionStatus: String, Codable, Sendable {
     case idle, running, waitingApproval = "waiting_approval", error, closed
     public var displayName: String {
@@ -160,19 +282,20 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var mode: SessionMode
     public var model: String?
     public var effort: String?
+    public var usage: SessionUsage?
 
     public init(id: String = UUID().uuidString, deviceId: String, agent: AgentKind, cwd: String, title: String,
                 status: SessionStatus = .idle, createdAt: Date = .now, updatedAt: Date = .now, pendingApprovals: Int = 0,
-                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil) {
+                mode: SessionMode = .normal, model: String? = nil, effort: String? = nil, usage: SessionUsage? = nil) {
         self.id = id; self.deviceId = deviceId; self.agent = agent; self.cwd = cwd; self.title = title
         self.status = status; self.createdAt = createdAt; self.updatedAt = updatedAt; self.pendingApprovals = pendingApprovals
-        self.mode = mode; self.model = model; self.effort = effort
+        self.mode = mode; self.model = model; self.effort = effort; self.usage = usage
     }
 
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -188,6 +311,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         mode = SessionMode(rawValue: try c.decodeIfPresent(String.self, forKey: .mode) ?? "") ?? .normal
         model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }
         effort = try c.decodeIfPresent(String.self, forKey: .effort).flatMap { $0.isEmpty ? nil : $0 }
+        usage = try? c.decodeIfPresent(SessionUsage.self, forKey: .usage)
     }
 }
 

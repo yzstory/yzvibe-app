@@ -91,13 +91,21 @@ export async function codexModels() {
           .filter((m) => m.visibility !== 'hide' && m.slug)
           .sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
           .map((m) => ({ id: m.slug, label: m.display_name ?? m.slug, description: m.description,
-                         efforts: (m.supported_reasoning_levels ?? []).map((l) => l.effort), defaultEffort: m.default_reasoning_level }));
+                         efforts: (m.supported_reasoning_levels ?? []).map((l) => l.effort), defaultEffort: m.default_reasoning_level,
+                         contextWindow: m.context_window ?? null }));
         resolve(list.length ? list : null);
       } catch { resolve(null); }
     });
   });
   codexCatalog = { at: Date.now(), models: models ?? CODEX.models };
   return codexCatalog.models;
+}
+
+/** 某个 Codex 模型的上下文窗口；未指定模型时取目录里的第一个（Codex 默认模型）。 */
+export async function codexContextWindow(model) {
+  const list = await codexModels();
+  const m = (model && list.find((x) => x.id === model)) || list[0];
+  return m?.contextWindow ?? 272_000;
 }
 
 export async function agentCapabilities() {

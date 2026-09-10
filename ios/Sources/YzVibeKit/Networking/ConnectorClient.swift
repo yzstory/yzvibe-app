@@ -23,6 +23,8 @@ public protocol ConnectorClient: Sendable {
     func listDirectories(device: Device, path: String?) async throws -> DirectoryListing
     /// 新建文件夹（POST /fs/mkdir），返回新目录绝对路径。
     func makeDirectory(device: Device, parent: String, name: String) async throws -> String
+    /// 账号剩余额度（GET /quota?agent=）。
+    func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo
     /// 服务端事件流；调用方持有并消费。
     func events(device: Device) -> AsyncStream<ConnectorEvent>
 }
@@ -183,6 +185,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: patch.mapValues { v -> Any in v ?? NSNull() })
         return try await perform(req, as: Session.self)
+    }
+
+    public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
+        try await perform(request(device, "/quota?agent=\(agent.rawValue)"), as: QuotaInfo.self)
     }
 
     public func events(device: Device) -> AsyncStream<ConnectorEvent> {

@@ -7,6 +7,7 @@ struct ChatView: View {
     let sessionId: String
     @State private var draft = ""
     @State private var showFiles = false
+    @State private var showUsage = false
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
@@ -45,6 +46,7 @@ struct ChatView: View {
                 if session?.status == .running {
                     Button { Task { await store.stop(sessionId) } } label: { Image(systemName: "stop.fill").foregroundStyle(p.danger) }
                 }
+                Button { showUsage = true } label: { UsageGauge(fraction: session?.usage?.turn.contextFraction) }
                 Button { showFiles = true } label: { Image(systemName: "folder") }
                 if let s = session { Chip.agent(s.agent, suffix: s.model.map { store.capabilities(for: s).label(forModel: $0) }) }
             }
@@ -59,6 +61,7 @@ struct ChatView: View {
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
+        .sheet(isPresented: $showUsage) { if let s = session { UsageSheet(sessionId: s.id).presentationDetents([.large]) } }
     }
 
     // 选项胶囊的绑定：本地乐观更新 + PATCH 到连接器（AppStore.patchSession）
@@ -94,8 +97,10 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
             }
-            InputBar(text: $draft, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onPickImage: { data, mime, name in
+            InputBar(text: $draft, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onPickImage: { raw, rawMime, rawName in
                 Task {
+                    // 先缩到 1568px 长边再上传：省流量、省 token，也避免原图超过 5MB 被 API 拒绝
+                    let (data, mime, name) = await ImagePrep.forUpload(raw) ?? (raw, rawMime, rawName)
                     if let id = await store.upload(data, mime: mime, filename: name, for: sessionId) {
                         await store.send(draft.isEmpty ? "（图片）" : draft, in: sessionId, attachments: [id]); draft = ""
                     }

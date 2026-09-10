@@ -35,3 +35,8 @@
 - 验证：connector 6 个测试通过；YzVibeKit 模拟器编译通过 + 单测；真实 Claude（haiku, trust→normal + effort 切换触发 --resume 重启）与真实 Codex（gpt-5.6-sol, normal→plan resume）各两轮冒烟均记得上下文
 - 已知限制：Codex 非交互模式没有审批回调，Normal 只靠 workspace-write 沙箱兜底；要做 Codex 审批需改走 `codex app-server` 协议
 - 新建会话页对齐 Vibelet（以远程 Plan/Normal/Trust 选项模型为基线叠加）：工作目录「浏览/收藏」、首句消息「历史/模板」、会话模式四张卡（继续上次 / 模式 / 模型 / 思考强度）、启动摘要卡；新增目录选择器（上级目录 / 主目录 / 新建文件夹 / 选择此文件夹）；连接器新增 /fs/dirs、/fs/mkdir 并加测试。Fast mode 未做：本机 claude CLI 没有对应参数。
+
+## 2026-09-10 用量面板 + 图片压缩
+- 连接器：`agents/usage.js` 归一每轮 token（Claude result / Codex turn.completed），`Session.usage` 含本轮与累计；`quota.js` 用本机 OAuth token 调 `api/oauth/usage`（含 Fable 本周额度 `weekly_scoped`），失败退回 `rate_limit_event`；`GET /quota?agent=`
+- iOS：导航栏环形表（上下文占比）→「上下文详情」面板：上下文进度条、账号剩余用量（5 小时 / 本周 / 本周 Fable，含重置时间与来源）、本轮与累计 tokens、费用；图片上传前缩到 1568px JPEG
+- 验证：connector 10 个测试、YzVibeKit 15 个测试

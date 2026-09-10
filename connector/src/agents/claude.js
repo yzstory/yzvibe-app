@@ -6,6 +6,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { expandHome } from '../files.js';
 import { claudeOptionArgs } from './options.js';
+import { claudeTurnUsage, accumulateUsage } from './usage.js';
+import { rememberRateLimit } from '../quota.js';
 
 export class ClaudeAgent {
   constructor({ session, store, internalURL, internalSecret, home, options = {} }) {
@@ -16,6 +18,8 @@ export class ClaudeAgent {
     this.currentText = '';
     this.sawDelta = false;
     this.needsRespawn = false;
+    this.modelId = null;            // system.init 里的模型
+    this.lastMessageUsage = null;   // 最后一条 assistant 消息的 usage，用于算上下文大小
   }
 
   /** 手机切换了 mode / model / effort：这些是 claude 进程级参数，空闲时在下一轮以 --resume 重启进程生效。 */
@@ -109,7 +113,10 @@ export class ClaudeAgent {
     const { store, session } = this;
     switch (ev.type) {
       case 'system':
-        if (ev.subtype === 'init' && ev.session_id) store.setAgentSessionId(session.id, ev.session_id);
+        if (ev.subtype === 'init') { if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id); if (ev.model) this.modelId = ev.model; }
+        break;
+      case 'rate_limit_event':
+        rememberRateLimit(ev.rate_limit_info);
         break;
       case 'stream_event': {
         const e = ev.event;
@@ -122,6 +129,7 @@ export class ClaudeAgent {
         break;
       }
       case 'assistant': {
+        if (ev.message?.usage) this.lastMessageUsage = ev.message.usage;
         const blocks = ev.message?.content ?? [];
         const text = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('');
         const mid = this.#ensureMessage();
@@ -145,6 +153,7 @@ export class ClaudeAgent {
         if (this.currentMessageId) { store.finishMessage(session.id, this.currentMessageId, this.currentText || undefined); this.currentMessageId = null; }
         if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id);
         if (ev.is_error) store.addMessage(session.id, { role: 'system', text: `Claude 出错：${ev.result ?? ev.subtype}` });
+        if (ev.usage) store.setUsage(session.id, accumulateUsage(session.usage, claudeTurnUsage(ev, this.lastMessageUsage, this.modelId)));
         store.setStatus(session.id, ev.is_error ? 'error' : 'idle');
         break;
       }

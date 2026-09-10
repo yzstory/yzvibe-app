@@ -4,7 +4,8 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { expandHome } from '../files.js';
-import { codexOptionArgs, CODEX_PLAN_PREFIX } from './options.js';
+import { codexOptionArgs, CODEX_PLAN_PREFIX, codexContextWindow } from './options.js';
+import { codexTurnUsage, accumulateUsage } from './usage.js';
 
 export class CodexAgent {
   constructor({ session, store }) {
@@ -13,6 +14,8 @@ export class CodexAgent {
     this.buffer = '';
     this.queue = [];
     this.turnErrored = false;
+    this.contextWindow = null;
+    codexContextWindow(session.model).then((w) => { this.contextWindow = w; }).catch(() => {});
   }
 
   configure() { /* 每轮重新拼参数，无需处理 */ }
@@ -123,6 +126,9 @@ export function handleCodexEvent(ev, store, session, state = {}) {
     case 'error':
       state.turnErrored = true;
       store.addMessage(session.id, { role: 'system', text: `Codex 出错：${humanError(ev.message)}` });
+      break;
+    case 'turn.completed':
+      if (ev.usage) store.setUsage(session.id, accumulateUsage(session.usage, codexTurnUsage(ev.usage, session.model, state.contextWindow ?? null)));
       break;
     case 'turn.failed':
       if (!state.turnErrored) { state.turnErrored = true; store.addMessage(session.id, { role: 'system', text: `Codex 出错：${humanError(ev.error?.message)}` }); }

@@ -22,7 +22,7 @@ export class Store extends EventEmitter {
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
     this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, createdAt }]
-    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
+    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.autoAllow = new Map();                                             // `${sessionId}:${toolName}:${summary}` → true
@@ -47,7 +47,7 @@ export class Store extends EventEmitter {
   // ---------- 会话 ----------
   createSession({ agent, cwd, title, mode = 'normal', model = null, effort = null }) {
     const now = new Date().toISOString();
-    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort };
+    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort, usage: null };
     this.sessions.unshift(s);
     this.messages.set(s.id, []);
     this.#saveSessions();
@@ -71,6 +71,13 @@ export class Store extends EventEmitter {
     for (const k of ['mode', 'model', 'effort']) if (k in patch && s[k] !== patch[k]) { s[k] = patch[k]; changed = true; }
     if (changed) { s.updatedAt = new Date().toISOString(); this.#saveSessions(); this.emit('event', { type: 'session.updated', session: this.publicSession(s) }); }
     return changed;
+  }
+  /** 一轮结束后记录 token 用量（本轮 + 累计），广播 session.updated。 */
+  setUsage(id, usage) {
+    const s = this.session(id); if (!s) return;
+    s.usage = usage; s.updatedAt = new Date().toISOString();
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
   }
   closeSession(id) { this.setStatus(id, 'closed'); }
   #saveSessions() { writeJSON(path.join(this.home, 'sessions.json'), this.sessions); }

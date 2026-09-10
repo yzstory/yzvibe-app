@@ -35,6 +35,15 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws {}
 
     public func approvals(device: Device) async throws -> [Approval] { MockData.approvals.filter { $0.deviceId == device.id } }
+    public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
+        try await Task.sleep(nanoseconds: 300_000_000)
+        if agent == .codex { return QuotaInfo(agent: "codex", unavailable: "Codex 非交互模式暂无额度接口") }
+        return QuotaInfo(agent: "claude", source: "oauth", fetchedAt: .now, limits: [
+            QuotaLimit(id: "session", label: "当前会话（5 小时）", percent: 24, resetsAt: .now.addingTimeInterval(3600 * 2)),
+            QuotaLimit(id: "weekly_all", label: "本周（所有模型）", percent: 26, resetsAt: .now.addingTimeInterval(86400 * 4)),
+            QuotaLimit(id: "weekly_fable", label: "本周（Fable）", percent: 45, resetsAt: .now.addingTimeInterval(86400 * 4)),
+        ], extraUsage: .init(enabled: false, usedCredits: 0, monthlyLimit: 100, percent: 0, currency: "USD"))
+    }
     public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
         ["claude": .fallback(for: .claude), "codex": .fallback(for: .codex)]
     }
