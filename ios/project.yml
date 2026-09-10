@@ -41,3 +41,17 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UIUserInterfaceStyle: Automatic
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+schemes:
+  YzVibe:
+    build:
+      targets:
+        YzVibe: all
+    # 安装到手机默认用 Release（Xcode ▸ Run 也走 Release）；需要断点调试时在 Edit Scheme 里临时切回 Debug
+    run:
+      config: Release
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
