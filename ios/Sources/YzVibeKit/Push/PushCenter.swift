@@ -3,7 +3,7 @@ import UserNotifications
 
 /// 推送里带回来的上下文（连接器放在 payload 的 `yz` 字段里）。
 public struct PushPayload: Sendable, Equatable {
-    public enum Kind: String, Sendable { case approval, reply, approvalResolved = "approval.resolved", test, unknown }
+    public enum Kind: String, Sendable { case approval, reply, approvalResolved = "approval.resolved", endpoint, test, unknown }
     public var kind: Kind
     public var sessionId: String?
     public var approvalId: String?
@@ -15,6 +15,24 @@ public struct PushPayload: Sendable, Equatable {
         sessionId = yz["sessionId"] as? String
         approvalId = yz["approvalId"] as? String
         connector = yz["connector"] as? String
+    }
+}
+
+/// 电脑换地址时静默推过来的新地址（重启、Cloudflare 临时隧道换地址）。
+public struct EndpointUpdate: Sendable, Equatable {
+    public var connectorId: String?
+    public var name: String?
+    public var endpoints: [String]
+    public var reason: String?
+
+    public init?(userInfo: [AnyHashable: Any]) {
+        let yz = userInfo["yz"] as? [String: Any] ?? [:]
+        guard (yz["kind"] as? String) == "endpoint" else { return nil }
+        connectorId = yz["connectorId"] as? String
+        name = yz["name"] as? String
+        endpoints = (yz["endpoints"] as? [String])?.filter { !$0.isEmpty } ?? []
+        reason = yz["reason"] as? String
+        if endpoints.isEmpty { return nil }
     }
 }
 
@@ -37,6 +55,8 @@ public final class PushCenter: NSObject, UNUserNotificationCenterDelegate {
     public var onOpen: ((PushPayload) -> Void)?
     /// 收到静默推送，趁机在后台补一次数据。
     public var onSilent: (() async -> Void)?
+    /// 电脑换地址了（重启 / 隧道换地址），照着新地址接上就行，不用重新扫码。
+    public var onEndpoint: ((EndpointUpdate) -> Void)?
 
     private override init() { super.init() }
 
@@ -66,6 +86,7 @@ public final class PushCenter: NSObject, UNUserNotificationCenterDelegate {
 
     public func handleSilent(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
         if let badge = (userInfo["aps"] as? [String: Any])?["badge"] as? Int { setBadge(badge) }
+        if let update = EndpointUpdate(userInfo: userInfo) { onEndpoint?(update); return .newData }
         await onSilent?()
         return .newData
     }

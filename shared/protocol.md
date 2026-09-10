@@ -19,6 +19,10 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | POST | /rules | 手动新增一条规则 |
 | DELETE | /rules/:id | 撤销一条规则 |
 | POST | /devices/push | `{ token, environment: sandbox\|production, bundleId }` 注册 APNs token |
+| POST | /devices/live-activity | `{ sessionId, token, environment }` 注册锁屏 / 灵动岛活动的推送 token |
+| GET | /sessions/:id/diff?scope= | 工作目录改动：`{ repo, branch, head, files:[{path,status,added,removed,diff,untracked}], totals, truncated }`；`scope=session` 跟会话基线 commit 比 |
+| GET | /sessions/:id/commands | 可用命令与 skill：`{ app, agentCommands, skills, prompts, note?, reported }` |
+| DELETE | /sessions/:id/queue/:itemId | 撤掉一条还没发出去的排队消息 |
 | DELETE | /devices/push | 注销本机推送 |
 | GET | /fs/dirs?path= | 目录浏览（选工作目录用）：`{ path, parent, home, entries:[{name,path}] }`，只列目录、跳过隐藏项；path 缺省为主目录 |
 | POST | /fs/mkdir | `{ parent, name }` → `{ path }`（201）；名字含路径分隔符或以 . 开头 → 400 |
@@ -29,7 +33,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | PATCH | /sessions/:id | `{ mode?, model?, effort? }` 改会话选项 → Session；`model`/`effort` 传 `null` 或空串恢复默认；广播 `session.updated` |
 | DELETE | /sessions/:id | 结束会话 |
 | GET | /sessions/:id/messages?after=<messageId> | 增量消息（after 之后的） |
-| POST | /sessions/:id/messages | `{ text, attachments? }`（WS 之外的发送方式）|
+| POST | /sessions/:id/messages | `{ text, attachments?, mode }` → `{ ok, queued, item? }`。`mode`：`auto`（默认，忙就排队）/ `queue` / `now`（插队并打断当前轮）|
 | POST | /sessions/:id/stop | 中断当前轮 |
 | GET | /approvals?status=pending | 审批列表（手机重启后用它恢复收件箱） |
 | POST | /approvals/:id | `{ decision, remember? }`（WS 之外的审批方式）；`remember` 见下 |
@@ -70,7 +74,8 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 ```
 ### 客户端 → 服务端
 ```jsonc
-{ "type": "message.send",     "sessionId": "s1", "text": "...", "attachments": ["upload-id"] }
+{ "type": "message.send",     "sessionId": "s1", "text": "...", "attachments": ["upload-id"], "mode": "auto|queue|now" }
+{ "type": "message.cancel",   "sessionId": "s1", "itemId": "q1" }
 { "type": "session.stop",     "sessionId": "s1" }
 { "type": "session.resume",   "sessionId": "s1" }
 { "type": "session.configure","sessionId": "s1", "mode": "plan", "model": "opus", "effort": "high" }   // 同 PATCH /sessions/:id
@@ -109,6 +114,35 @@ App 端 `PairingPayload(text:)` 四种输入通吃：深链、外链、JSON、�
 ## 连接器本机内部接口（不对手机开放）
 - `POST /internal/approval`、`GET /internal/status`：只接受带 `X-YzVibe-Secret` 的本机请求，secret 每次启动随机生成，写在 `~/.yzvibe/daemon.json`（0600）。
 - `GET /internal/status` → `{ pid, name, version, port, uptime, host, mode, pairing: { token, expiresAt, url }, stats: { devices, sessions, running, pendingApprovals } }`，供 `yzvibe status / qr` 使用（`pairing` 含 `token / expiresAt / url / link / config`）；配对码过期时这里会自动换新，因此连接器常驻后台也随时能配对。
+
+## 地址稳定性
+
+`GET /health` 与配对配置里都带 `endpoints`：连接器所有可达地址（隧道 / Tailscale / 局域网 / 回环）。
+手机主地址连不上时依次探活 `/health`（比对 `connectorId`，防止连到别的电脑），成功后把它作为新的主地址存下来。
+连接器启动时、以及 Cloudflare 临时隧道重连后，会给所有注册过推送的手机发一条静默推送：
+
+```jsonc
+{ "aps": { "content-available": 1 },
+  "yz": { "kind": "endpoint", "connectorId": "…", "name": "Mac",
+          "endpoints": ["https://新地址", "http://192.168.1.5:19876"], "reason": "tunnel-reconnect" } }
+```
+
+同一 Wi-Fi 下连接器还会用 Bonjour 广播 `_yzvibe._tcp`（TXT 带 `id=<connectorId>`）。
+设备 Token 一直有效，所以只要地址找得回来就不必重新扫码。
+
+## 锁屏 / 灵动岛实时活动
+
+手机 `POST /devices/live-activity` 交出活动的推送 token 后，连接器在会话状态变化时直接推：
+
+```jsonc
+// headers: apns-push-type: liveactivity, apns-topic: <bundleId>.push-type.liveactivity
+{ "aps": { "timestamp": 1789050000, "event": "update", "stale-date": 1789050600,
+           "content-state": { "status": "running", "headline": "正在 Bash：npm test",
+                              "pendingApprovals": 0, "queued": 2, "contextPercent": 37,
+                              "updatedAt": 810742800 } } }
+```
+
+`updatedAt` 是 Swift `Date` 的默认编码（自 2001-01-01 起的秒数），不是 ISO8601。会话闲下来推一条 `event: "end"`。
 
 ## 远程推送（APNs）
 连接器直连 `api.push.apple.com`，配置在 `~/.yzvibe/apns.json`（`keyFile` / `keyId` / `teamId` / `bundleId` / `environment`）。

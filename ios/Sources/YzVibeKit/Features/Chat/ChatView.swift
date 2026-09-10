@@ -10,6 +10,9 @@ struct ChatView: View {
     @State private var showUsage = false
     @State private var pending: [PendingImage] = []
     @State private var openFile: FileRef?
+    @State private var showDiff = false
+    @State private var showCommands = false
+    @State private var newSessionSeed: String?
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
@@ -19,18 +22,15 @@ struct ChatView: View {
             AmbientBackground()
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 14) {
-                        ForEach(messages) { m in
-                            MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 140)
+                    messageList
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 140)
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .onTapGesture { hideKeyboard() }
                 .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
+                .onChange(of: queued.count) { _, _ in scrollToBottom(proxy) }
                 .onChange(of: messages.last?.text.count) { _, _ in scrollToBottom(proxy, animated: false) }
                 .onAppear { scrollToBottom(proxy, animated: false) }
             }
@@ -49,6 +49,7 @@ struct ChatView: View {
                     Button { Task { await store.stop(sessionId) } } label: { Image(systemName: "stop.fill").foregroundStyle(p.danger) }
                 }
                 Button { showUsage = true } label: { UsageGauge(fraction: session?.usage?.turn.contextFraction) }
+                Button { showDiff = true } label: { Image(systemName: "plusminus.circle") }
                 Button { showFiles = true } label: { Image(systemName: "folder") }
                 if let s = session { Chip.agent(s.agent, suffix: s.model.map { store.capabilities(for: s).label(forModel: $0) }) }
             }
@@ -63,6 +64,11 @@ struct ChatView: View {
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
+        .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
+        .sheet(isPresented: $showCommands) { CommandPaletteView(sessionId: sessionId) { run($0) } }
+        .sheet(item: Binding(get: { newSessionSeed.map { FileRef(path: $0) } }, set: { if $0 == nil { newSessionSeed = nil } })) { seed in
+            NewSessionView(presetCwd: session?.cwd, presetAgent: session?.agent, presetFirstMessage: seed.path.isEmpty ? nil : seed.path)
+        }
         .sheet(item: $openFile) { ref in NavigationStack { FileViewerView(session: session, path: ref.path) } }
         .sheet(isPresented: $showUsage) { if let s = session { UsageSheet(sessionId: s.id).presentationDetents([.large]) } }
     }
@@ -78,6 +84,60 @@ struct ChatView: View {
         Binding(get: { session?.effort }, set: { e in Task { await store.setEffort(e, for: sessionId) } })
     }
 
+    @ViewBuilder
+    private var messageList: some View {
+        LazyVStack(spacing: 14) {
+            ForEach(messages) { m in
+                MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
+            }
+            // 正忙时发的消息排在这里，本轮结束会自动接上
+            ForEach(queued) { item in
+                QueuedBubble(item: item) { Task { await store.cancelQueued(item.id, in: sessionId) } }
+                    .id("queued-" + item.id)
+            }
+        }
+    }
+
+    private var queued: [QueuedMessage] { session?.queue ?? [] }
+    private var busy: Bool { session?.status == .running || session?.status == .waitingApproval }
+
+    /// 发出去（或排队）。图片在选择时已经缩过，这里逐张上传拿 id。
+    private func submit(_ mode: SendMode) {
+        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = pending
+        guard !t.isEmpty || !images.isEmpty else { return }
+        draft = ""; pending = []
+        Task {
+            var ids: [String] = []
+            for img in images {
+                if let id = await store.upload(img.data, mime: "image/jpeg", filename: "photo.jpg", for: sessionId) {
+                    store.cacheAttachment(img.image, id: id); ids.append(id)
+                }
+            }
+            let queued = await store.send(t, in: sessionId, attachments: ids, mode: mode)
+            if queued { store.toast = "已排队，本轮结束后自动发送" }
+        }
+    }
+
+    /// 命令面板选中一条：手机端命令就地执行，其余的填进输入框（Codex 的 skill 只能当提示词插进去）。
+    private func run(_ cmd: SlashCommand) {
+        guard cmd.isApp else {
+            let prefix = cmd.insertAsText ? "参考 skill「\(cmd.name)」：" : "/\(cmd.name) "
+            draft = draft.isEmpty ? prefix : draft + (draft.hasSuffix(" ") ? "" : " ") + prefix
+            return
+        }
+        switch cmd.action {
+        case "new-session": newSessionSeed = ""
+        case "stop": Task { await store.stop(sessionId) }
+        case "diff": showDiff = true
+        case "files": showFiles = true
+        case "usage": showUsage = true
+        case "rules": store.toast = "在「我 › 安全 › 审批规则」里管理"
+        case "model", "effort", "mode": store.toast = "在输入框上面那排胶囊里切换"
+        default: store.toast = "这个命令还没实现"
+        }
+    }
+
     private func hideKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
@@ -89,22 +149,12 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            InputBar(text: $draft, pending: $pending, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onSend: {
-                let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                let images = pending
-                guard !t.isEmpty || !images.isEmpty else { return }
-                draft = ""; pending = []
-                Task {
-                    // 图片已在选择时缩到 1568px；这里逐张上传，拿到 id 后连同文字一起发
-                    var ids: [String] = []
-                    for img in images {
-                        if let id = await store.upload(img.data, mime: "image/jpeg", filename: "photo.jpg", for: sessionId) {
-                            store.cacheAttachment(img.image, id: id); ids.append(id)
-                        }
-                    }
-                    await store.send(t, in: sessionId, attachments: ids)
-                }
-            }) {
+            InputBar(text: $draft, pending: $pending,
+                     placeholder: busy ? "会排在当前任务后面…" : "发消息给 \(session?.agent.displayName ?? "Agent")…",
+                     sendHint: busy ? .queue : .send,
+                     onSend: { submit(.auto) },
+                     onSendNow: busy ? { submit(.now) } : nil,
+                     onCommands: { showCommands = true }) {
                 if let s = session { SessionOptionsRow(agent: s.agent, caps: store.capabilities(for: s), mode: modeBinding, model: modelBinding, effort: effortBinding) }
             }
             .padding(.horizontal, 16)
@@ -248,11 +298,16 @@ struct PendingImage: Identifiable, Equatable {
 }
 
 struct InputBar<Accessory: View>: View {
+    enum SendHint { case send, queue }
     @Environment(\.palette) private var p
     @Binding var text: String
     @Binding var pending: [PendingImage]
     let placeholder: String
+    var sendHint: SendHint = .send
     let onSend: () -> Void
+    /// 非空时长按发送键可以插队并打断当前这一轮。
+    var onSendNow: (() -> Void)? = nil
+    var onCommands: (() -> Void)? = nil
     @ViewBuilder let accessory: () -> Accessory
     @FocusState private var focused: Bool
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -308,16 +363,29 @@ struct InputBar<Accessory: View>: View {
                         }
                     }
                 }
+                if let onCommands {
+                    Button(action: onCommands) {
+                        Image(systemName: "slash.circle").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                            .frame(width: 36, height: 36).background(Circle().fill(p.fill))
+                    }
+                }
                 accessory()
                 Spacer(minLength: 0)
                 Button(action: onSend) {
-                    Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)).foregroundStyle(p.brandInk)
+                    Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
+                        .font(.system(size: 16, weight: .bold)).foregroundStyle(p.brandInk)
                         .frame(width: 40, height: 40)
                         .liquidGlass(in: Circle(), tint: p.brand, interactive: true)
                         .background(Circle().fill(p.brand.opacity(0.85)))
                 }
                 .disabled(empty)
                 .opacity(empty ? 0.5 : 1)
+                .contextMenu {
+                    if let onSendNow {
+                        Button { onSend() } label: { Label("排队发送", systemImage: "text.line.first.and.arrowtriangle.forward") }
+                        Button(role: .destructive) { onSendNow() } label: { Label("立即发送（打断当前任务）", systemImage: "bolt.fill") }
+                    }
+                }
             }
         }
         .padding(8)
@@ -328,5 +396,44 @@ struct InputBar<Accessory: View>: View {
 extension InputBar where Accessory == EmptyView {
     init(text: Binding<String>, pending: Binding<[PendingImage]>, placeholder: String, onSend: @escaping () -> Void) {
         self.init(text: text, pending: pending, placeholder: placeholder, onSend: onSend, accessory: { EmptyView() })
+    }
+}
+
+/// 排队中的消息：本轮结束会自动发出去，点 × 可以撤掉。
+struct QueuedBubble: View {
+    @Environment(\.palette) private var p
+    let item: QueuedMessage
+    let onCancel: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 60)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .trailing, spacing: 6) {
+                    if !item.text.isEmpty {
+                        Text(item.text).font(.system(size: 16)).foregroundStyle(p.labelSecondary).multilineTextAlignment(.trailing)
+                    }
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock").font(.system(size: 10, weight: .semibold))
+                        Text(item.attachments.isEmpty ? "排队中" : "排队中 · \(item.attachments.count) 张图")
+                            .font(.yzCaption).fontWeight(.semibold)
+                    }
+                    .foregroundStyle(p.labelTertiary)
+                }
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 18))
+                        .symbolRenderingMode(.hierarchical).foregroundStyle(p.labelTertiary)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(
+                UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                    .fill(p.fill)
+                    .overlay(
+                        UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                            .strokeBorder(p.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    )
+            )
+        }
     }
 }

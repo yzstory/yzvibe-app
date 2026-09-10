@@ -13,6 +13,7 @@ ios/
 │  ├─ Push/                 # PushCenter + UIApplicationDelegate（APNs 注册与通知跳转）
 │  └─ Features/             # Root / Devices / Sessions / Chat / Approvals / Files / Me
 ├─ Tests/YzVibeKitTests/
+├─ Widgets/YzVibeWidgets/   # 锁屏 / 灵动岛实时活动（WidgetKit + ActivityKit）
 ├─ App/YzVibe/              # 薄壳 App 目标（含 YzVibe.entitlements：aps-environment）
 ├─ scripts/archive.sh       # 归档 + 导出 ipa（--upload 直传 TestFlight）
 └─ project.yml              # XcodeGen 描述
@@ -31,6 +32,13 @@ cd ios && xcodegen generate && open YzVibe.xcodeproj
 通过 App Store Connect（含 TestFlight）分发时导出流程会换成 `production`。
 电脑那端的密钥配置见 `../connector/README.md`「远程推送」。App 里「我 › 通知 › 远程推送」能逐项看到状态。
 
+## 锁屏 / 灵动岛
+
+`Widgets/YzVibeWidgets` 是个 WidgetKit 扩展，显示会话在跑什么、要不要你批、排了几条、上下文用了多少。
+`SessionActivityAttributes` 放在 YzVibeKit 里，App 与扩展共用。活动用 `pushType: .token` 启动，
+token 交给电脑后，锁屏时的更新由连接器直接推（见 `../connector/README.md`）。
+在「我 › 通知 › 锁屏 / 灵动岛」里可以关掉。
+
 ## 发 TestFlight
 
 ```bash
@@ -45,7 +53,7 @@ swift build --package-path ios --build-tests --triple arm64-apple-ios17.0-simula
   --sdk "$(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --sdk iphonesimulator --show-sdk-path)"
 ```
 
-## 跑单元测试（36 个）
+## 跑单元测试（45 个）
 
 需要装好 iOS 模拟器运行时：`xcodebuild -downloadPlatform iOS`（几个 GB，只要一次）。
 

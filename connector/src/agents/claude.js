@@ -43,7 +43,16 @@ export class ClaudeStreamTranslator {
     const { store, session } = this;
     switch (ev.type) {
       case 'system':
-        if (ev.subtype === 'init') { if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id); if (ev.model) this.modelId = ev.model; }
+        if (ev.subtype === 'init') {
+          if (ev.session_id) store.setAgentSessionId(session.id, ev.session_id);
+          if (ev.model) this.modelId = ev.model;
+          // init 事件里带着这个会话真正能用的斜杠命令与 skill，比我们自己扫盘更准
+          store.setSessionCatalog(session.id, {
+            slashCommands: Array.isArray(ev.slash_commands) ? ev.slash_commands : null,
+            terminalOnly: Array.isArray(ev.terminal_slash_commands) ? ev.terminal_slash_commands : null,
+            skills: Array.isArray(ev.skills) ? ev.skills : null,
+          });
+        }
         break;
       case 'rate_limit_event':
         rememberRateLimit(ev.rate_limit_info);

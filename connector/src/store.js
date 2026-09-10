@@ -34,7 +34,7 @@ export class Store extends EventEmitter {
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
     this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, push?, createdAt }]
-    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0 }));
+    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({ mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s, status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0, queue: [] }));
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.uploads = new Map();                                               // id → { path, mime, name }
@@ -66,6 +66,22 @@ export class Store extends EventEmitter {
     this.#saveDevices();
     return true;
   }
+  /** 手机为某个会话开了实时活动，把它的推送 token 记下来。 */
+  setLiveActivity(deviceId, sessionId, { token, environment }) {
+    const d = this.devices.find((x) => x.id === deviceId); if (!d) return false;
+    d.liveActivities = (d.liveActivities ?? []).filter((a) => a.sessionId !== sessionId && a.token !== token);
+    if (token) d.liveActivities.push({ sessionId, token, environment: environment === 'production' ? 'production' : 'sandbox', updatedAt: new Date().toISOString() });
+    this.#saveDevices();
+    return true;
+  }
+  /** 某个会话上所有还活着的实时活动。 */
+  liveActivitiesFor(sessionId) {
+    return this.devices.flatMap((d) => (d.liveActivities ?? []).filter((a) => a.sessionId === sessionId).map((a) => ({ deviceId: d.id, ...a })));
+  }
+  dropLiveActivity(token) {
+    for (const d of this.devices) if (d.liveActivities?.some((a) => a.token === token)) d.liveActivities = d.liveActivities.filter((a) => a.token !== token);
+    this.#saveDevices();
+  }
   removeDevice(id) {
     const before = this.devices.length;
     this.devices = this.devices.filter((d) => d.id !== id);
@@ -79,7 +95,7 @@ export class Store extends EventEmitter {
   // ---------- 会话 ----------
   createSession({ agent, cwd, title, mode = 'normal', model = null, effort = null }) {
     const now = new Date().toISOString();
-    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort, usage: null, source: 'phone', branch: null };
+    const s = { id: randomUUID(), agent, cwd, title, status: 'idle', createdAt: now, updatedAt: now, pendingApprovals: 0, agentSessionId: null, mode, model, effort, usage: null, source: 'phone', branch: null, queue: [] };
     this.sessions.unshift(s);
     this.messages.set(s.id, []);
     this.#saveSessions();
@@ -91,7 +107,7 @@ export class Store extends EventEmitter {
   adoptSession(imported, messages = []) {
     if (this.session(imported.id)) return this.session(imported.id);
     const { file, ...rest } = imported;
-    const s = { ...rest, status: 'idle', pendingApprovals: 0 };
+    const s = { ...rest, status: 'idle', pendingApprovals: 0, queue: [] };
     this.sessions.unshift(s);
     this.messages.set(s.id, messages.map((m) => ({ ...m, sessionId: s.id })));
     this.#saveMessages(s.id);
@@ -108,6 +124,14 @@ export class Store extends EventEmitter {
     this.emit('event', { type: 'session.status', sessionId: id, status });
   }
   setAgentSessionId(id, agentSessionId) { const s = this.session(id); if (s) { s.agentSessionId = agentSessionId; this.#saveSessions(); } }
+  /** Agent 自报的可用斜杠命令 / skill（Claude 的 system.init 事件）。 */
+  setSessionCatalog(id, { slashCommands, terminalOnly, skills }) {
+    const s = this.session(id); if (!s) return;
+    if (slashCommands) s.slashCommands = slashCommands;
+    if (terminalOnly) s.terminalOnly = terminalOnly;
+    if (skills) s.agentSkills = skills;
+    this.#saveSessions();
+  }
   /** 改 mode / model / effort（已归一化的 patch），广播 session.updated；返回是否有实际变化。 */
   configureSession(id, patch) {
     const s = this.session(id); if (!s) return false;
@@ -125,7 +149,39 @@ export class Store extends EventEmitter {
   }
   closeSession(id) {
     this.rules?.removeForSession(id);
+    const s = this.session(id); if (s) s.queue = [];
     this.setStatus(id, 'closed');
+  }
+
+  // ---------- 待发送队列 ----------
+  // Agent 正忙时再发消息不该被丢掉，也不该默认打断它——排进队列，本轮结束自动接上。
+
+  /** @param front true 时插到队首（「立即发送」会配合打断当前轮一起用）。 */
+  enqueue(sessionId, { text = '', attachments = [] }, { front = false } = {}) {
+    const s = this.session(sessionId); if (!s) return null;
+    const item = { id: randomUUID(), text, attachments, createdAt: new Date().toISOString() };
+    s.queue = s.queue ?? [];
+    if (front) s.queue.unshift(item); else s.queue.push(item);
+    s.updatedAt = item.createdAt;
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+    return item;
+  }
+  dequeue(sessionId) {
+    const s = this.session(sessionId); if (!s?.queue?.length) return null;
+    const item = s.queue.shift();
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+    return item;
+  }
+  cancelQueued(sessionId, itemId) {
+    const s = this.session(sessionId); if (!s?.queue?.length) return false;
+    const before = s.queue.length;
+    s.queue = s.queue.filter((x) => x.id !== itemId);
+    if (s.queue.length === before) return false;
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+    return true;
   }
   /** 清理时彻底忘掉一批会话（消息文件已由 cleanup 删除）。 */
   forgetSessions(ids) {

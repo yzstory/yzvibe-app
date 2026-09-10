@@ -45,6 +45,10 @@ public final class AppStore {
     public static func live() -> AppStore {
         let client = HTTPConnectorClient(tokenProvider: { TokenStore.shared.token(for: $0.id) })
         let store = AppStore(client: client, seedMock: false)
+        // 隧道换地址后客户端会自己探到能用的那个，这里把它记下来，下次直接用
+        client.onEndpointResolved = { [weak store] deviceId, base in
+            Task { @MainActor in store?.adoptEndpoint(deviceId, base: base) }
+        }
         store.devices = store.persistence.load()
         store.selectedDeviceId = UserDefaults.standard.string(forKey: "yz.selectedDevice") ?? store.devices.first?.id
         return store
@@ -107,6 +111,7 @@ public final class AppStore {
     public func pair(_ payload: PairingPayload) async throws {
         var device = try await client.pair(payload)
         device.online = true
+        if let extra = payload.endpoints, !extra.isEmpty { device.endpoints = extra }
         devices.removeAll { $0.id == device.id || ($0.host == device.host && $0.port == device.port) }
         devices.insert(device, at: 0)
         selectedDeviceId = device.id
@@ -176,6 +181,11 @@ public final class AppStore {
             pushStatus[device.id] = snap.push
             rules[device.id] = snap.rules
 
+            if let health = try? await client.health(device: device), !health.endpoints.isEmpty {
+                if let i = devices.firstIndex(where: { $0.id == device.id }) {
+                    devices[i].endpoints = health.endpoints
+                }
+            }
             let fresh = snap.sessions.map { var s = $0; s.deviceId = device.id; return s }
             sessions.removeAll { $0.deviceId == device.id }
             sessions.append(contentsOf: fresh)
@@ -239,9 +249,56 @@ public final class AppStore {
         guard !isDemo else { return }        // 演示数据里的设备是假的，别去连
         PushCenter.shared.onToken = { [weak self] token, env in Task { @MainActor in await self?.registerPush(token: token, environment: env) } }
         PushCenter.shared.onSilent = { [weak self] in await self?.resync() }
+        // 电脑重启或隧道换地址时会静默推一条过来，收到就直接换地址，不用重新扫码
+        PushCenter.shared.onEndpoint = { [weak self] info in
+            Task { @MainActor in
+                guard let self, let id = info.connectorId, let base = info.endpoints.first else { return }
+                self.adoptEndpoint(id, base: base, endpoints: info.endpoints)
+                await self.resync()
+            }
+        }
         await PushCenter.shared.start()
         for d in devices { subscribe(d) }
         await resync()
+    }
+
+    // MARK: 锁屏 / 灵动岛实时活动
+
+    /// 把会话状态同步到实时活动上。活动的推送 token 交给电脑后，锁屏时也会持续更新。
+    public func syncLiveActivity(_ sessionId: String) {
+        guard !isDemo, settings.liveActivity else { return }
+        guard #available(iOS 16.2, *), let s = session(sessionId) else { return }
+        let device = device(s.deviceId)
+        let attrs = SessionActivityAttributes(sessionId: s.id, title: s.title, agent: s.agent.displayName,
+                                              folder: s.folderName, deviceName: device?.name ?? "电脑")
+        let pending = approvals.filter { $0.sessionId == s.id && $0.status == .pending }.count
+        let state = SessionActivityAttributes.ContentState(
+            status: s.status.rawValue, headline: headline(for: s, pending: pending),
+            pendingApprovals: pending, queued: s.queue.count,
+            contextPercent: s.usage?.turn.contextFraction.map { Int(($0 * 100).rounded()) })
+        Task { @MainActor in
+            SessionActivityCenter.onPushToken = { [weak self] sid, token in
+                Task { @MainActor in await self?.registerLiveActivity(sessionId: sid, token: token) }
+            }
+            await SessionActivityCenter.sync(attributes: attrs, state: state)
+        }
+    }
+
+    private func headline(for s: Session, pending: Int) -> String {
+        if pending > 0, let a = approvals.first(where: { $0.sessionId == s.id && $0.status == .pending }) { return "等你批准：\(a.summary)" }
+        if s.status == .running {
+            if let tool = messages[s.id]?.last(where: { !$0.toolCalls.isEmpty })?.toolCalls.last(where: { $0.state == .running }) {
+                return "正在 \(tool.name)：\(tool.detail)"
+            }
+            return "正在处理…"
+        }
+        if s.status == .error { return "出错了，去看看" }
+        return messages[s.id]?.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text.prefix(80).description ?? "已完成"
+    }
+
+    private func registerLiveActivity(sessionId: String, token: String) async {
+        guard let s = session(sessionId), let d = device(s.deviceId) else { return }
+        try? await client.registerLiveActivity(device: d, sessionId: sessionId, token: token)
     }
 
     // MARK: 远程推送
@@ -335,15 +392,61 @@ public final class AppStore {
         }
     }
 
-    public func send(_ text: String, in sessionId: String, attachments: [String] = []) async {
-        guard let s = session(sessionId), let device = device(s.deviceId) else { return }
-        messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments, isLocal: true))
+    /// Agent 正忙时默认排队（`mode = .auto`），`.now` 会插到队首并打断当前这一轮。
+    @discardableResult
+    public func send(_ text: String, in sessionId: String, attachments: [String] = [], mode: SendMode = .auto) async -> Bool {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return false }
+        let willQueue = mode != .now && (s.status == .running || s.status == .waitingApproval)
+        if !willQueue {
+            messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments, isLocal: true))
+            setStatus(.running, for: sessionId)
+        }
         if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty, !text.isEmpty {
             sessions[i].title = String(text.prefix(40))
         }
-        setStatus(.running, for: sessionId)
-        do { try await client.send(device: device, sessionId: sessionId, text: text, attachments: attachments) }
-        catch { toast = error.localizedDescription }
+        do {
+            let r = try await client.sendMessage(device: device, sessionId: sessionId, text: text, attachments: attachments, mode: mode)
+            if r.queued, let item = r.item, let i = sessions.firstIndex(where: { $0.id == sessionId }),
+               !sessions[i].queue.contains(where: { $0.id == item.id }) {
+                sessions[i].queue.append(item)
+            }
+            return r.queued
+        } catch {
+            toast = error.localizedDescription
+            return false
+        }
+    }
+
+    /// 撤掉一条还没发出去的排队消息。
+    public func cancelQueued(_ itemId: String, in sessionId: String) async {
+        guard let i = sessions.firstIndex(where: { $0.id == sessionId }), let device = device(sessions[i].deviceId) else { return }
+        let backup = sessions[i].queue
+        sessions[i].queue.removeAll { $0.id == itemId }
+        do { try await client.cancelQueued(device: device, sessionId: sessionId, itemId: itemId) }
+        catch { sessions[i].queue = backup; toast = error.localizedDescription }
+    }
+
+    // MARK: 改动视图与命令面板
+
+    public func diff(for sessionId: String, scope: String = "working") async -> WorkingDiff? {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return nil }
+        do { return try await client.diff(device: device, sessionId: sessionId, scope: scope) }
+        catch { toast = error.localizedDescription; return nil }
+    }
+
+    public func commands(for sessionId: String) async -> CommandCatalog? {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return nil }
+        return try? await client.commands(device: device, sessionId: sessionId)
+    }
+
+    // MARK: 地址变化
+
+    /// 换用一个新的连接地址（故障转移探到的，或电脑通过静默推送下发的）。
+    public func adoptEndpoint(_ deviceId: String, base: String, endpoints: [String]? = nil) {
+        guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
+        if let endpoints { for e in endpoints.reversed() where !devices[i].endpoints.contains(e) { devices[i].endpoints.insert(e, at: 0) } }
+        devices[i].adopt(base: base)
+        client.reconnect(device: devices[i])
     }
 
     /// 发送前把本地图片放进缓存，气泡立刻能显示，不用再从连接器拉。
@@ -404,6 +507,7 @@ public final class AppStore {
         case .sessionStatus(let sid, let st):
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }
+            syncLiveActivity(sid)
         case .messageDelta(let sid, let mid, let text):
             var list = messages[sid, default: []]
             if let i = list.firstIndex(where: { $0.id == mid }) {
@@ -437,6 +541,7 @@ public final class AppStore {
             setStatus(.waitingApproval, for: a.sessionId)
             if let i = sessions.firstIndex(where: { $0.id == a.sessionId }) { sessions[i].pendingApprovals += 1 }
             if settings.notifyOnApproval { Notifier.post(title: "需要你的批准 · \(a.risk.displayName)", body: a.summary, id: "approval-\(a.id)") }
+            syncLiveActivity(a.sessionId)
         case .approvalResolved(let aid, let d):
             if let i = approvals.firstIndex(where: { $0.id == aid }), approvals[i].status == .pending {
                 approvals[i].status = d == .deny ? .denied : .allowed
@@ -463,12 +568,18 @@ public struct Settings: Codable, Sendable {
     public var customModels: [String: [String]]?
     /// 每种 Agent 上次用的模式 / 模型 / 强度，作为新建会话的默认值。
     public var sessionDefaults: [String: SessionOptions]?
+    /// 锁屏 / 灵动岛上显示会话状态。
+    public var liveActivityRaw: Bool?
     /// 用户手动维护的模型列表（覆盖连接器 / 内置列表）；nil 表示用默认。
     public var modelPresets: [String: [ModelOption]]?
     /// 会话列表里是否显示电脑终端里跑过的会话。
     public var showTerminalSessionsRaw: Bool?
     public init() {}
 
+    public var liveActivity: Bool {
+        get { liveActivityRaw ?? true }
+        set { liveActivityRaw = newValue }
+    }
     public var showTerminalSessions: Bool {
         get { showTerminalSessionsRaw ?? true }
         set { showTerminalSessionsRaw = newValue }

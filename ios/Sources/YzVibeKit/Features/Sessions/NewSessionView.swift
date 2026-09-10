@@ -5,6 +5,10 @@ struct NewSessionView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    /// 从聊天里的 /new 打开时，把当前会话的目录与 Agent 带过来
+    var presetCwd: String? = nil
+    var presetAgent: AgentKind? = nil
+    var presetFirstMessage: String? = nil
     @State private var req = NewSessionRequest()
     @State private var firstMessage = ""
     @State private var busy = false
@@ -43,8 +47,15 @@ struct NewSessionView: View {
             .navigationTitle("新建会话")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                if !seeded { seeded = true; applyDefaults() }
-                if req.cwd.isEmpty { req.cwd = suggestedDirs.first ?? "" }
+                if !seeded {
+                    seeded = true
+                    if let a = presetAgent { req.agent = a }
+                    applyDefaults()
+                    if let a = presetAgent { req.agent = a }
+                    if let c = presetCwd, !c.isEmpty { req.cwd = c }
+                    if let m = presetFirstMessage, !m.isEmpty { firstMessage = m }
+                }
+                if req.cwd.isEmpty { req.cwd = presetCwd ?? suggestedDirs.first ?? "" }
             }
             .onChange(of: req.agent) { _, _ in applyDefaults() }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }

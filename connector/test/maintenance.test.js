@@ -135,3 +135,96 @@ test('定期清理：旧图片、过期会话、孤儿消息文件', () => {
   assert.deepEqual(pruneSessions([], home), []);
   assert.equal(pruneOrphanMessages(store.sessions, path.join(home, 'nope')), 0);
 });
+
+test('消息队列：忙时排队、本轮结束自动接上、可取消、可插队打断', async () => {
+  const { c, base, H, port } = await boot();
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-q-'));
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${(await (await fetch(`${base}/sync`, { headers: H })).json()) && H.authorization.replace('Bearer ', '')}`);
+  const events = [];
+  await new Promise((r) => ws.on('open', r));
+  ws.on('message', (d) => events.push(JSON.parse(d)));
+  const waitFor = (pred, ms = 8000) => new Promise((res, rej) => { const t0 = Date.now(); const tick = () => { const e = events.find(pred); if (e) return res(e); if (Date.now() - t0 > ms) return rej(new Error('timeout')); setTimeout(tick, 20); }; tick(); });
+
+  const s = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd, firstMessage: '开始干活' }) })).json();
+  await waitFor((e) => e.type === 'session.status' && e.status === 'running');
+
+  // 正忙的时候再发两条：默认排队，不打断
+  const r1 = await (await fetch(`${base}/sessions/${s.id}/messages`, { method: 'POST', headers: H, body: JSON.stringify({ text: '排队一号' }) })).json();
+  const r2 = await (await fetch(`${base}/sessions/${s.id}/messages`, { method: 'POST', headers: H, body: JSON.stringify({ text: '排队二号' }) })).json();
+  assert.equal(r1.queued, true);
+  assert.equal(r2.queued, true);
+  assert.equal(c.store.session(s.id).queue.length, 2);
+  const queued = await waitFor((e) => e.type === 'session.updated' && e.session.queue?.length === 2);
+  assert.deepEqual(queued.session.queue.map((x) => x.text), ['排队一号', '排队二号']);
+
+  // 取消第二条
+  assert.equal((await fetch(`${base}/sessions/${s.id}/queue/${r2.item.id}`, { method: 'DELETE', headers: H })).status, 200);
+  assert.equal(c.store.session(s.id).queue.length, 1);
+  assert.equal((await fetch(`${base}/sessions/${s.id}/queue/nope`, { method: 'DELETE', headers: H })).status, 404);
+
+  // 本轮结束后排队的自动发出去
+  await waitFor((e) => e.type === 'session.updated' && (e.session.queue?.length ?? 0) === 0 && e.session.id === s.id, 15000);
+  const msgs = await (await fetch(`${base}/sessions/${s.id}/messages`, { headers: H })).json();
+  assert.ok(msgs.some((x) => x.role === 'user' && x.text === '排队一号'), '排队的消息应该被真的发出去');
+  assert.ok(!msgs.some((x) => x.text === '排队二号'), '取消掉的不该被发出去');
+
+  ws.close();
+  await c.close();
+});
+
+test('会话改动视图与命令清单', async () => {
+  const { c, base, H } = await boot();
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-git-'));
+  const s = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd }) })).json();
+
+  // 不是 git 仓库时要给一句人话，而不是空白
+  const nodiff = await (await fetch(`${base}/sessions/${s.id}/diff`, { headers: H })).json();
+  assert.equal(nodiff.repo, false);
+  assert.match(nodiff.reason, /git/);
+
+  // 命令清单：app 命令 + skill
+  const cmds = await (await fetch(`${base}/sessions/${s.id}/commands`, { headers: H })).json();
+  assert.ok(cmds.app.some((x) => x.name === 'new' && x.action === 'new-session'));
+  assert.ok(cmds.app.some((x) => x.name === 'diff'));
+  assert.ok(Array.isArray(cmds.skills));
+  assert.equal((await fetch(`${base}/sessions/nope/commands`, { headers: H })).status, 404);
+  await c.close();
+});
+
+test('地址稳定性：/health 报出所有可达地址，配对配置里也带着', async () => {
+  const { c, base, H } = await boot();
+  c.access = { host: 'https://abc.trycloudflare.com', mode: 'tunnel' };
+
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.ok(Array.isArray(health.endpoints) && health.endpoints.length >= 2, '至少要有隧道地址和一个局域网地址');
+  assert.equal(health.endpoints[0], 'https://abc.trycloudflare.com');
+  assert.ok(health.endpoints.some((e) => e.startsWith('http://') && e.endsWith(`:${c.port}`)));
+
+  const st = await (await fetch(`${base}/internal/status`, { headers: { 'x-yzvibe-secret': c.internalSecret } })).json();
+  assert.deepEqual(st.endpoints, health.endpoints);
+  assert.deepEqual(st.pairing.config.endpoints, health.endpoints, '配对配置要带上备用地址，手机才能在隧道换地址后自己接上');
+  await c.close();
+});
+
+test('实时活动 token：注册、按会话取回、失效清理', async () => {
+  const { c, base, H } = await boot();
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-la-'));
+  const s = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd }) })).json();
+  const token = 'ab'.repeat(40);
+
+  assert.equal((await fetch(`${base}/devices/live-activity`, { method: 'POST', headers: H, body: JSON.stringify({ sessionId: s.id, token: 'short' }) })).status, 400);
+  assert.equal((await fetch(`${base}/devices/live-activity`, { method: 'POST', headers: H, body: JSON.stringify({ sessionId: s.id, token, environment: 'production' }) })).status, 200);
+
+  const list = c.store.liveActivitiesFor(s.id);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].environment, 'production');
+  assert.equal(c.store.liveActivitiesFor('other').length, 0);
+
+  // 同一会话再注册一次只会留最新的那个
+  await fetch(`${base}/devices/live-activity`, { method: 'POST', headers: H, body: JSON.stringify({ sessionId: s.id, token: 'cd'.repeat(40) }) });
+  assert.equal(c.store.liveActivitiesFor(s.id).length, 1);
+
+  c.store.dropLiveActivity('cd'.repeat(40));
+  assert.equal(c.store.liveActivitiesFor(s.id).length, 0);
+  await c.close();
+});

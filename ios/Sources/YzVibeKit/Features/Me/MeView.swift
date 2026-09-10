@@ -42,6 +42,8 @@ struct MeView: View {
                     SettingRow(icon: "bell", color: p.danger, title: "有待审批时通知") { Toggle("", isOn: $store.settings.notifyOnApproval).labelsHidden().tint(p.brand) }
                     Divider_()
                     SettingRow(icon: "bubble.left", color: p.sage, title: "回复完成时通知") { Toggle("", isOn: $store.settings.notifyOnReply).labelsHidden().tint(p.brand) }
+                    Divider_()
+                    SettingRow(icon: "capsule.portrait", color: p.amberText, title: "锁屏 / 灵动岛", subtitle: "会话在跑什么、要不要你批，抬手就能看到") { Toggle("", isOn: $store.settings.liveActivity).labelsHidden().tint(p.brand) }
                 }
                 SectionCard("会话列表") {
                     SettingRow(icon: "folder", color: p.amberText, title: "按文件夹分组") { Toggle("", isOn: $store.settings.groupByFolder).labelsHidden().tint(p.brand) }

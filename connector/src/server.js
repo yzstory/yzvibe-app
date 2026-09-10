@@ -20,6 +20,9 @@ import { writeDaemonInfo, clearDaemonInfo } from './daemon.js';
 import { Rules } from './rules.js';
 import { Pusher } from './push.js';
 import { startCleanupLoop } from './cleanup.js';
+import { collectEndpoints, advertiseBonjour } from './endpoints.js';
+import { workingDiff, headCommit } from './git.js';
+import { sessionCommands } from './commands.js';
 
 export const VERSION = '0.1.0';
 
@@ -37,7 +40,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   const deviceName = name;
   const pusher = new Pusher({
     home, log,
-    onInvalid: (deviceId, { keep, environment }) => {
+    onInvalid: (deviceId, { keep, environment, activityToken, drop }) => {
+      if (drop && activityToken) { store.dropLiveActivity(activityToken); return; }
       const d = store.devices.find((x) => x.id === deviceId);
       store.setDevicePush(deviceId, keep && d?.push ? { ...d.push, environment } : null);
     },
@@ -51,7 +55,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const { host, mode } = api.access;
     if (!host) return { token, expiresAt, url: null, link: null, config: null };
     const opts = { host, port: api.port, token, mode, name: deviceName };
-    return { token, expiresAt, url: pairURL(opts), link: pairLink(opts), config: pairConfig({ ...opts, expiresAt, connectorId: store.connector.id, version: VERSION }) };
+    return { token, expiresAt, url: pairURL(opts), link: pairLink(opts),
+             config: pairConfig({ ...opts, expiresAt, connectorId: store.connector.id, version: VERSION, endpoints: api.endpoints() }) };
   }
 
   // ---------- Agent 工厂 ----------
@@ -111,9 +116,13 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           badge: pendingCount(), ttlSeconds: 600,
           data: { kind: 'approval', approvalId: ev.approvalId, sessionId: ev.sessionId, connector: deviceName },
         }).catch((e) => log(`[yzvibe] 推送异常：${e.message}`));
+        pushLiveActivity(ev.sessionId).catch(() => {});
       } else if (ev.type === 'approval.resolved') {
         pusher.send(store.devices, { silent: true, badge: pendingCount(), data: { kind: 'approval.resolved', approvalId: ev.approvalId } }).catch(() => {});
+      } else if (ev.type === 'session.status' || ev.type === 'session.updated') {
+        pushLiveActivity(ev.sessionId ?? ev.session?.id).catch(() => {});
       } else if (ev.type === 'message.done') {
+        pushLiveActivity(ev.sessionId).catch(() => {});
         if (phoneOnline()) return;                       // 手机还连着，App 自己会显示
         const s = store.session(ev.sessionId); if (!s) return;
         const text = (store.messagesOf(ev.sessionId).find((m) => m.id === ev.messageId)?.text ?? '').trim();
@@ -126,6 +135,55 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
     } catch (e) { log(`[yzvibe] 推送出错：${e.message}`); }
   });
+
+  /**
+   * 把会话状态推到锁屏 / 灵动岛。手机被挂起时这是唯一能更新它的路径。
+   * ContentState 的字段要和 iOS 端 SessionActivityAttributes.ContentState 完全对上，
+   * 其中 Date 用 Swift 的默认编码（自 2001-01-01 起的秒数）。
+   */
+  async function pushLiveActivity(sessionId) {
+    if (!pusher.ready || !sessionId) return;
+    const targets = store.liveActivitiesFor(sessionId);
+    if (!targets.length) return;
+    const s = store.session(sessionId); if (!s) return;
+    const pending = store.listApprovals('pending').filter((a) => a.sessionId === sessionId);
+    const running = s.status === 'running';
+    const idle = !running && !pending.length && !(s.queue?.length);
+
+    const msgs = store.messagesOf(sessionId);
+    const lastTool = [...msgs].reverse().flatMap((m) => m.toolCalls ?? []).find((t) => t.state === 'running');
+    const lastText = [...msgs].reverse().find((m) => m.role === 'assistant' && m.text)?.text ?? '';
+    const headline = pending.length ? `等你批准：${pending[0].summary}`
+      : running ? (lastTool ? `正在 ${lastTool.name}：${lastTool.detail}` : '正在处理…')
+      : s.status === 'error' ? '出错了，去看看'
+      : lastText.slice(0, 80) || '已完成';
+
+    const ctx = s.usage?.turn;
+    const state = {
+      status: s.status,
+      headline,
+      pendingApprovals: pending.length,
+      queued: s.queue?.length ?? 0,
+      contextPercent: ctx?.contextTokens && ctx?.contextWindow ? Math.round((ctx.contextTokens / ctx.contextWindow) * 100) : null,
+      updatedAt: Math.floor(Date.now() / 1000) - 978307200,      // Swift Date 的默认编码
+    };
+    await pusher.sendLiveActivity(targets, { state, event: idle ? 'end' : 'update', dismissSeconds: idle ? 30 : 0 }).catch(() => {});
+    if (idle) for (const t of targets) store.dropLiveActivity(t.token);
+  }
+
+  /**
+   * 地址变了（重启、Cloudflare 临时隧道换地址）就静默推一条给所有手机。
+   * 没有这一步，隧道每次重开手机都得重新扫码——这是最常见的一个使用障碍。
+   */
+  async function announceEndpoints(reason = 'startup') {
+    const endpoints = api.endpoints();
+    if (!pusher.ready || !store.devices.some((d) => d.push?.token)) return;
+    await pusher.send(store.devices, {
+      silent: true,
+      data: { kind: 'endpoint', connectorId: store.connector.id, name: deviceName, host: api.access.host, port: api.port, mode: api.access.mode, endpoints, reason },
+    }).catch(() => {});
+    log(`[yzvibe] 已把新地址推给已配对的手机（${reason}）：${endpoints[0]}`);
+  }
 
   /** 撤销设备时把它的连接断掉。 */
   store.on('device.removed', (deviceId) => {
@@ -144,7 +202,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const p = url.pathname;
     try {
       // 公开
-      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime() });
+      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime(), endpoints: api.endpoints() });
       // 手机浏览器打开的落地页 / 配置：/pair?token= 与 /pair.json?token=（一次性配对码本身就是凭据，不消费它）
       if (req.method === 'GET' && (p === '/pair' || p === '/pair.json')) {
         const given = url.searchParams.get('token') ?? '';
@@ -184,6 +242,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         return json(res, 200, {
           pid: process.pid, name: deviceName, version: VERSION, port: api.port, uptime: process.uptime(), ...api.access,
           pairing: currentPairing(),
+          endpoints: api.endpoints(),
           push: pusher.status(store.devices),
           stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length, rules: rules.all().length },
         });
@@ -224,6 +283,15 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         }
         if (req.method === 'DELETE') { store.setDevicePush(authDevice.id, null); return json(res, 200, { ok: true }); }
       }
+      // 手机为某个会话开了锁屏 / 灵动岛活动，把 token 交过来，之后由电脑直接推更新
+      if (req.method === 'POST' && p === '/devices/live-activity') {
+        const { sessionId, token, environment } = await readJSON(req);
+        if (!sessionId || !/^[0-9a-fA-F]{40,200}$/.test(String(token ?? ''))) return json(res, 400, { error: '参数不合法' });
+        store.setLiveActivity(authDevice.id, sessionId, { token, environment });
+        log(`[yzvibe] ${authDevice.name} 为会话 ${String(sessionId).slice(0, 8)} 开了实时活动`);
+        pushLiveActivity(sessionId).catch(() => {});
+        return json(res, 200, { ok: true });
+      }
       // 一次性把会话 / 待审批 / 能力表 / 规则拿全：App 回到前台补数据用，省往返
       if (req.method === 'GET' && p === '/sync') {
         return json(res, 200, {
@@ -250,6 +318,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         try { resolveInside(cwd, ''); if (!fs.existsSync(resolveInside(cwd, '').base)) throw new Error(); } catch { return json(res, 400, { error: `工作目录不存在：${cwd}` }); }
         const title = body.firstMessage ? String(body.firstMessage).slice(0, 40) : '新会话';
         const s = store.createSession({ agent, cwd, title, ...normalizeOptions(body, agent) });
+        headCommit(cwd).then((sha) => { if (sha) { s.baseCommit = sha; store.emit('event', { type: 'session.updated', session: store.publicSession(s) }); } }).catch(() => {});
         const a = agentFor(s, { continueLast: Boolean(body.continueLast) });
         if (body.firstMessage) { store.addMessage(s.id, { role: 'user', text: body.firstMessage }); a.send(body.firstMessage).catch(() => {}); }
         return json(res, 201, store.publicSession(s));
@@ -268,7 +337,26 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           const i = after ? list.findIndex((x) => x.id === after) : -1;
           return json(res, 200, list.slice(i + 1));
         }
-        if (req.method === 'POST') { const { text, attachments = [] } = await readJSON(req); await handleSend(s, text, attachments); return json(res, 202, { ok: true }); }
+        if (req.method === 'POST') {
+          const { text, attachments = [], mode = 'auto' } = await readJSON(req);
+          const r = await handleSend(s, text, attachments, mode);
+          return json(res, 202, { ok: true, ...r });
+        }
+      }
+      // 这个目录现在有哪些改动。scope=session 时跟会话开始时的 commit 比
+      if ((m = p.match(/^\/sessions\/([^/]+)\/diff$/)) && req.method === 'GET') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        const base = url.searchParams.get('scope') === 'session' ? (s.baseCommit ?? null) : null;
+        return json(res, 200, await workingDiff(s.cwd, { base }));
+      }
+      // 这个会话里能用的斜杠命令与 skill
+      if ((m = p.match(/^\/sessions\/([^/]+)\/commands$/)) && req.method === 'GET') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        return json(res, 200, sessionCommands(s.agent, s.cwd, { session: s, ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) }));
+      }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/queue\/([^/]+)$/)) && req.method === 'DELETE') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        return json(res, store.cancelQueued(s.id, m[2]) ? 200 : 404, { ok: true });
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/stop$/)) && req.method === 'POST') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
@@ -314,12 +402,44 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     if (store.configureSession(s.id, patch)) agents.get(s.id)?.configure(patch);
   }
 
-  async function handleSend(s, text, attachments) {
-    if (!text?.trim() && !attachments.length) return;
-    store.addMessage(s.id, { role: 'user', text: text ?? '', attachments });
+  /** 会话是不是正忙（忙的时候再发消息默认排队，而不是丢掉或打断）。 */
+  const busy = (s) => s.status === 'running' || s.status === 'waiting_approval';
+
+  /**
+   * @param mode 'auto'（默认，忙就排队）| 'queue'（强制排队）| 'now'（插到队首并打断当前轮）
+   * @returns { queued: boolean, item? }
+   */
+  async function handleSend(s, text, attachments = [], mode = 'auto') {
+    if (!text?.trim() && !attachments.length) return { queued: false };
     if (s.status === 'closed') store.setStatus(s.id, 'idle');
+
+    if (busy(s) && mode !== 'never') {
+      const front = mode === 'now';
+      const item = store.enqueue(s.id, { text: text ?? '', attachments }, { front });
+      if (front) agents.get(s.id)?.stop();     // 打断当前轮，结束后 drainQueue 会立刻把它发出去
+      return { queued: true, item };
+    }
+    store.addMessage(s.id, { role: 'user', text: text ?? '', attachments });
     await agentFor(s).send(text ?? '', attachments);
+    return { queued: false };
   }
+
+  // 本轮结束（回到 idle）就把排队的消息接上去
+  const draining = new Set();
+  store.on('event', async (ev) => {
+    if (ev.type !== 'session.status' || ev.status !== 'idle') return;
+    const s = store.session(ev.sessionId);
+    if (!s?.queue?.length || draining.has(s.id)) return;
+    draining.add(s.id);
+    try {
+      const item = store.dequeue(s.id);
+      if (item) {
+        log(`[yzvibe] 会话 ${s.id.slice(0, 8)} 发送排队中的消息（还剩 ${s.queue.length} 条）`);
+        await handleSend(s, item.text, item.attachments, 'never');
+      }
+    } catch (e) { log(`[yzvibe] 发送排队消息失败：${e.message}`); }
+    finally { draining.delete(s.id); }
+  });
 
   // ---------- WebSocket ----------
   const wss = new WebSocketServer({ noServer: true });
@@ -336,7 +456,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const s = msg.sessionId ? resolveSession(msg.sessionId) : null;
         try {
           switch (msg.type) {
-            case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? []); break;
+            case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? [], msg.mode ?? 'auto'); break;
+            case 'message.cancel': if (s && msg.itemId) store.cancelQueued(s.id, msg.itemId); break;
             case 'session.stop': if (s) agents.get(s.id)?.stop(); break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
             case 'session.configure': if (s) configureSession(s, msg); break;
@@ -364,11 +485,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     tryPort(port, 20);
   });
   const api = {
-    store, pairing, server, port, internalSecret,
+    store, pairing, server, port, internalSecret, announceEndpoints,
     access: { host: null, mode: null },   // startConnector 决定后填入，供 /internal/status 生成配对链接
+    endpoints: () => collectEndpoints({ host: api.access.host, port: api.port, mode: api.access.mode }),
     listen: listenWithFallback,
     rules, pusher,
-    close: () => new Promise((resolve) => { stopCleanup(); pusher.close(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
+    close: () => new Promise((resolve) => { stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
   return api;
@@ -399,7 +521,12 @@ export async function startConnector(opts) {
       if (stopping) return;
       console.log(`[yzvibe] Cloudflare Tunnel 断开（退出码 ${code}），5 秒后重连…`);
       await new Promise((r) => setTimeout(r, 5000));
-      try { host = await openTunnel(); c.access.host = host; saveDaemonInfo(); console.log(`[yzvibe] Tunnel 已重连：${host}（地址已变化，手机需重新扫码）`); await announce(); }
+      try {
+        host = await openTunnel(); c.access.host = host; saveDaemonInfo();
+        console.log(`[yzvibe] Tunnel 已重连：${host}`);
+        await c.announceEndpoints('tunnel-reconnect');    // 配过推送的手机会自动换地址，不用重新扫码
+        await announce();
+      }
       catch (e) { console.log(`[yzvibe] Tunnel 重连失败：${e.message}；可用 yzvibe restart 重试`); }
     });
     return t.url;
@@ -431,6 +558,8 @@ export async function startConnector(opts) {
   c.setAnnounce(announce);
   await announce();
   saveDaemonInfo();
+  c.stopBonjour = advertiseBonjour({ name, port: c.port, connectorId: c.store.connector.id, log: console.log });
+  await c.announceEndpoints('startup');
 
   const shutdown = async () => {
     if (stopping) return; stopping = true;

@@ -517,9 +517,205 @@ final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
     func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus { PushStatus(ready: true) }
     func unregisterPush(device: Device) async throws {}
     func reconnect(device: Device) { reconnected = true }
+    func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) { (false, nil) }
+    func cancelQueued(device: Device, sessionId: String, itemId: String) async throws {}
+    func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff { WorkingDiff() }
+    func commands(device: Device, sessionId: String) async throws -> CommandCatalog { CommandCatalog() }
+    func registerLiveActivity(device: Device, sessionId: String, token: String) async throws {}
     func events(device: Device) -> AsyncStream<ConnectorEvent> { AsyncStream { $0.finish() } }
 }
 
 extension JSONDecoder {
     static let yzTest: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d }()
+}
+
+// MARK: - 会话 3 追加：队列、地址故障转移、改动视图、命令面板、实时活动
+
+final class QueueEndpointsAndCommandsTests: XCTestCase {
+    private func decode<T: Decodable>(_ json: String, as: T.Type) throws -> T {
+        try JSONDecoder.yzTest.decode(T.self, from: Data(json.utf8))
+    }
+
+    func testSessionDecodesQueueAndBaseCommit() throws {
+        let s = try decode(#"""
+        {"id":"s1","agent":"claude","cwd":"/p","title":"t","status":"running","baseCommit":"abc123",
+         "queue":[{"id":"q1","text":"接着改","attachments":[],"createdAt":"2026-09-10T10:00:00Z"},
+                  {"id":"q2","text":"再看一下测试","attachments":["u1"]}]}
+        """#, as: Session.self)
+        XCTAssertEqual(s.queue.count, 2)
+        XCTAssertEqual(s.queue[0].text, "接着改")
+        XCTAssertEqual(s.queue[1].attachments, ["u1"])
+        XCTAssertEqual(s.baseCommit, "abc123")
+        XCTAssertTrue(try decode(#"{"id":"s2"}"#, as: Session.self).queue.isEmpty)
+    }
+
+    func testDeviceAdoptsNewEndpoint() {
+        var d = Device(name: "Mac", host: "https://old.trycloudflare.com", mode: .tunnel, endpoints: ["https://old.trycloudflare.com"])
+        d.adopt(base: "https://new.trycloudflare.com")
+        XCTAssertEqual(d.host, "https://new.trycloudflare.com")
+        XCTAssertEqual(d.endpoints.first, "https://new.trycloudflare.com")
+        XCTAssertEqual(d.baseURL?.absoluteString, "https://new.trycloudflare.com")
+
+        d.adopt(base: "http://192.168.1.5:19876")
+        XCTAssertEqual(d.host, "192.168.1.5")
+        XCTAssertEqual(d.port, 19876)
+        XCTAssertEqual(d.endpoints.count, 3, "换过的地址都留着，下次可以再试")
+
+        // 同一个地址不会重复堆积
+        d.adopt(base: "http://192.168.1.5:19876")
+        XCTAssertEqual(d.endpoints.count, 3)
+    }
+
+    func testPairingPayloadCarriesEndpoints() throws {
+        let p = try XCTUnwrap(PairingPayload(text: #"""
+        {"yzvibe":1,"name":"Mac","host":"https://x.trycloudflare.com","port":null,"token":"t1","mode":"tunnel",
+         "endpoints":["https://x.trycloudflare.com","http://192.168.1.5:19876",""]}
+        """#))
+        XCTAssertEqual(p.endpoints, ["https://x.trycloudflare.com", "http://192.168.1.5:19876"])
+        XCTAssertNil(PairingPayload(text: "yzvibe://pair?host=1.2.3.4&token=t")?.endpoints)
+    }
+
+    func testHealthDecodesEndpoints() throws {
+        let h = try decode(#"{"name":"Mac","version":"0.1.0","agents":["claude"],"connectorId":"c1","endpoints":["http://a:1","http://b:2"]}"#, as: HealthInfo.self)
+        XCTAssertEqual(h.endpoints.count, 2)
+        XCTAssertTrue(try decode(#"{"name":"Mac"}"#, as: HealthInfo.self).endpoints.isEmpty)
+    }
+
+    func testWorkingDiffDecodes() throws {
+        let d = try decode(#"""
+        {"repo":true,"branch":"main","head":"a1b2 上次提交","totals":{"files":2,"added":73,"removed":8},"truncated":false,
+         "files":[{"path":"src/a.ts","status":"已修改","added":42,"removed":8,"diff":"-x\n+y"},
+                  {"path":"src/b.ts","status":"新增","untracked":true,"added":31,"removed":0}]}
+        """#, as: WorkingDiff.self)
+        XCTAssertEqual(d.totals.added, 73)
+        XCTAssertEqual(d.files.first?.name, "a.ts")
+        XCTAssertEqual(d.files.first?.folder, "src")
+        XCTAssertTrue(d.files[1].untracked)
+
+        let none = try decode(#"{"repo":false,"reason":"这个目录不在 git 仓库里"}"#, as: WorkingDiff.self)
+        XCTAssertFalse(none.repo)
+        XCTAssertEqual(none.files.count, 0)
+    }
+
+    func testCommandCatalogDecodes() throws {
+        let c = try decode(#"""
+        {"reported":true,
+         "app":[{"name":"new","args":"[提示词]","description":"新建会话","kind":"app","source":"YzVibe","action":"new-session"}],
+         "agentCommands":[{"name":"compact","description":"压缩上下文","source":"Claude Code 内置"}],
+         "skills":[{"name":"code-review","description":"审查改动","kind":"skill","source":"个人 skill"}],
+         "prompts":[]}
+        """#, as: CommandCatalog.self)
+        XCTAssertTrue(c.reported)
+        XCTAssertEqual(c.app.first?.action, "new-session")
+        XCTAssertTrue(c.app.first!.isApp)
+        XCTAssertEqual(c.app.first?.display, "/new [提示词]")
+        XCTAssertEqual(c.agentCommands.first?.display, "/compact")
+        XCTAssertEqual(c.agentCommands.first?.kind, "agent")
+        XCTAssertFalse(c.isEmpty)
+        XCTAssertTrue(try decode("{}", as: CommandCatalog.self).isEmpty)
+    }
+
+    func testLiveActivityContentState() throws {
+        let s = SessionActivityAttributes.ContentState(status: "waiting_approval", headline: "等你批准：rm -rf dist", pendingApprovals: 1, queued: 2, contextPercent: 37)
+        XCTAssertTrue(s.needsApproval)
+        XCTAssertFalse(s.isRunning)
+        XCTAssertEqual(s.shortStatus, "待批准")
+        let running = SessionActivityAttributes.ContentState(status: "running", headline: "正在 Bash：npm test")
+        XCTAssertTrue(running.isRunning)
+        XCTAssertEqual(running.shortStatus, "运行中")
+        // 连接器推过来的 content-state 由 ActivityKit 用「默认」解码器解，Date 是自 2001-01-01 起的秒数，
+        // 不是 ISO8601 字符串——所以这里必须用原味 JSONDecoder 验，用错解码器就测不出真实行为。
+        let json = #"{"status":"running","headline":"正在处理…","pendingApprovals":0,"queued":1,"contextPercent":12,"updatedAt":800000000}"#
+        let decoded = try JSONDecoder().decode(SessionActivityAttributes.ContentState.self, from: Data(json.utf8))
+        XCTAssertEqual(decoded.queued, 1)
+        XCTAssertEqual(decoded.contextPercent, 12)
+        XCTAssertEqual(Int(decoded.updatedAt.timeIntervalSinceReferenceDate), 800_000_000)
+        // 反过来：我们自己编码出来的也是数字，两端才对得上
+        let round = try JSONSerialization.jsonObject(with: JSONEncoder().encode(s)) as? [String: Any]
+        XCTAssertTrue(round?["updatedAt"] is NSNumber)
+    }
+
+    func testEndpointUpdatePushParsing() {
+        let u = EndpointUpdate(userInfo: ["yz": ["kind": "endpoint", "connectorId": "c1", "name": "Mac",
+                                                 "endpoints": ["https://new.trycloudflare.com", "http://192.168.1.5:19876"], "reason": "tunnel-reconnect"]])
+        XCTAssertEqual(u?.connectorId, "c1")
+        XCTAssertEqual(u?.endpoints.count, 2)
+        XCTAssertNil(EndpointUpdate(userInfo: ["yz": ["kind": "approval"]]))
+        XCTAssertNil(EndpointUpdate(userInfo: ["yz": ["kind": "endpoint", "endpoints": []]]))
+    }
+
+    @MainActor
+    func testSendQueuesWhenBusyAndCanCancel() async {
+        let client = QueueStubClient()
+        let store = AppStore(client: client, seedMock: false)
+        var device = MockData.macStudio; device.online = true
+        store.devices = [device]
+        store.selectedDeviceId = device.id
+        store.sessions = [Session(id: "s1", deviceId: device.id, agent: .claude, cwd: "/p", title: "t", status: .running)]
+
+        // 忙的时候：进队列，不往消息流里塞乐观消息
+        client.nextQueued = QueuedMessage(id: "q1", text: "排队一号")
+        let queued = await store.send("排队一号", in: "s1")
+        XCTAssertTrue(queued)
+        XCTAssertEqual(store.session("s1")?.queue.map(\.text), ["排队一号"])
+        XCTAssertNil(store.messages["s1"]?.first(where: { $0.text == "排队一号" }))
+        XCTAssertEqual(client.lastMode, .auto)
+
+        // 撤掉排队的
+        await store.cancelQueued("q1", in: "s1")
+        XCTAssertEqual(store.session("s1")?.queue.count, 0)
+        XCTAssertEqual(client.cancelled, "q1")
+
+        // 立即发送：插队 + 打断，本地立刻显示
+        client.nextQueued = nil
+        let now = await store.send("马上发", in: "s1", mode: .now)
+        XCTAssertFalse(now)
+        XCTAssertEqual(client.lastMode, .now)
+        XCTAssertEqual(store.messages["s1"]?.last?.text, "马上发")
+    }
+}
+
+/// 队列测试用的假连接器。
+final class QueueStubClient: ConnectorClient, @unchecked Sendable {
+    var nextQueued: QueuedMessage?
+    var lastMode: SendMode?
+    var cancelled: String?
+
+    func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
+        lastMode = mode
+        if let q = nextQueued { return (true, q) }
+        return (false, nil)
+    }
+    func cancelQueued(device: Device, sessionId: String, itemId: String) async throws { cancelled = itemId }
+    func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff { WorkingDiff() }
+    func commands(device: Device, sessionId: String) async throws -> CommandCatalog { CommandCatalog() }
+
+    func health(device: Device) async throws -> HealthInfo { HealthInfo(name: "T", version: "0", agents: []) }
+    func pair(_ payload: PairingPayload) async throws -> Device { MockData.macStudio }
+    func sessions(device: Device) async throws -> [Session] { [] }
+    func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }
+    func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] { [] }
+    func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
+    func stop(device: Device, sessionId: String) async throws {}
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws {}
+    func approvals(device: Device) async throws -> [Approval] { [] }
+    func capabilities(device: Device) async throws -> [String: AgentCapabilities] { [:] }
+    func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session { MockData.sessions[0] }
+    func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo { QuotaInfo(agent: agent.rawValue) }
+    func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo { throw ConnectorError.unreachable }
+    func download(device: Device, sessionId: String, path: String) async throws -> Data { Data() }
+    func attachment(device: Device, id: String) async throws -> Data { Data() }
+    func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { [] }
+    func preview(device: Device, sessionId: String, path: String) async throws -> String { "" }
+    func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { "u1" }
+    func listDirectories(device: Device, path: String?) async throws -> DirectoryListing { DirectoryListing(path: "/", parent: nil, home: "/", entries: []) }
+    func makeDirectory(device: Device, parent: String, name: String) async throws -> String { parent }
+    func sync(device: Device) async throws -> SyncSnapshot { SyncSnapshot() }
+    func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule] { [] }
+    func deleteRule(device: Device, id: String) async throws {}
+    func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus { PushStatus() }
+    func unregisterPush(device: Device) async throws {}
+    func registerLiveActivity(device: Device, sessionId: String, token: String) async throws {}
+    func reconnect(device: Device) {}
+    func events(device: Device) -> AsyncStream<ConnectorEvent> { AsyncStream { $0.finish() } }
 }

@@ -43,7 +43,28 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public func deleteRule(device: Device, id: String) async throws {}
     public func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus { PushStatus(ready: true, registeredDevices: 1, environment: environment) }
     public func unregisterPush(device: Device) async throws {}
+    public func registerLiveActivity(device: Device, sessionId: String, token: String) async throws {}
     public func reconnect(device: Device) {}
+    public func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
+        let busy = MockData.sessions.first { $0.id == sessionId }?.status == .running
+        return busy && mode != .now ? (true, QueuedMessage(text: text, attachments: attachments)) : (false, nil)
+    }
+    public func cancelQueued(device: Device, sessionId: String, itemId: String) async throws {}
+    public func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff {
+        WorkingDiff(branch: "main", head: "a1b2c3d 上一次提交",
+                    files: [DiffFile(path: "src/components/map/YtMarker.tsx", status: "已修改", added: 42, removed: 8,
+                                     diff: "diff --git a/src/components/map/YtMarker.tsx\n-const tone = props.tone\n+const tone = props.tone ?? defaultTone\n Ok"),
+                            DiffFile(path: "src/components/map/YtMarker.test.tsx", status: "新增", untracked: true, added: 31, removed: 0,
+                                     diff: "新文件 YtMarker.test.tsx\n+import { describe } from 'vitest'\n+describe('YtMarker', () => {})")],
+                    totals: .init(files: 2, added: 73, removed: 8))
+    }
+    public func commands(device: Device, sessionId: String) async throws -> CommandCatalog {
+        CommandCatalog(app: [SlashCommand(name: "new", args: "[提示词]", description: "在同一目录新建一个会话", kind: "app", source: "YzVibe", action: "new-session"),
+                             SlashCommand(name: "diff", description: "看这个目录现在有哪些改动", kind: "app", source: "YzVibe", action: "diff")],
+                       agentCommands: [SlashCommand(name: "compact", args: "[要保留的重点]", description: "压缩上下文", source: "Claude Code 内置")],
+                       skills: [SlashCommand(name: "code-review", description: "审查当前改动", kind: "skill", source: "个人 skill")],
+                       reported: true)
+    }
 
     public func approvals(device: Device) async throws -> [Approval] { MockData.approvals.filter { $0.deviceId == device.id } }
     public func attachment(device: Device, id: String) async throws -> Data {

@@ -32,8 +32,18 @@ public protocol ConnectorClient: Sendable {
     /// 注册 APNs token，让连接器在 App 被挂起时也能叫醒它。
     func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus
     func unregisterPush(device: Device) async throws
+    /// 注册一个实时活动的推送 token，锁屏时由电脑直接更新灵动岛。
+    func registerLiveActivity(device: Device, sessionId: String, token: String) async throws
     /// 立刻重连事件通道（回到前台时用，不必等指数退避）。
     func reconnect(device: Device)
+    /// 发消息。Agent 正忙时按 `mode` 决定排队还是插队打断，返回是否进了队列。
+    func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?)
+    /// 撤掉一条还没发出去的排队消息。
+    func cancelQueued(device: Device, sessionId: String, itemId: String) async throws
+    /// 工作目录的改动；scope = "session" 时只看这次会话改了什么。
+    func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff
+    /// 这个会话里能用的斜杠命令与 skill。
+    func commands(device: Device, sessionId: String) async throws -> CommandCatalog
     /// 目录浏览（GET /fs/dirs），path 为 nil 时列主目录。
     func listDirectories(device: Device, path: String?) async throws -> DirectoryListing
     /// 新建文件夹（POST /fs/mkdir），返回新目录绝对路径。
@@ -51,7 +61,21 @@ public struct HealthInfo: Codable, Sendable {
     public var version: String
     public var agents: [String]
     public var connectorId: String?
-    public init(name: String, version: String, agents: [String], connectorId: String? = nil) { self.name = name; self.version = version; self.agents = agents; self.connectorId = connectorId }
+    /// 这台电脑所有可达地址；主地址失效时手机从这里挑一个继续连。
+    public var endpoints: [String]
+
+    public init(name: String, version: String, agents: [String], connectorId: String? = nil, endpoints: [String] = []) {
+        self.name = name; self.version = version; self.agents = agents; self.connectorId = connectorId; self.endpoints = endpoints
+    }
+    enum CodingKeys: String, CodingKey { case name, version, agents, connectorId, endpoints }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        version = try c.decodeIfPresent(String.self, forKey: .version) ?? ""
+        agents = try c.decodeIfPresent([String].self, forKey: .agents) ?? []
+        connectorId = try c.decodeIfPresent(String.self, forKey: .connectorId)
+        endpoints = try c.decodeIfPresent([String].self, forKey: .endpoints) ?? []
+    }
 }
 
 public enum ConnectorEvent: Sendable {
@@ -90,8 +114,53 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         self.tokenProvider = tokenProvider
     }
 
+    /// 已经探活成功、正在用的地址（Cloudflare 临时隧道换地址后靠它接上）。
+    private var resolvedBases: [String: URL] = [:]
+    private let baseLock = NSLock()
+    /// 换到新地址时通知调用方持久化（AppStore 会更新 Device 并存盘）。
+    public var onEndpointResolved: (@Sendable (String, String) -> Void)?
+
+    private func base(for device: Device) -> URL? {
+        baseLock.lock(); defer { baseLock.unlock() }
+        return resolvedBases[device.id] ?? device.baseURL
+    }
+    private func setBase(_ url: URL, for deviceId: String) {
+        baseLock.lock(); resolvedBases[deviceId] = url; baseLock.unlock()
+    }
+
+    /// 主地址连不上时，把这台电脑报过的其它地址挨个探一遍，谁通用谁。
+    private func failover(_ device: Device) async -> Bool {
+        let current = base(for: device)
+        var tried: Set<URL> = current.map { [$0] } ?? []
+        for raw in device.endpoints {
+            guard let url = URL(string: raw), !tried.contains(url) else { continue }
+            tried.insert(url)
+            var probe = URLRequest(url: url.appendingPathComponent("health"))
+            probe.timeoutInterval = 4
+            guard let (data, resp) = try? await session.data(for: probe),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let health = try? JSONDecoder.yz.decode(HealthInfo.self, from: data) else { continue }
+            // 别连到另一台电脑上去
+            if let cid = health.connectorId, !device.id.isEmpty, cid != device.id { continue }
+            setBase(url, for: device.id)
+            sockets[device.id]?.updateBase(url)
+            onEndpointResolved?(device.id, raw)
+            return true
+        }
+        return false
+    }
+
+    /// 带故障转移的请求：第一次报「连不上」就换地址重试一次。
+    private func perform<T: Decodable>(_ device: Device, _ path: String, method: String = "GET", body: (any Encodable)? = nil, as type: T.Type) async throws -> T {
+        do { return try await perform(device, path, method: method, body: body, as: type) }
+        catch ConnectorError.unreachable {
+            guard await failover(device) else { throw ConnectorError.unreachable }
+            return try await perform(device, path, method: method, body: body, as: type)
+        }
+    }
+
     private func request(_ device: Device, _ path: String, method: String = "GET", body: (any Encodable)? = nil) throws -> URLRequest {
-        guard let base = device.baseURL, let url = URL(string: path, relativeTo: base) else { throw ConnectorError.badURL }
+        guard let base = base(for: device), let url = URL(string: path, relativeTo: base) else { throw ConnectorError.badURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = 15
@@ -113,7 +182,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 
     public func health(device: Device) async throws -> HealthInfo {
-        try await perform(request(device, "/health"), as: HealthInfo.self)
+        try await perform(device, "/health", as: HealthInfo.self)
     }
 
     public func pair(_ payload: PairingPayload) async throws -> Device {
@@ -121,7 +190,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         var device = Device(name: payload.name ?? payload.host, host: payload.host, port: payload.port, mode: payload.mode, online: true)
         struct Body: Encodable { var token: String; var phoneName: String }
         let phone = await MainActor.run { UIDevice.current.name }
-        let resp = try await perform(request(device, "/pair", method: "POST", body: Body(token: payload.token, phoneName: phone)), as: PairResponse.self)
+        let resp = try await perform(device, "/pair", method: "POST", body: Body(token: payload.token, phoneName: phone), as: PairResponse.self)
         if let cid = resp.connectorId { device.id = cid }
         device.name = payload.name ?? resp.deviceName ?? device.name
         TokenStore.shared.save(token: resp.deviceToken, for: device.id)
@@ -129,16 +198,16 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 
     public func sessions(device: Device) async throws -> [Session] {
-        try await perform(request(device, "/sessions"), as: [Session].self)
+        try await perform(device, "/sessions", as: [Session].self)
     }
 
     public func createSession(device: Device, request r: NewSessionRequest) async throws -> Session {
-        try await perform(request(device, "/sessions", method: "POST", body: r), as: Session.self)
+        try await perform(device, "/sessions", method: "POST", body: r, as: Session.self)
     }
 
     public func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] {
         let q = cursor.map { "?after=\($0)" } ?? ""
-        return try await perform(request(device, "/sessions/\(sessionId)/messages\(q)"), as: [Message].self)
+        return try await perform(device, "/sessions/\(sessionId)/messages\(q)", as: [Message].self)
     }
 
     public func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {
@@ -156,39 +225,66 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         catch {
             // WS 不通就走 HTTP：审批是不能丢的动作
             struct Body: Encodable { var decision: String; var remember: RememberBody? }
-            _ = try await perform(request(device, "/approvals/\(approvalId)", method: "POST",
-                                          body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init))), as: OK.self)
+            _ = try await perform(device, "/approvals/\(approvalId)", method: "POST",
+                                          body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init)), as: OK.self)
         }
     }
 
     public func sync(device: Device) async throws -> SyncSnapshot {
-        try await perform(request(device, "/sync"), as: SyncSnapshot.self)
+        try await perform(device, "/sync", as: SyncSnapshot.self)
     }
 
     public func rules(device: Device, sessionId: String?) async throws -> [ApprovalRule] {
         let q = sessionId.map { "?sessionId=" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
-        return try await perform(request(device, "/rules\(q)"), as: [ApprovalRule].self)
+        return try await perform(device, "/rules\(q)", as: [ApprovalRule].self)
     }
 
     public func deleteRule(device: Device, id: String) async throws {
-        _ = try await perform(request(device, "/rules/\(id)", method: "DELETE"), as: OK.self)
+        _ = try await perform(device, "/rules/\(id)", method: "DELETE", as: OK.self)
     }
 
     public func registerPush(device: Device, token: String, environment: String) async throws -> PushStatus {
         struct Body: Encodable { var token: String; var environment: String; var bundleId: String? }
         struct Resp: Decodable { var ok: Bool; var push: PushStatus? }
         let body = Body(token: token, environment: environment, bundleId: Bundle.main.bundleIdentifier)
-        return try await perform(request(device, "/devices/push", method: "POST", body: body), as: Resp.self).push ?? PushStatus()
+        return try await perform(device, "/devices/push", method: "POST", body: body, as: Resp.self).push ?? PushStatus()
     }
 
     public func unregisterPush(device: Device) async throws {
-        _ = try await perform(request(device, "/devices/push", method: "DELETE"), as: OK.self)
+        _ = try await perform(device, "/devices/push", method: "DELETE", as: OK.self)
+    }
+
+    public func registerLiveActivity(device: Device, sessionId: String, token: String) async throws {
+        struct Body: Encodable { var sessionId: String; var token: String; var environment: String; var bundleId: String? }
+        _ = try await perform(device, "/devices/live-activity", method: "POST",
+                              body: Body(sessionId: sessionId, token: token, environment: PushCenter.shared.environment, bundleId: Bundle.main.bundleIdentifier),
+                              as: OK.self)
     }
 
     public func reconnect(device: Device) { socket(for: device).reconnectNow() }
 
+    public func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
+        struct Body: Encodable { var text: String; var attachments: [String]; var mode: String }
+        struct Resp: Decodable { var queued: Bool?; var item: QueuedMessage? }
+        let r = try await perform(device, "/sessions/\(sessionId)/messages", method: "POST",
+                                  body: Body(text: text, attachments: attachments, mode: mode.rawValue), as: Resp.self)
+        return (r.queued ?? false, r.item)
+    }
+
+    public func cancelQueued(device: Device, sessionId: String, itemId: String) async throws {
+        _ = try await perform(device, "/sessions/\(sessionId)/queue/\(itemId)", method: "DELETE", as: OK.self)
+    }
+
+    public func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff {
+        try await perform(device, "/sessions/\(sessionId)/diff?scope=\(scope)", as: WorkingDiff.self)
+    }
+
+    public func commands(device: Device, sessionId: String) async throws -> CommandCatalog {
+        try await perform(device, "/sessions/\(sessionId)/commands", as: CommandCatalog.self)
+    }
+
     public func approvals(device: Device) async throws -> [Approval] {
-        var list = try await perform(request(device, "/approvals?status=pending"), as: [Approval].self)
+        var list = try await perform(device, "/approvals?status=pending", as: [Approval].self)
         for i in list.indices { list[i].deviceId = device.id }
         return list
     }
@@ -196,13 +292,12 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     public func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] {
         struct Resp: Decodable { var entries: [FileEntry] }
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
-        return try await perform(request(device, "/files?sessionId=\(sessionId)&path=\(encoded)"), as: Resp.self).entries
+        return try await perform(device, "/files?sessionId=\(sessionId)&path=\(encoded)", as: Resp.self).entries
     }
 
     public func preview(device: Device, sessionId: String, path: String) async throws -> String {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
-        let req = try request(device, "/files/preview?sessionId=\(sessionId)&path=\(encoded)")
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp) = try await data(device, "/files/preview?sessionId=\(sessionId)&path=\(encoded)")
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw ConnectorError.network("HTTP \(http.statusCode)") }
         return String(decoding: data, as: UTF8.self)
     }
@@ -218,17 +313,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func listDirectories(device: Device, path: String?) async throws -> DirectoryListing {
         let q = path.map { "?path=" + ($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0) } ?? ""
-        return try await perform(request(device, "/fs/dirs\(q)"), as: DirectoryListing.self)
+        return try await perform(device, "/fs/dirs\(q)", as: DirectoryListing.self)
     }
 
     public func makeDirectory(device: Device, parent: String, name: String) async throws -> String {
         struct Body: Encodable { var parent: String; var name: String }
         struct Resp: Decodable { var path: String }
-        return try await perform(request(device, "/fs/mkdir", method: "POST", body: Body(parent: parent, name: name)), as: Resp.self).path
+        return try await perform(device, "/fs/mkdir", method: "POST", body: Body(parent: parent, name: name), as: Resp.self).path
     }
 
     public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
-        try await perform(request(device, "/agents"), as: [String: AgentCapabilities].self)
+        try await perform(device, "/agents", as: [String: AgentCapabilities].self)
     }
 
     public func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session {
@@ -239,17 +334,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 
     public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
-        try await perform(request(device, "/quota?agent=\(agent.rawValue)"), as: QuotaInfo.self)
+        try await perform(device, "/quota?agent=\(agent.rawValue)", as: QuotaInfo.self)
     }
 
     public func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
-        return try await perform(request(device, "/files/stat?sessionId=\(sessionId)&path=\(encoded)"), as: FileInfo.self)
+        return try await perform(device, "/files/stat?sessionId=\(sessionId)&path=\(encoded)", as: FileInfo.self)
     }
 
     public func download(device: Device, sessionId: String, path: String) async throws -> Data {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
-        let (data, resp) = try await session.data(for: try request(device, "/files/download?sessionId=\(sessionId)&path=\(encoded)"))
+        let (data, resp) = try await data(device, "/files/download?sessionId=\(sessionId)&path=\(encoded)")
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
         if http.statusCode == 401 { throw ConnectorError.unauthorized }
         if http.statusCode == 403 { throw ConnectorError.network("这个文件不在会话工作目录里，出于安全不提供访问") }
@@ -257,8 +352,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         return data
     }
 
+    /// 二进制下载：连不上时同样先做一次地址故障转移。
+    private func data(_ device: Device, _ path: String) async throws -> (Data, URLResponse) {
+        do { return try await session.data(for: try request(device, path)) }
+        catch {
+            guard await failover(device) else { throw ConnectorError.unreachable }
+            return try await session.data(for: try request(device, path))
+        }
+    }
+
     public func attachment(device: Device, id: String) async throws -> Data {
-        let (data, resp) = try await session.data(for: request(device, "/uploads/\(id)"))
+        let (data, resp) = try await data(device, "/uploads/\(id)")
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
         if http.statusCode == 401 { throw ConnectorError.unauthorized }
         guard (200..<300).contains(http.statusCode) else { throw ConnectorError.network("HTTP \(http.statusCode)") }
@@ -277,7 +381,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     private func socket(for device: Device) -> ConnectorSocket {
         lock.lock(); defer { lock.unlock() }
         if let s = sockets[device.id] { return s }
-        let s = ConnectorSocket(device: device, session: session, token: tokenProvider(device))
+        let s = ConnectorSocket(base: base(for: device), session: session, token: tokenProvider(device))
         sockets[device.id] = s
         return s
     }
@@ -288,15 +392,23 @@ final class ConnectorSocket: @unchecked Sendable {
     let events: AsyncStream<ConnectorEvent>
     private let continuation: AsyncStream<ConnectorEvent>.Continuation
     private var task: URLSessionWebSocketTask?
-    private let device: Device
+    private var base: URL?
     private let session: URLSession
     private let token: String?
     private var backoff: TimeInterval = 1
     private var pingTimer: Timer?
     private var connecting = false
 
-    init(device: Device, session: URLSession, token: String?) {
-        self.device = device; self.session = session; self.token = token
+    /// 故障转移换了地址后热切换过来。
+    func updateBase(_ url: URL) {
+        guard url != base else { return }
+        base = url
+        backoff = 1
+        restart()
+    }
+
+    init(base: URL?, session: URLSession, token: String?) {
+        self.base = base; self.session = session; self.token = token
         var cont: AsyncStream<ConnectorEvent>.Continuation!
         events = AsyncStream { cont = $0 }
         continuation = cont
@@ -323,7 +435,7 @@ final class ConnectorSocket: @unchecked Sendable {
         guard !connecting else { return }
         connecting = true
         defer { connecting = false }
-        guard let base = device.baseURL, var comps = URLComponents(url: base.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else { return }
+        guard let root = base, var comps = URLComponents(url: root.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else { return }
         comps.scheme = comps.scheme == "https" ? "wss" : "ws"
         if let token { comps.queryItems = [URLQueryItem(name: "token", value: token)] }
         guard let url = comps.url else { return }

@@ -84,3 +84,18 @@
 5. 资源回收：Claude 进程空闲 15 分钟回收（--resume 接回）、上传 14 天 / 关闭会话 45 天 / 孤儿文件定期清理、yzvibe devices / revoke
 6. 测试落地：ClaudeStreamTranslator 可用录制事件流测试；连接器 36 项、iOS 36 项（装了 iOS 26.5 模拟器运行时后真跑）；.github/workflows/ci.yml
 7. 分发：npm 包就绪（files/prepublishOnly/npm pack 验证 54.7kB）、ios/scripts/archive.sh 归档并可直传 TestFlight
+
+## 会话 3 追加（用户 2026-09-10 追加的 6 项）
+8. 消息队列：连接器侧 session.queue，忙时排队、本轮结束自动接上、可取消；`mode=now` 插队并 SIGINT 打断当前轮。
+   实测：Claude Code 的 stream-json 输入本身不排队（多写一条只是下一轮），也没有中断控制消息，所以队列与可见状态由连接器做。
+9. 地址自愈：/health 与配对配置带 endpoints（隧道/Tailscale/局域网）；手机主地址失败时按 connectorId 探活切换；
+   启动与隧道重连时静默推送新地址；同一 Wi-Fi 下 Bonjour 广播 _yzvibe._tcp。电脑重启 / 隧道换地址不再需要重新扫码。
+10. 会话改动视图：GET /sessions/:id/diff（git status + diff，新文件给全文，scope=session 跟基线 commit 比）；
+    iOS SessionDiffView 按文件折叠、+/- 着色。
+11. Live Activity / 灵动岛：SessionActivityAttributes + WidgetKit 扩展；活动 token 交给连接器，
+    锁屏时由 APNs liveactivity 推送更新（Date 必须用 Swift 默认编码，测试里已固定这一点）。
+12. 斜杠命令：清单以 Claude 在 system.init 上报的 slash_commands 为准（实测 64 个里仅 3 个终端专用），
+    手机端命令（/new /diff /files /usage /stop…）就地执行；Codex exec 不解析斜杠命令，已在面板上标明。
+13. Skill：扫 ~/.claude/skills（符号链接要用 statSync）、项目 .claude/skills、插件 installPath，以及 ~/.codex/skills。
+    修了两个 bug：符号链接目录被漏掉、frontmatter 描述超过 8KB 被截断。
+- 测试：连接器 41 项、iOS 45 项，全部在模拟器上实跑通过。

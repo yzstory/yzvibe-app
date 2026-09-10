@@ -46,7 +46,7 @@ export function baseURL({ host, port }) { return String(host).includes('://') ? 
 export function pairLink(opts) { return `${baseURL(opts)}/pair?token=${encodeURIComponent(opts.token)}`; }
 
 /** 可以直接粘贴进 App 的完整配置。 */
-export function pairConfig({ host, port, token, mode, name, expiresAt, connectorId, version }) {
+export function pairConfig({ host, port, token, mode, name, expiresAt, connectorId, version, endpoints }) {
   return {
     yzvibe: 1,
     name,
@@ -54,6 +54,8 @@ export function pairConfig({ host, port, token, mode, name, expiresAt, connector
     port: String(host).includes('://') ? null : port,
     token,
     mode,
+    // 所有可达地址：隧道地址变了以后手机可以自己换一个试，不用重新扫码
+    ...(endpoints?.length ? { endpoints } : {}),
     ...(connectorId && { connectorId }),
     ...(version && { version }),
     ...(expiresAt && { expiresAt }),

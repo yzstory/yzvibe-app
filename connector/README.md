@@ -59,6 +59,44 @@ App 被 iOS 挂起后 WebSocket 一定会断，只有远程推送能把待审批
 推送时机：有待审批时（`time-sensitive`，带角标）；回复完成且手机没连着时；审批被解决时发一条静默推送更新角标。
 没配置就整体降级为不推送，其余功能不受影响。`yzvibe push` 看状态，`yzvibe push --test` 发一条自检。
 
+## 消息队列
+
+Agent 正忙时收到的消息不会被丢掉也不会打断它：进队列（`session.queue`），本轮回到 `idle` 就自动发出去。
+`POST /sessions/:id/messages` 的 `mode`：`auto`（默认，忙就排队）、`queue`（强制排队）、`now`（插到队首并打断当前轮）。
+`DELETE /sessions/:id/queue/:itemId` 撤掉一条。队列变化通过 `session.updated` 广播，手机上显示成「排队中」的虚线气泡。
+
+实测：Claude Code 的 stream-json 输入本身不排队（多写一行只会变成下一轮），也没有中断用的控制消息，
+所以打断只能靠 SIGINT，队列与「排队中」这个可见状态都由连接器提供。
+
+## 会话改动与命令清单
+
+- `GET /sessions/:id/diff?scope=working|session`：`git status` + `git diff` 整理成按文件分块的结构，
+  新文件直接给全文（全是 + 行）。`scope=session` 跟会话创建时记下的 `baseCommit` 比。
+  不是 git 仓库时返回 `{repo:false, reason}`，手机上会显示一句说明而不是空白页。
+- `GET /sessions/:id/commands`：手机端命令 + Agent 斜杠命令 + skill。
+  Claude 的清单以它在 `system.init` 里自报的 `slash_commands` 为准（去掉 `terminal_slash_commands`，
+  实测 64 个里只有 doctor / color / reload-plugins 是终端专用），拿不到时退回扫盘：
+  `~/.claude/skills/*/SKILL.md`（常是符号链接，要用 statSync 判断目录）、项目 `.claude/skills/`、
+  插件 `installed_plugins.json` 里的 `installPath`，以及 `~/.claude/commands/*.md`。
+  Codex 读 `~/.codex/skills/`；它的 `exec` 不解析斜杠命令，所以这些条目标了 `insertAsText`，手机会把它当提示词插进消息。
+
+## 锁屏 / 灵动岛实时活动
+
+手机开活动时把它的推送 token 交给 `POST /devices/live-activity`，之后会话每次状态变化，
+连接器直接推一条 `apns-push-type: liveactivity`（topic 是 `<bundleId>.push-type.liveactivity`），
+App 被挂起也能刷新。会话闲下来推一条 `event: "end"` 收尾。
+注意 `content-state` 里的 `Date` 要用 Swift 的默认编码（自 2001-01-01 起的秒数），不是 ISO8601。
+
+## 换了地址也不用重新扫码
+
+Cloudflare 的临时隧道每次重开都是新地址，电脑一重启手机就连不上。三重兜底：
+
+1. `GET /health` 与配对配置都带 `endpoints`：隧道 / Tailscale / 局域网 / 回环全报出去，手机主地址失败就依次探活。
+2. 启动时和隧道重连后，给注册过推送的手机静默推一条新地址（`yz.kind = "endpoint"`）。
+3. 同一 Wi-Fi 下用 Bonjour 广播 `_yzvibe._tcp`（macOS 走 dns-sd，Linux 走 avahi-publish；都没有就跳过）。
+
+设备 Token 本来就长期有效，所以只要地址找得回来就不必重新配对。
+
 ## 审批规则
 
 `~/.yzvibe/rules.json`。手机在审批卡上点「总是允许…」时创建，三种匹配方式：
@@ -93,6 +131,9 @@ Claude 进程也会回收：会话空闲 15 分钟（`YZVIBE_IDLE_MINUTES` 可�
 - `src/rules.js`：审批规则的匹配、持久化与「总是允许」建议
 - `src/cleanup.js`：上传 / 旧会话 / 孤儿文件的定期清理
 - `src/diff.js`：行级 diff，把 Edit / Write 的改动变成手机上能看的 +/- 文本
+- `src/git.js`：工作目录的改动概览（状态 / 行数 / 按文件分块的 diff / 新文件全文）
+- `src/commands.js`：斜杠命令与 skill 的发现与归类
+- `src/endpoints.js`：所有可达地址的收集与 Bonjour 广播
 - `src/agents/claude.js`：`claude -p --input-format stream-json --output-format stream-json` 驱动，多轮复用同一进程，`--resume` 恢复；手机改了模式 / 模型 / 思考强度后在空闲时重启进程带新参数；空闲超时回收进程。事件翻译独立成 `ClaudeStreamTranslator`，可用录制的事件流直接测试
 - `src/agents/codex.js`：`codex exec --json` 驱动，每轮一个进程，`codex exec resume <thread>` 续聊；非交互模式没有审批回调，Normal 靠 workspace-write 沙箱兜底
 - `src/agents/options.js`：Plan / Normal / Trust、模型、思考强度在两种 Agent 上的参数映射与能力表（`GET /agents`），详见 `../shared/protocol.md`「会话选项」
@@ -104,9 +145,10 @@ Claude 进程也会回收：会话空闲 15 分钟（`YZVIBE_IDLE_MINUTES` 可�
 
 ## 测试
 ```bash
-npm test     # 36 个用例
+npm test     # 41 个用例
 ```
 
 覆盖：配对（扫码 / 外链 / JSON，过期换新）、会话与 WS 流式、审批与规则自动放行、文件权限边界、
 会话选项与能力表、Claude 事件流翻译（录制夹具）、Codex 事件解析、用量与额度归一、
-APNs JWT 与载荷、推送环境回退与失效清理、`/sync`、设备撤销、定期清理、后台守护真实拉起子进程。
+APNs JWT 与载荷、推送环境回退与失效清理、实时活动载荷、`/sync`、设备撤销、定期清理、
+消息队列（排队 / 取消 / 本轮结束自动接上）、改动视图与命令清单、多地址上报、后台守护真实拉起子进程。

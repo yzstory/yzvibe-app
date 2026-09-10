@@ -147,3 +147,39 @@ test('规则命中：审批直接放行并在聊天里留痕', async () => {
   assert.match(store.messagesOf(s.id).at(-1).text, /已按规则自动允许/);
   assert.match(describeRule(store.rules.all()[0]), /本会话内放行以 npm test 开头/);
 });
+
+test('实时活动：推送载荷符合 ActivityKit 要求，失效 token 会被丢掉', async () => {
+  const { home } = pushHome();
+  const calls = [];
+  const dropped = [];
+  const pusher = new Pusher({
+    home, log: () => {},
+    onInvalid: (id, info) => dropped.push({ id, ...info }),
+    postImpl: async (host, token, headers, payload) => {
+      calls.push({ host, token, headers, payload });
+      return token.startsWith('dead') ? { ok: false, status: 410, reason: 'Unregistered' } : { ok: true, status: 200, reason: null };
+    },
+  });
+  const state = { status: 'running', headline: '正在 Bash：npm test', pendingApprovals: 0, queued: 2, contextPercent: 37, updatedAt: 123 };
+  const r = await pusher.sendLiveActivity(
+    [{ deviceId: 'd1', token: 'aa'.repeat(32), environment: 'sandbox' }, { deviceId: 'd2', token: 'dead'.repeat(16), environment: 'sandbox' }],
+    { state });
+
+  assert.equal(r[0].ok, true);
+  const c = calls[0];
+  assert.equal(c.headers['apns-push-type'], 'liveactivity');
+  assert.equal(c.headers['apns-topic'], 'icu.yzvibe.YzVibe.push-type.liveactivity');
+  assert.equal(c.payload.aps.event, 'update');
+  assert.deepEqual(c.payload.aps['content-state'], state);
+  assert.ok(c.payload.aps['stale-date'] > c.payload.aps.timestamp);
+
+  // 结束事件带 dismissal-date，没有 stale-date
+  await pusher.sendLiveActivity([{ deviceId: 'd1', token: 'aa'.repeat(32) }], { state, event: 'end', dismissSeconds: 30 });
+  const endCall = calls.at(-1);
+  assert.equal(endCall.payload.aps.event, 'end');
+  assert.ok(endCall.payload.aps['dismissal-date']);
+  assert.equal(endCall.payload.aps['stale-date'], undefined);
+
+  assert.ok(dropped.some((x) => x.drop && x.activityToken.startsWith('dead')));
+  assert.deepEqual(await pusher.sendLiveActivity([], { state }), []);
+});

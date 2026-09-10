@@ -193,5 +193,40 @@ export class Pusher {
     }));
   }
 
+  /**
+   * 更新锁屏 / 灵动岛上的实时活动。手机在 App 里开活动时把 token 交过来，
+   * 之后即使 App 被挂起，这里也能把「在跑什么、要不要批」推上去。
+   * @param targets [{ deviceId, token, environment }]
+   * @param state   与 iOS 端 SessionActivityAttributes.ContentState 字段一致
+   */
+  async sendLiveActivity(targets, { state, event = 'update', staleSeconds = 600, dismissSeconds = 0 }) {
+    if (!this.ready || !targets.length) return [];
+    const jwt = this.auth.jwt();
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      aps: {
+        timestamp: now,
+        event,
+        'content-state': state,
+        ...(event === 'update' ? { 'stale-date': now + staleSeconds } : {}),
+        ...(event === 'end' && dismissSeconds ? { 'dismissal-date': now + dismissSeconds } : {}),
+      },
+    };
+    const headers = {
+      authorization: `bearer ${jwt}`,
+      'apns-topic': `${this.config.bundleId}.push-type.liveactivity`,
+      'apns-push-type': 'liveactivity',
+      'apns-priority': '10',
+      'apns-expiration': String(now + staleSeconds),
+      'content-type': 'application/json',
+    };
+    return Promise.all(targets.map(async (t) => {
+      const env = t.environment ?? this.config.environment ?? 'sandbox';
+      const r = await this.postImpl(HOSTS[env], t.token, headers, payload, { sessions: this.sessions });
+      if (!r.ok && ['Unregistered', 'BadDeviceToken', 'ExpiredToken'].includes(r.reason)) this.onInvalid(t.deviceId, { keep: true, activityToken: t.token, drop: true });
+      return { ...t, ...r };
+    }));
+  }
+
   close() { for (const c of this.sessions.values()) { try { c.close(); } catch {} } this.sessions.clear(); }
 }

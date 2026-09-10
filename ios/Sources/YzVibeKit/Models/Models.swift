@@ -255,11 +255,23 @@ public struct Device: Identifiable, Codable, Hashable, Sendable {
     public var lastSeen: Date
     public var sessionCount: Int
     public var agents: [AgentKind: Int]
+    /// 这台电脑的所有可达地址（隧道 / Tailscale / 局域网）。主地址连不上时依次试，
+    /// 所以 Cloudflare 临时隧道换地址、电脑重启之后不必重新扫码。
+    public var endpoints: [String] = []
 
     public init(id: String = UUID().uuidString, name: String, host: String, port: Int = Device.defaultPort, mode: ConnectionMode,
-                online: Bool = false, lastSeen: Date = .now, sessionCount: Int = 0, agents: [AgentKind: Int] = [:]) {
+                online: Bool = false, lastSeen: Date = .now, sessionCount: Int = 0, agents: [AgentKind: Int] = [:], endpoints: [String] = []) {
         self.id = id; self.name = name; self.host = host; self.port = port; self.mode = mode
-        self.online = online; self.lastSeen = lastSeen; self.sessionCount = sessionCount; self.agents = agents
+        self.online = online; self.lastSeen = lastSeen; self.sessionCount = sessionCount; self.agents = agents; self.endpoints = endpoints
+    }
+
+    /// 换一个主地址（故障转移成功，或收到推送下发的新地址时）。
+    public mutating func adopt(base: String) {
+        guard let u = URL(string: base), let h = u.host else { return }
+        if u.scheme == "https" { host = base.hasSuffix("/") ? String(base.dropLast()) : base }
+        else { host = h; port = u.port ?? Device.defaultPort }
+        endpoints.removeAll { $0 == base }
+        endpoints.insert(base, at: 0)
     }
 
     public var endpoint: String { host.contains("://") ? host : "\(host):\(port)" }
@@ -286,11 +298,16 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// phone = 手机建的；terminal = 电脑终端里跑过的；sdk = 其他工具以 SDK/headless 方式跑的
     public var source: SessionSource
     public var branch: String?
+    /// Agent 正忙时发的消息排在这里，本轮结束自动接上。
+    public var queue: [QueuedMessage] = []
+    /// 会话开始时的 commit，用来只看「这次会话改了什么」。
+    public var baseCommit: String?
 
     public init(id: String = UUID().uuidString, deviceId: String, agent: AgentKind, cwd: String, title: String,
                 status: SessionStatus = .idle, createdAt: Date = .now, updatedAt: Date = .now, pendingApprovals: Int = 0,
                 mode: SessionMode = .normal, model: String? = nil, effort: String? = nil, usage: SessionUsage? = nil,
-                source: SessionSource = .phone, branch: String? = nil) {
+                source: SessionSource = .phone, branch: String? = nil, queue: [QueuedMessage] = [], baseCommit: String? = nil) {
+        self.queue = queue; self.baseCommit = baseCommit
         self.id = id; self.deviceId = deviceId; self.agent = agent; self.cwd = cwd; self.title = title
         self.status = status; self.createdAt = createdAt; self.updatedAt = updatedAt; self.pendingApprovals = pendingApprovals
         self.mode = mode; self.model = model; self.effort = effort; self.usage = usage; self.source = source; self.branch = branch
@@ -299,7 +316,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch, queue, baseCommit }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -315,6 +332,8 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         mode = SessionMode(rawValue: try c.decodeIfPresent(String.self, forKey: .mode) ?? "") ?? .normal
         model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }
         effort = try c.decodeIfPresent(String.self, forKey: .effort).flatMap { $0.isEmpty ? nil : $0 }
+        queue = try c.decodeIfPresent([QueuedMessage].self, forKey: .queue) ?? []
+        baseCommit = try c.decodeIfPresent(String.self, forKey: .baseCommit)
         usage = try? c.decodeIfPresent(SessionUsage.self, forKey: .usage)
         source = SessionSource(rawValue: try c.decodeIfPresent(String.self, forKey: .source) ?? "") ?? .phone
         branch = try c.decodeIfPresent(String.self, forKey: .branch).flatMap { $0.isEmpty ? nil : $0 }
@@ -527,9 +546,11 @@ public struct PairingPayload: Equatable, Sendable {
     public var token: String
     public var mode: ConnectionMode
     public var name: String?
+    /// 连接器报的所有可达地址（JSON 配置里带）。存下来，隧道换地址时能自己接上。
+    public var endpoints: [String]?
 
-    public init(host: String, port: Int = Device.defaultPort, token: String, mode: ConnectionMode = .tunnel, name: String? = nil) {
-        self.host = host; self.port = port; self.token = token; self.mode = mode; self.name = name
+    public init(host: String, port: Int = Device.defaultPort, token: String, mode: ConnectionMode = .tunnel, name: String? = nil, endpoints: [String]? = nil) {
+        self.host = host; self.port = port; self.token = token; self.mode = mode; self.name = name; self.endpoints = endpoints
     }
 
     /// 解析二维码内容（`yzvibe://pair?…`）；不合法返回 nil。
@@ -586,7 +607,8 @@ public struct PairingPayload: Equatable, Sendable {
         let port = (obj["port"] as? Int) ?? Int((obj["port"] as? String) ?? "") ?? Device.defaultPort
         let mode = ConnectionMode(rawValue: (obj["mode"] as? String) ?? "") ?? (host.contains("://") ? .relay : .local)
         let name = (obj["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        self.init(host: host, port: port, token: token, mode: mode, name: name)
+        let endpoints = (obj["endpoints"] as? [String])?.filter { !$0.isEmpty }
+        self.init(host: host, port: port, token: token, mode: mode, name: name, endpoints: endpoints)
     }
 
     private static func query(_ comps: URLComponents) -> [String: String] {
@@ -770,5 +792,151 @@ public struct SyncSnapshot: Codable, Sendable {
     }
     public init(serverTime: Date = .now, sessions: [Session] = [], approvals: [Approval] = [], agents: [String: AgentCapabilities] = [:], rules: [ApprovalRule] = [], push: PushStatus = PushStatus()) {
         self.serverTime = serverTime; self.sessions = sessions; self.approvals = approvals; self.agents = agents; self.rules = rules; self.push = push
+    }
+}
+
+
+// MARK: - 待发送队列 / 改动视图 / 命令面板
+
+/// 排在队列里、还没发出去的消息。
+public struct QueuedMessage: Codable, Hashable, Sendable, Identifiable {
+    public var id: String
+    public var text: String
+    public var attachments: [String]
+    public var createdAt: Date
+    public init(id: String = UUID().uuidString, text: String, attachments: [String] = [], createdAt: Date = .now) {
+        self.id = id; self.text = text; self.attachments = attachments; self.createdAt = createdAt
+    }
+    enum CodingKeys: String, CodingKey { case id, text, attachments, createdAt }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        attachments = try c.decodeIfPresent([String].self, forKey: .attachments) ?? []
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
+    }
+}
+
+/// 发送方式：忙的时候默认排队，也可以插队并打断当前轮。
+public enum SendMode: String, Sendable { case auto, queue, now }
+
+public struct DiffFile: Codable, Hashable, Sendable, Identifiable {
+    public var path: String
+    public var status: String
+    public var staged: Bool
+    public var unstaged: Bool
+    public var untracked: Bool
+    public var added: Int?
+    public var removed: Int?
+    public var diff: String?
+    public var binary: Bool
+    public var id: String { path }
+    public var name: String { (path as NSString).lastPathComponent }
+    public var folder: String { (path as NSString).deletingLastPathComponent }
+
+    public init(path: String, status: String, staged: Bool = false, unstaged: Bool = true, untracked: Bool = false,
+                added: Int? = nil, removed: Int? = nil, diff: String? = nil, binary: Bool = false) {
+        self.path = path; self.status = status; self.staged = staged; self.unstaged = unstaged; self.untracked = untracked
+        self.added = added; self.removed = removed; self.diff = diff; self.binary = binary
+    }
+    enum CodingKeys: String, CodingKey { case path, status, staged, unstaged, untracked, added, removed, diff, binary }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        status = try c.decodeIfPresent(String.self, forKey: .status) ?? "已修改"
+        staged = try c.decodeIfPresent(Bool.self, forKey: .staged) ?? false
+        unstaged = try c.decodeIfPresent(Bool.self, forKey: .unstaged) ?? false
+        untracked = try c.decodeIfPresent(Bool.self, forKey: .untracked) ?? false
+        added = try c.decodeIfPresent(Int.self, forKey: .added)
+        removed = try c.decodeIfPresent(Int.self, forKey: .removed)
+        diff = try c.decodeIfPresent(String.self, forKey: .diff)
+        binary = try c.decodeIfPresent(Bool.self, forKey: .binary) ?? false
+    }
+}
+
+/// 工作目录的改动（GET /sessions/:id/diff）。
+public struct WorkingDiff: Codable, Sendable {
+    public struct Totals: Codable, Sendable, Hashable {
+        public var files: Int, added: Int, removed: Int
+        public init(files: Int = 0, added: Int = 0, removed: Int = 0) { self.files = files; self.added = added; self.removed = removed }
+    }
+    public var repo: Bool
+    public var reason: String?
+    public var branch: String?
+    public var head: String?
+    public var files: [DiffFile]
+    public var totals: Totals
+    public var truncated: Bool
+
+    public init(repo: Bool = true, reason: String? = nil, branch: String? = nil, head: String? = nil,
+                files: [DiffFile] = [], totals: Totals = Totals(), truncated: Bool = false) {
+        self.repo = repo; self.reason = reason; self.branch = branch; self.head = head
+        self.files = files; self.totals = totals; self.truncated = truncated
+    }
+    enum CodingKeys: String, CodingKey { case repo, reason, branch, head, files, totals, truncated }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        repo = try c.decodeIfPresent(Bool.self, forKey: .repo) ?? true
+        reason = try c.decodeIfPresent(String.self, forKey: .reason)
+        branch = try c.decodeIfPresent(String.self, forKey: .branch)
+        head = try c.decodeIfPresent(String.self, forKey: .head)
+        files = try c.decodeIfPresent([DiffFile].self, forKey: .files) ?? []
+        totals = try c.decodeIfPresent(Totals.self, forKey: .totals) ?? Totals()
+        truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+    }
+}
+
+/// 一条斜杠命令 / skill。`kind` 决定点下去是手机自己处理还是发给 Agent。
+public struct SlashCommand: Codable, Hashable, Sendable, Identifiable {
+    public var name: String
+    public var args: String
+    public var description: String
+    public var kind: String          // app | agent | skill | prompt
+    public var source: String
+    public var action: String?       // kind == app 时手机要执行的动作
+    public var insertAsText: Bool    // Codex 的 skill 只能当提示词插进消息里
+
+    public var id: String { "\(kind):\(name)" }
+    public var isApp: Bool { kind == "app" }
+    public var display: String { args.isEmpty ? "/\(name)" : "/\(name) \(args)" }
+
+    public init(name: String, args: String = "", description: String = "", kind: String = "agent", source: String = "", action: String? = nil, insertAsText: Bool = false) {
+        self.name = name; self.args = args; self.description = description; self.kind = kind; self.source = source; self.action = action; self.insertAsText = insertAsText
+    }
+    enum CodingKeys: String, CodingKey { case name, args, description, kind, source, action, insertAsText }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        args = try c.decodeIfPresent(String.self, forKey: .args) ?? ""
+        description = try c.decodeIfPresent(String.self, forKey: .description) ?? ""
+        kind = try c.decodeIfPresent(String.self, forKey: .kind) ?? "agent"
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? ""
+        action = try c.decodeIfPresent(String.self, forKey: .action)
+        insertAsText = try c.decodeIfPresent(Bool.self, forKey: .insertAsText) ?? false
+    }
+}
+
+/// GET /sessions/:id/commands
+public struct CommandCatalog: Codable, Sendable {
+    public var app: [SlashCommand]
+    public var agentCommands: [SlashCommand]
+    public var skills: [SlashCommand]
+    public var prompts: [SlashCommand]
+    public var note: String?
+    public var reported: Bool
+
+    public var isEmpty: Bool { app.isEmpty && agentCommands.isEmpty && skills.isEmpty && prompts.isEmpty }
+    public init(app: [SlashCommand] = [], agentCommands: [SlashCommand] = [], skills: [SlashCommand] = [], prompts: [SlashCommand] = [], note: String? = nil, reported: Bool = false) {
+        self.app = app; self.agentCommands = agentCommands; self.skills = skills; self.prompts = prompts; self.note = note; self.reported = reported
+    }
+    enum CodingKeys: String, CodingKey { case app, agentCommands, skills, prompts, note, reported }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        app = try c.decodeIfPresent([SlashCommand].self, forKey: .app) ?? []
+        agentCommands = try c.decodeIfPresent([SlashCommand].self, forKey: .agentCommands) ?? []
+        skills = try c.decodeIfPresent([SlashCommand].self, forKey: .skills) ?? []
+        prompts = try c.decodeIfPresent([SlashCommand].self, forKey: .prompts) ?? []
+        note = try c.decodeIfPresent(String.self, forKey: .note)
+        reported = try c.decodeIfPresent(Bool.self, forKey: .reported) ?? false
     }
 }
