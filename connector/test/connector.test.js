@@ -81,6 +81,11 @@ test('配对 → 会话 → WS 流式回复 → 审批 → 文件', async () => 
   const up = await (await fetch(`${base}/uploads`, { method: 'POST', headers: { authorization: H.authorization, 'content-type': 'image/png', 'x-filename': 'a.png' }, body: Buffer.from([1, 2, 3]) })).json();
   assert.ok(up.id);
   assert.equal((await fetch(`${base}${up.url}`, { headers: H })).status, 200);
+  // 连接器重启（内存索引清空）后仍能按 id 在磁盘上找回，且带正确 mime
+  c.store.uploads.clear();
+  const again = await fetch(`${base}${up.url}`, { headers: H });
+  assert.equal(again.status, 200); assert.equal(again.headers.get('content-type'), 'image/png');
+  assert.equal((await fetch(`${base}/uploads/nope`, { headers: H })).status, 404);
 
   ws.close();
   await c.close();

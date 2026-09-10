@@ -165,7 +165,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         return json(res, 201, { id, url: `/uploads/${id}` });
       }
       if ((m = p.match(/^\/uploads\/([^/]+)$/)) && req.method === 'GET') {
-        const u = store.uploads.get(m[1]); if (!u) return json(res, 404, { error: 'not found' });
+        const u = store.upload(m[1]); if (!u) return json(res, 404, { error: 'not found' });
         res.writeHead(200, { 'content-type': u.mime }); return fs.createReadStream(u.path).pipe(res);
       }
       json(res, 404, { error: 'not found' });

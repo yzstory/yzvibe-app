@@ -14,6 +14,8 @@ public final class AppStore {
     public var messages: [String: [Message]] = [:]        // sessionId → messages
     public var approvals: [Approval] = []
     public var capabilities: [String: [String: AgentCapabilities]] = [:]   // deviceId → agent → 能力
+    public var attachmentImages: [String: UIImage] = [:]                   // 上传 id → 图片（会话里展示用）
+    public var failedAttachments: Set<String> = []
     public var settings = Settings() { didSet { settings.save() } }
     public var toast: String?
     public private(set) var isDemo: Bool
@@ -227,12 +229,24 @@ public final class AppStore {
     public func send(_ text: String, in sessionId: String, attachments: [String] = []) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
         messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments))
-        if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty {
+        if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty, !text.isEmpty {
             sessions[i].title = String(text.prefix(40))
         }
         setStatus(.running, for: sessionId)
         do { try await client.send(device: device, sessionId: sessionId, text: text, attachments: attachments) }
         catch { toast = error.localizedDescription }
+    }
+
+    /// 发送前把本地图片放进缓存，气泡立刻能显示，不用再从连接器拉。
+    public func cacheAttachment(_ image: UIImage, id: String) { attachmentImages[id] = image }
+
+    /// 按需从连接器拉附件；失败记入 failedAttachments，气泡显示占位。
+    public func loadAttachment(_ id: String, for sessionId: String) async {
+        guard attachmentImages[id] == nil, !failedAttachments.contains(id), let s = session(sessionId), let device = device(s.deviceId) else { return }
+        do {
+            let data = try await client.attachment(device: device, id: id)
+            if let img = UIImage(data: data) { attachmentImages[id] = img } else { failedAttachments.insert(id) }
+        } catch { failedAttachments.insert(id) }
     }
 
     /// 上传图片并返回附件 id。

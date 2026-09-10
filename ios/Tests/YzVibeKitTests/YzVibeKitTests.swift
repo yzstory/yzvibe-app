@@ -174,10 +174,12 @@ final class TerminalSessionTests: XCTestCase {
     @MainActor
     func testTerminalSessionsCanBeHidden() {
         let store = AppStore()
+        store.settings.showTerminalSessions = true   // Settings 会持久化到 UserDefaults，先归位避免上次运行残留
         let all = store.sessions(for: MockData.macStudio, activeOnly: false, query: "")
         XCTAssertTrue(all.contains { $0.source == .terminal })
         store.settings.showTerminalSessions = false
         XCTAssertFalse(store.sessions(for: MockData.macStudio, activeOnly: false, query: "").contains { $0.source == .terminal })
+        store.settings.showTerminalSessions = true
     }
 
     @MainActor
@@ -192,5 +194,27 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(round.modelPresets(for: .claude)?.first?.id, "claude-opus-5-20260901")
         store.settings.setModelPresets(nil, for: .claude)
         XCTAssertNil(store.settings.modelPresets(for: .claude))
+    }
+}
+
+// MARK: - 附件
+
+final class AttachmentTests: XCTestCase {
+    @MainActor
+    func testSendImageOnlyKeepsTitleAndCachesAttachment() async {
+        let store = AppStore()
+        let s = Session(id: "sx", deviceId: "d1", agent: .claude, cwd: "~/x", title: "新会话")
+        store.sessions.insert(s, at: 0)
+        let fmt = UIGraphicsImageRendererFormat.default(); fmt.scale = 1
+        let img = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 10), format: fmt).image { _ in }
+        store.cacheAttachment(img, id: "up1")
+        await store.send("", in: "sx", attachments: ["up1"])
+        XCTAssertEqual(store.session("sx")?.title, "新会话")                 // 空文本不改标题
+        XCTAssertEqual(store.messages["sx"]?.last?.attachments, ["up1"])
+        XCTAssertNotNil(store.attachmentImages["up1"])
+        // 没缓存的从连接器拉（Mock 返回色块图）
+        await store.loadAttachment("up2", for: "s1")
+        XCTAssertNotNil(store.attachmentImages["up2"])
+        XCTAssertFalse(store.failedAttachments.contains("up2"))
     }
 }

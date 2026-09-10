@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mimeOf } from './files.js';
 
 export const HOME = process.env.YZVIBE_HOME ?? path.join(os.homedir(), '.yzvibe');
 
@@ -170,6 +171,17 @@ export class Store extends EventEmitter {
   }
 
   // ---------- 上传 ----------
+  /** 取上传记录；内存里没有（连接器重启过）就按 id 前缀在 uploads 目录找回。 */
+  upload(id) {
+    if (this.uploads.has(id)) return this.uploads.get(id);
+    if (!/^[\w-]+$/.test(id)) return null;
+    const dir = path.join(this.home, 'uploads');
+    let names; try { names = fs.readdirSync(dir); } catch { return null; }
+    const n = names.find((x) => x.startsWith(`${id}-`)); if (!n) return null;
+    const u = { path: path.join(dir, n), mime: mimeOf(n), name: n.slice(id.length + 1) };
+    this.uploads.set(id, u);
+    return u;
+  }
   addUpload(name, mime, buffer) {
     const id = randomUUID();
     const file = path.join(this.home, 'uploads', `${id}-${name.replace(/[^\w.\-]/g, '_')}`);

@@ -77,9 +77,9 @@ export class ClaudeAgent {
   async send(text, attachments = []) {
     if (this.proc && this.needsRespawn && this.session.status !== 'running' && this.session.status !== 'waiting_approval') this.#retire();
     if (!this.proc) this.#spawn();
-    const content = [{ type: 'text', text }];
+    const content = text?.trim() ? [{ type: 'text', text }] : [];   // 空文本块会被 API 拒绝，只发图时省略
     for (const a of attachments) {
-      const up = this.store.uploads.get(a);
+      const up = this.store.upload(a);
       if (up && up.mime.startsWith('image/')) content.push({ type: 'image', source: { type: 'base64', media_type: up.mime, data: fs.readFileSync(up.path).toString('base64') } });
     }
     this.store.setStatus(this.session.id, 'running');

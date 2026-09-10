@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 /// 离线 Mock：返回设计稿里的示例数据，并模拟一次流式回复与审批事件。
 public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
@@ -35,6 +36,15 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
     public func respond(device: Device, approvalId: String, decision: ApprovalDecision) async throws {}
 
     public func approvals(device: Device) async throws -> [Approval] { MockData.approvals.filter { $0.deviceId == device.id } }
+    public func attachment(device: Device, id: String) async throws -> Data {
+        // 演示用：一张带 id 后四位的色块图
+        let fmt = UIGraphicsImageRendererFormat.default(); fmt.scale = 1
+        let img = UIGraphicsImageRenderer(size: CGSize(width: 800, height: 600), format: fmt).image { ctx in
+            UIColor(hue: CGFloat(abs(id.hashValue % 360)) / 360, saturation: 0.35, brightness: 0.85, alpha: 1).setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 800, height: 600))
+        }
+        return img.jpegData(compressionQuality: 0.8) ?? Data()
+    }
     public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
         try await Task.sleep(nanoseconds: 300_000_000)
         if agent == .codex { return QuotaInfo(agent: "codex", unavailable: "Codex 非交互模式暂无额度接口") }

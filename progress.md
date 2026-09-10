@@ -46,3 +46,8 @@
 - Claude 预置模型改为带版本的完整 ID：claude-fable-5-1 / claude-opus-5 / claude-sonnet-5 / claude-haiku-4-5-20251001（Haiku 5 尚不存在）
 - iOS：会话卡显示「终端 / SDK」来源与 git 分支，「我」页可关闭终端会话显示；「模型列表」编辑器按 Agent 增删改模型 ID 与显示名，可恢复默认；聊天页去掉快捷回复
 - 验证：connector 11 个测试，YzVibeKit 18 个测试
+
+## 2026-09-10 图片：先选后发、气泡缩略图、全屏查看
+- iOS：选图后进入输入条上方的待发送区（最多 6 张，可删），可配文字一起发；用户气泡显示缩略图，点开全屏（双指缩放、双击、分享）；附件从连接器 /uploads/:id 拉取并缓存
+- 连接器：只发图不带文字时不再给 Claude 空文本块（API 会拒绝）；Codex 用默认提示；上传索引可在重启后按 id 从磁盘找回
+- 验证：真实 Claude 只发一张红色 PNG 问颜色回答「Red.」；connector 11 个测试、YzVibeKit 19 个测试、App 工程编译通过

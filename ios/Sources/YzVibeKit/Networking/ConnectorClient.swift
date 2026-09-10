@@ -25,6 +25,8 @@ public protocol ConnectorClient: Sendable {
     func makeDirectory(device: Device, parent: String, name: String) async throws -> String
     /// 账号剩余额度（GET /quota?agent=）。
     func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo
+    /// 取回上传过的附件原始数据（GET /uploads/:id）。
+    func attachment(device: Device, id: String) async throws -> Data
     /// 服务端事件流；调用方持有并消费。
     func events(device: Device) -> AsyncStream<ConnectorEvent>
 }
@@ -189,6 +191,14 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo {
         try await perform(request(device, "/quota?agent=\(agent.rawValue)"), as: QuotaInfo.self)
+    }
+
+    public func attachment(device: Device, id: String) async throws -> Data {
+        let (data, resp) = try await session.data(for: request(device, "/uploads/\(id)"))
+        guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
+        if http.statusCode == 401 { throw ConnectorError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else { throw ConnectorError.network("HTTP \(http.statusCode)") }
+        return data
     }
 
     public func events(device: Device) -> AsyncStream<ConnectorEvent> {

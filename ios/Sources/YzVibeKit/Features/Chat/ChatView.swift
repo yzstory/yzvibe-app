@@ -8,6 +8,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showFiles = false
     @State private var showUsage = false
+    @State private var pending: [PendingImage] = []
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
@@ -86,19 +87,21 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            InputBar(text: $draft, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onPickImage: { raw, rawMime, rawName in
-                Task {
-                    // 先缩到 1568px 长边再上传：省流量、省 token，也避免原图超过 5MB 被 API 拒绝
-                    let (data, mime, name) = await ImagePrep.forUpload(raw) ?? (raw, rawMime, rawName)
-                    if let id = await store.upload(data, mime: mime, filename: name, for: sessionId) {
-                        await store.send(draft.isEmpty ? "（图片）" : draft, in: sessionId, attachments: [id]); draft = ""
-                    }
-                }
-            }, onSend: {
+            InputBar(text: $draft, pending: $pending, placeholder: "发消息给 \(session?.agent.displayName ?? "Agent")…", onSend: {
                 let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !t.isEmpty else { return }
-                draft = ""
-                Task { await store.send(t, in: sessionId) }
+                let images = pending
+                guard !t.isEmpty || !images.isEmpty else { return }
+                draft = ""; pending = []
+                Task {
+                    // 图片已在选择时缩到 1568px；这里逐张上传，拿到 id 后连同文字一起发
+                    var ids: [String] = []
+                    for img in images {
+                        if let id = await store.upload(img.data, mime: "image/jpeg", filename: "photo.jpg", for: sessionId) {
+                            store.cacheAttachment(img.image, id: id); ids.append(id)
+                        }
+                    }
+                    await store.send(t, in: sessionId, attachments: ids)
+                }
             }) {
                 if let s = session { SessionOptionsRow(agent: s.agent, caps: store.capabilities(for: s), mode: modeBinding, model: modelBinding, effort: effortBinding) }
             }
@@ -123,7 +126,7 @@ struct MessageRow: View {
     var body: some View {
         switch message.role {
         case .user:
-            HStack { Spacer(minLength: 60); UserBubble(text: message.text) }
+            HStack { Spacer(minLength: 60); UserBubble(message: message) }
         case .assistant, .tool:
             HStack { AssistantBubble(message: message); Spacer(minLength: 40) }
         case .system:
@@ -136,20 +139,70 @@ struct MessageRow: View {
     }
 }
 
+/// 用户气泡：图片缩略图（点开全屏）+ 文字。
 struct UserBubble: View {
+    @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
-    let text: String
+    let message: Message
+    @State private var viewing: AttachmentRef?
+
     var body: some View {
-        Text(text)
-            .font(.system(size: 16))
-            .foregroundStyle(p.brandInk)
-            .padding(.horizontal, 16).padding(.vertical, 12)
-            .background(
-                UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
-                    .fill(p.brand)
-                    .shadow(color: p.brand.opacity(0.25), radius: 9, y: 6)
-            )
-            .textSelection(.enabled)
+        VStack(alignment: .trailing, spacing: 8) {
+            if !message.attachments.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(message.attachments, id: \.self) { id in
+                        AttachmentThumb(id: id, sessionId: message.sessionId, size: message.attachments.count == 1 ? 200 : 110)
+                            .onTapGesture { if store.attachmentImages[id] != nil { viewing = AttachmentRef(id: id) } }
+                    }
+                }
+            }
+            if !message.text.isEmpty {
+                Text(message.text)
+                    .font(.system(size: 16))
+                    .foregroundStyle(p.brandInk)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(
+                        UnevenRoundedRectangle(topLeadingRadius: 22, bottomLeadingRadius: 22, bottomTrailingRadius: 6, topTrailingRadius: 22, style: .continuous)
+                            .fill(p.brand)
+                            .shadow(color: p.brand.opacity(0.25), radius: 9, y: 6)
+                    )
+                    .textSelection(.enabled)
+            }
+        }
+        .fullScreenCover(item: $viewing) { ref in
+            if let img = store.attachmentImages[ref.id] { ImageViewer(image: img) }
+        }
+    }
+}
+
+struct AttachmentRef: Identifiable { let id: String }
+
+/// 附件缩略图：先看本地缓存，没有就从连接器拉；拉不到显示占位。
+struct AttachmentThumb: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.palette) private var p
+    let id: String
+    let sessionId: String
+    var size: CGFloat = 110
+
+    var body: some View {
+        ZStack {
+            if let img = store.attachmentImages[id] {
+                Image(uiImage: img).resizable().scaledToFill()
+            } else if store.failedAttachments.contains(id) {
+                VStack(spacing: 4) {
+                    Image(systemName: "photo.badge.exclamationmark").font(.system(size: 18)).foregroundStyle(p.labelTertiary)
+                    Text("图片不可用").font(.yzCaption).foregroundStyle(p.labelTertiary)
+                }
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .frame(width: size, height: size)
+        .background(p.fillSecondary)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1))
+        .task(id: id) { await store.loadAttachment(id, for: sessionId) }
     }
 }
 
@@ -200,38 +253,73 @@ struct ToolCallCard: View {
 }
 
 /// 玻璃输入条：上面是文本框，下面一行是相机 + 会话选项胶囊（accessory）+ 发送。
+/// 选好待发送的图片（已缩放为 JPEG）。
+struct PendingImage: Identifiable, Equatable {
+    let id = UUID()
+    let data: Data
+    let image: UIImage
+    static func == (a: PendingImage, b: PendingImage) -> Bool { a.id == b.id }
+}
+
 struct InputBar<Accessory: View>: View {
     @Environment(\.palette) private var p
     @Binding var text: String
+    @Binding var pending: [PendingImage]
     let placeholder: String
-    var onPickImage: ((Data, String, String) -> Void)? = nil
     let onSend: () -> Void
     @ViewBuilder let accessory: () -> Accessory
     @FocusState private var focused: Bool
-    @State private var pickerItem: PhotosPickerItem?
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var preparing = 0
 
-    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty && pending.isEmpty }
 
     var body: some View {
         VStack(spacing: 8) {
+            if !pending.isEmpty || preparing > 0 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(pending) { img in
+                            ZStack(alignment: .topTrailing) {
+                                Image(uiImage: img.image).resizable().scaledToFill()
+                                    .frame(width: 72, height: 72)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                Button { pending.removeAll { $0.id == img.id } } label: {
+                                    Image(systemName: "xmark.circle.fill").font(.system(size: 18)).symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, Color.black.opacity(0.6))
+                                }
+                                .offset(x: 5, y: -5)
+                            }
+                        }
+                        ForEach(0..<preparing, id: \.self) { _ in
+                            ProgressView().frame(width: 72, height: 72).background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(p.fill))
+                        }
+                    }
+                    .padding(.horizontal, 8).padding(.top, 8)
+                }
+            }
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...5)
                 .font(.system(size: 16))
                 .focused($focused)
                 .padding(.horizontal, 12).padding(.top, 8)
             HStack(spacing: 8) {
-                PhotosPicker(selection: $pickerItem, matching: .images) {
-                    Image(systemName: "camera").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
+                    Image(systemName: "photo.on.rectangle").font(.system(size: 15, weight: .semibold)).foregroundStyle(p.labelSecondary)
                         .frame(width: 36, height: 36).background(Circle().fill(p.fill))
                 }
-                .onChange(of: pickerItem) { _, item in
-                    guard let item else { return }
+                .onChange(of: pickerItems) { _, items in
+                    guard !items.isEmpty else { return }
+                    pickerItems = []
+                    preparing += items.count
                     Task {
-                        if let data = try? await item.loadTransferable(type: Data.self) {
-                            let isPNG = data.starts(with: [0x89, 0x50, 0x4E, 0x47])
-                            onPickImage?(data, isPNG ? "image/png" : "image/jpeg", isPNG ? "photo.png" : "photo.jpg")
+                        for item in items {
+                            // 选择时就缩到 1568px 长边转 JPEG：省流量、省 token，也避免原图超过 5MB 被 API 拒绝
+                            if let raw = try? await item.loadTransferable(type: Data.self), let (data, _, _) = await ImagePrep.forUpload(raw), let ui = UIImage(data: data) {
+                                pending.append(PendingImage(data: data, image: ui))
+                            }
+                            preparing = max(0, preparing - 1)
                         }
-                        pickerItem = nil
                     }
                 }
                 accessory()
@@ -252,7 +340,7 @@ struct InputBar<Accessory: View>: View {
 }
 
 extension InputBar where Accessory == EmptyView {
-    init(text: Binding<String>, placeholder: String, onPickImage: ((Data, String, String) -> Void)? = nil, onSend: @escaping () -> Void) {
-        self.init(text: text, placeholder: placeholder, onPickImage: onPickImage, onSend: onSend, accessory: { EmptyView() })
+    init(text: Binding<String>, pending: Binding<[PendingImage]>, placeholder: String, onSend: @escaping () -> Void) {
+        self.init(text: text, pending: pending, placeholder: placeholder, onSend: onSend, accessory: { EmptyView() })
     }
 }
