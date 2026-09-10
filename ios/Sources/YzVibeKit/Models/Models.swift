@@ -501,16 +501,74 @@ public struct PairingPayload: Equatable, Sendable {
         self.host = host; self.port = port; self.token = token; self.mode = mode; self.name = name
     }
 
-    /// 解析二维码内容；不合法返回 nil。
-    public init?(qrString: String) {
-        guard let comps = URLComponents(string: qrString), comps.scheme == "yzvibe", comps.host == "pair" else { return nil }
-        let q = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+    /// 解析二维码内容（`yzvibe://pair?…`）；不合法返回 nil。
+    public init?(qrString: String) { self.init(text: qrString) }
+
+    /// 通吃四种来源：`yzvibe://pair?…` 深链、连接器给的 https 外链、`yzvibe qr --json` 的 JSON 配置，
+    /// 以及夹带在其它文字里的上述任意一种（粘贴时常会带上说明文字）。
+    public init?(text raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("{"), let p = PairingPayload(json: trimmed) { self = p; return }
+        for candidate in [trimmed] + PairingPayload.urlCandidates(in: trimmed) {
+            if let p = PairingPayload(deepLink: candidate) ?? PairingPayload(webLink: candidate) { self = p; return }
+        }
+        // 整段文字里夹着一份 JSON
+        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"), start < end,
+           let p = PairingPayload(json: String(trimmed[start...end])) { self = p; return }
+        return nil
+    }
+
+    /// `yzvibe://pair?host=…&port=…&token=…&mode=…&name=…`
+    private init?(deepLink: String) {
+        guard let comps = URLComponents(string: deepLink), comps.scheme == "yzvibe", comps.host == "pair" else { return nil }
+        let q = PairingPayload.query(comps)
         guard let host = q["host"], !host.isEmpty, let token = q["token"], !token.isEmpty else { return nil }
-        self.host = host
-        self.port = Int(q["port"] ?? "") ?? Device.defaultPort
-        self.token = token
-        self.mode = ConnectionMode(rawValue: q["mode"] ?? "") ?? .tunnel
-        self.name = q["name"].flatMap { $0.isEmpty ? nil : $0 }
+        self.init(host: host, port: Int(q["port"] ?? "") ?? Device.defaultPort, token: token,
+                  mode: ConnectionMode(rawValue: q["mode"] ?? "") ?? .tunnel,
+                  name: q["name"].flatMap { $0.isEmpty ? nil : $0 })
+    }
+
+    /// 连接器落地页外链 `https://<relay>/pair?token=…` 或 `http://<ip>:<port>/pair?token=…`。
+    private init?(webLink: String) {
+        guard let comps = URLComponents(string: webLink), let scheme = comps.scheme?.lowercased(),
+              scheme == "https" || scheme == "http", let linkHost = comps.host, !linkHost.isEmpty,
+              comps.path.hasPrefix("/pair"), let token = PairingPayload.query(comps)["token"], !token.isEmpty else { return nil }
+        if scheme == "https" {
+            var base = "https://\(linkHost)"
+            if let port = comps.port { base += ":\(port)" }
+            self.init(host: base, port: Device.defaultPort, token: token, mode: .relay, name: nil)
+        } else {
+            // 明文 http 说明是局域网 / Tailscale 直连，拆成 host + port 走本地连接
+            let port = comps.port ?? Device.defaultPort
+            self.init(host: linkHost, port: port, token: token,
+                      mode: linkHost.hasPrefix("100.") ? .tailscale : .local, name: nil)
+        }
+    }
+
+    /// `yzvibe qr --json` 输出的配置对象。
+    private init?(json: String) {
+        guard let data = json.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let host = (obj["host"] as? String)?.trimmingCharacters(in: .whitespaces), !host.isEmpty,
+              let token = (obj["token"] as? String)?.trimmingCharacters(in: .whitespaces), !token.isEmpty else { return nil }
+        let port = (obj["port"] as? Int) ?? Int((obj["port"] as? String) ?? "") ?? Device.defaultPort
+        let mode = ConnectionMode(rawValue: (obj["mode"] as? String) ?? "") ?? (host.contains("://") ? .relay : .local)
+        let name = (obj["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        self.init(host: host, port: port, token: token, mode: mode, name: name)
+    }
+
+    private static func query(_ comps: URLComponents) -> [String: String] {
+        var out: [String: String] = [:]
+        for item in comps.queryItems ?? [] where out[item.name] == nil { out[item.name] = item.value ?? "" }
+        return out
+    }
+
+    /// 从一段文字里挑出可能的链接（粘贴内容常带说明文字或换行）。
+    private static func urlCandidates(in text: String) -> [String] {
+        text.split(whereSeparator: { $0.isWhitespace || $0 == "\"" || $0 == "'" || $0 == "," })
+            .map(String.init)
+            .filter { $0.hasPrefix("yzvibe://") || $0.hasPrefix("http://") || $0.hasPrefix("https://") }
     }
 }
 

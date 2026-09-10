@@ -68,9 +68,21 @@ type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, 
 type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other', summary, detail, risk, status: 'pending'|'allowed'|'denied'|'expired', createdAt, expiresAt? }
 ```
 
+## 三种配对方式（都用同一枚一次性配对码）
+1. **扫码**：终端里的二维码，内容是 `yzvibe://pair?host=&port=&token=&mode=&name=`。
+2. **外链**：`GET /pair?token=<配对码>` 是公开落地页（HTML），手机浏览器打开后自动跳 `yzvibe://pair?…` 唤起 App，并附「打开 App」按钮与可复制的 JSON。看落地页不消费配对码；配对码错误或过期返回 410。
+3. **粘贴 JSON**：`GET /pair.json?token=<配对码>`（同样公开）返回完整配置，App「设备 › 手动添加 › 粘贴配置」可直接粘贴：
+```json
+{ "yzvibe": 1, "name": "Mac", "host": "https://xxx.trycloudflare.com", "port": null,
+  "token": "…", "mode": "tunnel", "connectorId": "…", "version": "0.1.0", "expiresAt": "…",
+  "url": "yzvibe://pair?…", "link": "https://xxx.trycloudflare.com/pair?token=…" }
+```
+`host` 含 `://` 时 `port` 为 null（relay / tunnel 直接用该地址）；局域网 / Tailscale 则 `host` 是裸地址、`port` 单独给出。
+App 端 `PairingPayload(text:)` 四种输入通吃：深链、外链、JSON、以及夹在说明文字里的上述任意一种。
+
 ## 连接器本机内部接口（不对手机开放）
 - `POST /internal/approval`、`GET /internal/status`：只接受带 `X-YzVibe-Secret` 的本机请求，secret 每次启动随机生成，写在 `~/.yzvibe/daemon.json`（0600）。
-- `GET /internal/status` → `{ pid, name, version, port, uptime, host, mode, pairing: { token, expiresAt, url }, stats: { devices, sessions, running, pendingApprovals } }`，供 `yzvibe status / qr` 使用；配对码过期时这里会自动换新，因此连接器常驻后台也随时能配对。
+- `GET /internal/status` → `{ pid, name, version, port, uptime, host, mode, pairing: { token, expiresAt, url }, stats: { devices, sessions, running, pendingApprovals } }`，供 `yzvibe status / qr` 使用（`pairing` 含 `token / expiresAt / url / link / config`）；配对码过期时这里会自动换新，因此连接器常驻后台也随时能配对。
 
 ## 审批在连接器内部如何实现（Claude Code）
 连接器以 `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool mcp__yzvibe__approve --mcp-config <file>` 启动 Agent。

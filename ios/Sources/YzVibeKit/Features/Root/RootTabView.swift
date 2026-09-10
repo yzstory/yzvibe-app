@@ -4,6 +4,7 @@ import SwiftUI
 public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .devices
+    @State private var pairingFromLink = false
     @AppStorage("yz.appearance") private var appearanceRaw = Settings.Appearance.auto.rawValue
 
     public enum Tab: Hashable { case devices, sessions, approvals, me }
@@ -33,8 +34,37 @@ public struct RootTabView: View {
             .environment(store)
             .preferredColorScheme(Settings.Appearance(rawValue: appearanceRaw)?.colorScheme)
             .overlay(alignment: .top) { ToastView(text: $store.toast) }
+            .overlay { if pairingFromLink { pairingOverlay } }
+            // 手机浏览器打开连接器的 /pair 外链后，落地页跳到 yzvibe://pair?… 唤起这里
+            .onOpenURL { url in Task { await handle(url) } }
             .task { await store.start() }
         }
+    }
+
+    private var pairingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.25).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("正在配对…").font(.yzSubhead)
+            }
+            .padding(24)
+            .liquidGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .transition(.opacity)
+    }
+
+    /// 处理 `yzvibe://pair?…` 深链：直接配对并跳到设备页。
+    private func handle(_ url: URL) async {
+        guard let payload = PairingPayload(text: url.absoluteString) else {
+            store.toast = "这不是有效的 YzVibe 配对链接"
+            return
+        }
+        tab = .devices
+        pairingFromLink = true
+        defer { pairingFromLink = false }
+        do { try await store.pair(payload) }
+        catch { store.toast = "配对失败：\(error.localizedDescription)" }
     }
 }
 

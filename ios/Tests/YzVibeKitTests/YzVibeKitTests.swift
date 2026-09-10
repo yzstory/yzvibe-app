@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import CoreImage
 @testable import YzVibeKit
 
 final class YzVibeKitTests: XCTestCase {
@@ -29,6 +30,79 @@ final class YzVibeKitTests: XCTestCase {
     func testPairingPayloadRejectsForeignQR() {
         XCTAssertNil(PairingPayload(qrString: "https://example.com"))
         XCTAssertNil(PairingPayload(qrString: "yzvibe://pair?host=&token=x"))
+        XCTAssertNil(PairingPayload(text: "  "))
+        XCTAssertNil(PairingPayload(text: "{\"hello\":1}"))
+        XCTAssertNil(PairingPayload(text: "https://example.com/other?token=x"))   // 路径不是 /pair
+    }
+
+    func testPairingPayloadParsesJSONConfig() throws {
+        let json = #"""
+        {
+          "yzvibe": 1,
+          "name": "YuKisMacServer.local",
+          "host": "https://abc-def.trycloudflare.com",
+          "port": null,
+          "token": "-FqSCst-R1itUJck",
+          "mode": "tunnel",
+          "connectorId": "865356ad",
+          "url": "yzvibe://pair?host=x&token=y",
+          "link": "https://abc-def.trycloudflare.com/pair?token=-FqSCst-R1itUJck"
+        }
+        """#
+        let p = try XCTUnwrap(PairingPayload(text: json))
+        XCTAssertEqual(p.host, "https://abc-def.trycloudflare.com")
+        XCTAssertEqual(p.token, "-FqSCst-R1itUJck")
+        XCTAssertEqual(p.mode, .tunnel)              // port 为 null 时回落到默认端口
+        XCTAssertEqual(p.port, Device.defaultPort)
+        XCTAssertEqual(p.name, "YuKisMacServer.local")
+    }
+
+    func testPairingPayloadParsesJSONWithLocalHostAndPort() throws {
+        let p = try XCTUnwrap(PairingPayload(text: #"{"host":"192.168.31.121","port":19877,"token":"t1","mode":"local","name":"Mac"}"#))
+        XCTAssertEqual(p.host, "192.168.31.121")
+        XCTAssertEqual(p.port, 19877)
+        XCTAssertEqual(p.mode, .local)
+    }
+
+    func testPairingPayloadParsesBrowserLink() throws {
+        let https = try XCTUnwrap(PairingPayload(text: "https://abc-def.trycloudflare.com/pair?token=tok9"))
+        XCTAssertEqual(https.host, "https://abc-def.trycloudflare.com")
+        XCTAssertEqual(https.token, "tok9")
+        XCTAssertEqual(https.mode, .relay)
+
+        // 局域网外链拆成 host + port
+        let lan = try XCTUnwrap(PairingPayload(text: "http://192.168.31.121:19876/pair?token=tok8"))
+        XCTAssertEqual(lan.host, "192.168.31.121")
+        XCTAssertEqual(lan.port, 19876)
+        XCTAssertEqual(lan.mode, .local)
+
+        let ts = try XCTUnwrap(PairingPayload(text: "http://100.82.203.14:19876/pair?token=tok7"))
+        XCTAssertEqual(ts.mode, .tailscale)
+    }
+
+    func testPairingPayloadIgnoresSurroundingText() throws {
+        let messy = "用手机扫这个：\n  yzvibe://pair?host=1.2.3.4&port=19876&token=abc&mode=local&name=Mac  \n（10 分钟内有效）"
+        let p = try XCTUnwrap(PairingPayload(text: messy))
+        XCTAssertEqual(p.host, "1.2.3.4")
+        XCTAssertEqual(p.token, "abc")
+
+        let withJSON = "复制下面的 JSON：\n{\"host\":\"1.2.3.4\",\"port\":19876,\"token\":\"zz\",\"mode\":\"local\"}\n粘贴到 App 里"
+        XCTAssertEqual(PairingPayload(text: withJSON)?.token, "zz")
+    }
+
+    func testQRImageScannerReadsGeneratedCode() throws {
+        let text = "yzvibe://pair?host=1.2.3.4&port=19876&token=fromimage&mode=local&name=Mac"
+        let filter = try XCTUnwrap(CIFilter(name: "CIQRCodeGenerator"))
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        let ci = try XCTUnwrap(filter.outputImage).transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        let png = try XCTUnwrap(UIImage(ciImage: ci).pngData())
+        XCTAssertEqual(QRImageScanner.decode(png), text)
+        XCTAssertEqual(PairingPayload(text: try XCTUnwrap(QRImageScanner.decode(png)))?.token, "fromimage")
+        // 一张没有二维码的纯色图
+        let blank = UIGraphicsImageRenderer(size: CGSize(width: 60, height: 60)).image { ctx in
+            UIColor.white.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 60, height: 60))
+        }
+        XCTAssertNil(QRImageScanner.decode(try XCTUnwrap(blank.pngData())))
     }
 
     func testEventParsing() throws {

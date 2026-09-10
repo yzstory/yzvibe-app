@@ -57,3 +57,12 @@
 - 新增 `GET /internal/status`（secret 鉴权）：CLI 取配对码 / 统计；修复配对码过期后永远无法再配对的 bug（`Pairing.current()` 过期即换新）
 - Cloudflare 临时隧道断开自动重连并重新公告（实测 kill cloudflared 后 12 秒换到新地址）；SIGHUP 也走优雅退出；启动时清理上次残留的 mcp-*.json
 - 验证：connector 13 个测试（新增配对码过期、后台守护端到端）；本机实测 local / tunnel 两种模式的 start / status / qr / logs / restart / stop
+
+## 2026-09-10 配对三通道 + 相册扫码修复
+- iOS 修 bug：扫码页右上角「相册」按钮之前是空 action（`circleButton("photo") {}`），换成 `PhotosPicker` + `QRImageScanner`（CIDetector，后台线程解码，识别不到时放大一倍重试）
+- 连接器新增公开路由 `GET /pair?token=`（手机浏览器落地页，自动跳 `yzvibe://` 唤起 App，附「打开 App」按钮与可复制 JSON）与 `GET /pair.json?token=`；查看不消费配对码，错误 / 过期返回 410
+- `yzvibe qr` 一次给出二维码 + 外链 + JSON 配置，`--link` / `--json` 只输出一项
+- iOS `PairingPayload(text:)` 通吃深链 / 外链 / JSON / 夹在说明文字里的任意一种；「手动添加」页加「粘贴配置」卡（可从剪贴板一键粘贴并自动填字段）
+- `RootTabView.onOpenURL` 处理 `yzvibe://pair?…`，浏览器唤起后自动配对并跳到设备页（`yzvibe` scheme 早已在 project.yml 注册）
+- 验证：connector 15 个测试通过（新增落地页 / JSON / 过期失效 / relay 拼链 2 组）；YzVibeKit 与测试目标交叉编译通过，新增 5 个解析与二维码识别测试（本机无 iOS 模拟器运行时，未能实跑）；落地页在 127.0.0.1 与局域网地址实测 HTTP 200，深链与 HTML 转义正确
+- 已知环境问题：本机 Clash Party 代理对新分配的 trycloudflare 域名经常握手失败（curl HTTP 000），同一时刻 Vibelet 的长期隧道正常；origin 本身没问题，手机走自己的 DNS 一般可达，实在不通就 `yzvibe restart --access=local` 走局域网

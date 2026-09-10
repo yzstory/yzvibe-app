@@ -375,3 +375,68 @@ test('后台守护：start → status/qr → stop（真实拉起子进程）', a
     try { const { pid } = JSON.parse(fs.readFileSync(path.join(home, 'daemon.json'), 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
   }
 });
+
+test('配对外链与 JSON 配置：/pair 落地页 / /pair.json / 过期失效', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-link-'));
+  const c = await createConnector({ port: 0, name: 'LinkMac', defaultAgent: 'mock', home, log: () => {} });
+  const port = await c.listen();
+  const base = `http://127.0.0.1:${port}`;
+  c.access = { host: '192.168.1.9', mode: 'local' };            // startConnector 平时会填这个
+  const token = c.pairing.token;
+
+  // JSON 配置：字段齐全，且带可直接用的深链与外链
+  const cfg = await (await fetch(`${base}/pair.json?token=${token}`)).json();
+  assert.equal(cfg.yzvibe, 1);
+  assert.equal(cfg.name, 'LinkMac');
+  assert.equal(cfg.host, '192.168.1.9');
+  assert.equal(cfg.port, port);
+  assert.equal(cfg.token, token);
+  assert.equal(cfg.mode, 'local');
+  assert.equal(cfg.connectorId, c.store.connector.id);
+  assert.ok(cfg.url.startsWith('yzvibe://pair?'));
+  assert.equal(cfg.link, `http://192.168.1.9:${port}/pair?token=${encodeURIComponent(token)}`);
+
+  // 落地页：带自动唤起的深链、可复制的 JSON，且不消费配对码
+  const page = await fetch(`${base}/pair?token=${token}`);
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-type'), /text\/html/);
+  const html = await page.text();
+  assert.ok(html.includes(cfg.url.replace(/&/g, '&amp;')), '落地页应含唤起 App 的深链');
+  assert.ok(html.includes('LinkMac'));
+  assert.equal(c.pairing.token, token, '看落地页不应消费配对码');
+
+  // 错 token / 缺 token → 410，且不泄露当前配对码
+  for (const bad of ['', '?token=', '?token=nope']) {
+    const res = await fetch(`${base}/pair${bad}`);
+    assert.equal(res.status, 410);
+    assert.ok(!(await res.text()).includes(token));
+  }
+  assert.equal((await fetch(`${base}/pair.json?token=nope`)).status, 410);
+
+  // 配对码过期后外链失效
+  c.pairing.expiresAt = Date.now() - 1;
+  assert.equal((await fetch(`${base}/pair?token=${token}`)).status, 410);
+
+  // 换新配对码后，落地页与 /internal/status 用的是同一个
+  const st = await (await fetch(`${base}/internal/status`, { headers: { 'x-yzvibe-secret': c.internalSecret } })).json();
+  assert.notEqual(st.pairing.token, token);
+  assert.equal(st.pairing.config.token, st.pairing.token);
+  assert.equal((await fetch(`${base}/pair?token=${st.pairing.token}`)).status, 200);
+
+  // 配对本身仍然只认一次性配对码
+  const paired = await (await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ token: st.pairing.token }) })).json();
+  assert.ok(paired.deviceToken);
+  await c.close();
+});
+
+test('relay / tunnel 模式的外链与配置直接拼在 host 上', async () => {
+  const { pairConfig, pairLink, baseURL } = await import('../src/pairing.js');
+  const opts = { host: 'https://abc.trycloudflare.com', port: 19876, token: 'tok', mode: 'tunnel', name: 'Mac' };
+  assert.equal(baseURL(opts), 'https://abc.trycloudflare.com');
+  assert.equal(pairLink(opts), 'https://abc.trycloudflare.com/pair?token=tok');
+  const cfg = pairConfig(opts);
+  assert.equal(cfg.port, null, 'host 已含协议时不需要单独的端口');
+  assert.equal(cfg.mode, 'tunnel');
+  // 末尾斜杠不会拼出双斜杠
+  assert.equal(pairLink({ ...opts, host: 'https://abc.trycloudflare.com/' }), 'https://abc.trycloudflare.com/pair?token=tok');
+});

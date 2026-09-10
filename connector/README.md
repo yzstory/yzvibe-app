@@ -21,17 +21,28 @@ node bin/yzvibe.js start --agent=mock    # 不调用 Claude，用内置假 Agent
 | `yzvibe start [flags]` | 后台启动并出示二维码；已在运行则只出示二维码（默认命令） |
 | `yzvibe run [flags]` | 前台运行，Ctrl+C 退出（调试用） |
 | `yzvibe status` | PID、地址、模式、会话数、已配对手机数 |
-| `yzvibe qr` | 再次出示配对二维码；配对码 10 分钟一次性，过期自动换新，不用重启 |
+| `yzvibe qr` | 再次出示三种配对方式：二维码 + 手机浏览器外链 + 可粘贴的 JSON 配置；配对码 10 分钟一次性，过期自动换新，不用重启（`--link` / `--json` 只输出一项，便于管道） |
 | `yzvibe logs [-f] [-n 100]` | 查看 `~/.yzvibe/yzvibe.log`（超过 5MB 自动轮转到 `.1`） |
 | `yzvibe stop` / `restart [flags]` | 停止 / 用上次的参数（或新参数）重启 |
 | `yzvibe install [flags]` / `uninstall` | 注册 / 取消开机自启：macOS 写 `~/Library/LaunchAgents/com.yzvibe.connector.plist`（KeepAlive，崩溃自动拉起），Linux 写 systemd `--user` 单元 |
+
+### 三种配对方式
+
+`yzvibe qr` 一次给出三种，任选其一：
+
+1. **扫码** — 终端里的二维码。
+2. **外链** — 形如 `https://<relay>/pair?token=…`（局域网则是 `http://<ip>:<port>/pair?token=…`）。手机浏览器打开会自动唤起 App 完成配对；页面同时给出「打开 App」按钮与可复制的 JSON，App 没装或没跳转时也不会卡住。
+3. **JSON 配置** — `yzvibe qr --json`，在 App「设备 › 手动添加 › 粘贴配置」里粘贴即可，字段自动填好。
+
+落地页 `GET /pair` 与 `GET /pair.json` 是公开路由（凭据就是 URL 里的一次性配对码），查看它们不会消费配对码；配对码错误或过期返回 410。
 
 Cloudflare 临时隧道断开时连接器会自动重开一条并写进日志；临时隧道地址会变，手机需重新扫码（`yzvibe qr`）。想要固定地址请用 `--access=https://<自己的隧道>`。
 
 默认端口 19876（`--port=` 或环境变量 `YZVIBE_PORT` 可改）；被占用时自动向后找空闲端口。数据目录可用 `YZVIBE_HOME` 覆盖。
 
 ## 工作原理
-- `src/server.js`：HTTP REST + WebSocket，Bearer Token 鉴权，事件广播；`/internal/status` 供本机 CLI 取配对码与统计
+- `src/server.js`：HTTP REST + WebSocket，Bearer Token 鉴权，事件广播；`/pair` 落地页与 `/pair.json` 配置；`/internal/status` 供本机 CLI 取配对码与统计
+- `src/pairing.js`：一次性配对码、二维码、深链 / 外链 / JSON 配置、浏览器落地页
 - `src/daemon.js`：后台守护（daemon.json、日志轮转、start/stop/status、launchd / systemd 注册）
 - `src/store.js`：会话 / 消息 / 审批 / 设备，持久化到 `~/.yzvibe/`
 - `src/agents/claude.js`：`claude -p --input-format stream-json --output-format stream-json` 驱动，多轮复用同一进程，`--resume` 恢复；手机改了模式 / 模型 / 思考强度后在空闲时重启进程带新参数

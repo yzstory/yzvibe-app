@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct DevicesView: View {
     @Environment(AppStore.self) private var store
@@ -98,7 +99,7 @@ struct DeviceCard: View {
     }
 }
 
-/// 手动添加端点：Host / Port / Token。
+/// 手动添加端点：粘贴 `yzvibe qr --json` 的配置 / 外链 / 深链，或自己填 Host / Port / Token。
 struct ManualEndpointView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
@@ -106,8 +107,10 @@ struct ManualEndpointView: View {
     @State private var host = ""
     @State private var port = String(Device.defaultPort)
     @State private var token = ""
+    @State private var pasted = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var notice: String?
 
     var body: some View {
         NavigationStack {
@@ -115,9 +118,10 @@ struct ManualEndpointView: View {
                 AmbientBackground()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
+                        pasteCard
                         PaperCard {
                             VStack(alignment: .leading, spacing: 16) {
-                                Eyebrow("连接到你的连接器")
+                                Eyebrow("或者手填")
                                 Text("支持局域网 IP、Tailscale IP，或 https:// 开头的 relay 地址。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                                 HStack(spacing: 10) {
                                     field("Host", text: $host, placeholder: "192.168.0.11")
@@ -144,6 +148,58 @@ struct ManualEndpointView: View {
         }
     }
 
+    /// 粘贴区：接受 `yzvibe qr --json` 的 JSON、浏览器外链，或 yzvibe:// 深链。
+    private var pasteCard: some View {
+        PaperCard {
+            VStack(alignment: .leading, spacing: 14) {
+                Eyebrow("粘贴配置")
+                Text("在电脑上运行 yzvibe qr，把 JSON 配置或链接粘到这里，字段会自动填好。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                CodeBlock("yzvibe qr --json")
+                TextEditor(text: $pasted)
+                    .font(.yzMono)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .scrollContentBackground(.hidden)
+                    .frame(height: 108)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(p.fill).overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
+                    .overlay(alignment: .topLeading) {
+                        if pasted.isEmpty {
+                            Text("{ \"yzvibe\": 1, \"host\": …, \"token\": … }")
+                                .font(.yzMono).foregroundStyle(p.labelTertiary)
+                                .padding(.horizontal, 15).padding(.vertical, 14).allowsHitTesting(false)
+                        }
+                    }
+                HStack(spacing: 10) {
+                    Button { pasteFromClipboard() } label: { Label("从剪贴板粘贴", systemImage: "doc.on.clipboard") }
+                        .buttonStyle(.yzGlass)
+                    Button { applyPasted() } label: { Label("填入", systemImage: "wand.and.stars") }
+                        .buttonStyle(.yzGlass)
+                        .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                if let notice { Text(notice).font(.yzFootnote).foregroundStyle(p.sage) }
+            }
+        }
+    }
+
+    private func pasteFromClipboard() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else { error = "剪贴板里没有文字"; return }
+        pasted = text
+        applyPasted()
+    }
+
+    /// 解析粘贴的内容；成功就填好三个字段（不自动连接，让用户核对一眼）。
+    private func applyPasted() {
+        error = nil; notice = nil
+        guard let payload = PairingPayload(text: pasted) else {
+            error = "没认出这段内容，请粘贴 yzvibe qr 输出的 JSON 或链接"; return
+        }
+        host = payload.host
+        port = String(payload.port)
+        token = payload.token
+        notice = "已填入\(payload.name.map { "：" + $0 } ?? "")，点「连接」即可"
+    }
+
     private func field(_ label: String, text: Binding<String>, placeholder: String, secure: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(label).font(.yzSubhead).fontWeight(.semibold).foregroundStyle(p.label)
@@ -160,9 +216,17 @@ struct ManualEndpointView: View {
     }
 
     private func connect() async {
-        busy = true; error = nil
+        busy = true; error = nil; notice = nil
         do {
-            try await store.addManual(host: host.trimmingCharacters(in: .whitespaces), port: Int(port) ?? Device.defaultPort, token: token)
+            // 粘贴过配置就沿用它带的 mode / name，否则按 host 形态猜
+            let pastedPayload = PairingPayload(text: pasted)
+            let h = host.trimmingCharacters(in: .whitespaces)
+            let pt = Int(port) ?? Device.defaultPort
+            if let pastedPayload, pastedPayload.host == h, pastedPayload.token == token {
+                try await store.pair(pastedPayload)
+            } else {
+                try await store.addManual(host: h, port: pt, token: token)
+            }
             dismiss()
         } catch let e {
             error = e.localizedDescription

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Store, HOME } from './store.js';
-import { Pairing, lanAddresses, pairURL, printQR } from './pairing.js';
+import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, printQR } from './pairing.js';
 import { startCloudflareTunnel, loadRelay, saveRelay } from './tunnel.js';
 import { listDir, previewFile, resolveInside, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
@@ -30,6 +30,16 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   const sockets = new Set();
 
   const deviceName = name;
+
+  /** 当前配对信息（配对码过期会自动换新）：{ token, expiresAt, url, link, config }。access 未定时 link/url 为 null。 */
+  function currentPairing() {
+    const token = pairing.current();
+    const expiresAt = new Date(pairing.expiresAt).toISOString();
+    const { host, mode } = api.access;
+    if (!host) return { token, expiresAt, url: null, link: null, config: null };
+    const opts = { host, port: api.port, token, mode, name: deviceName };
+    return { token, expiresAt, url: pairURL(opts), link: pairLink(opts), config: pairConfig({ ...opts, expiresAt, connectorId: store.connector.id, version: VERSION }) };
+  }
 
   // ---------- Agent 工厂 ----------
   function agentFor(session, options = {}) {
@@ -84,6 +94,20 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     try {
       // 公开
       if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime() });
+      // 手机浏览器打开的落地页 / 配置：/pair?token= 与 /pair.json?token=（一次性配对码本身就是凭据，不消费它）
+      if (req.method === 'GET' && (p === '/pair' || p === '/pair.json')) {
+        const given = url.searchParams.get('token') ?? '';
+        if (!given || given !== pairing.token || pairing.expired) {
+          const msg = '配对码无效或已过期，请在电脑上运行 yzvibe qr 重新出示。';
+          if (p === '/pair.json') return json(res, 410, { error: msg });
+          res.writeHead(410, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+          return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font:16px/1.6 -apple-system,sans-serif;padding:40px 24px;color:#2b2622"><h2>链接已失效</h2><p>${msg}</p>`);
+        }
+        const { config, expiresAt } = currentPairing();
+        if (p === '/pair.json') { res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); return res.end(JSON.stringify(config, null, 2)); }
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end(pairPageHTML(config, { minutesLeft: Math.max(1, Math.round((new Date(expiresAt) - Date.now()) / 60000)) }));
+      }
       if (req.method === 'POST' && p === '/pair') {
         const { token, phoneName } = await readJSON(req);
         if (!pairing.consume(token)) return json(res, 401, { error: '配对码无效或已过期，请在电脑上运行 yzvibe qr 重新出示' });
@@ -108,7 +132,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const sessions = store.sessions;
         return json(res, 200, {
           pid: process.pid, name: deviceName, version: VERSION, port: api.port, uptime: process.uptime(), ...api.access,
-          pairing: { token: pairing.current(), expiresAt: new Date(pairing.expiresAt).toISOString(), url: api.access.host ? pairURL({ host: api.access.host, port: api.port, token: pairing.current(), mode: api.access.mode, name: deviceName }) : null },
+          pairing: currentPairing(),
           stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length },
         });
       }

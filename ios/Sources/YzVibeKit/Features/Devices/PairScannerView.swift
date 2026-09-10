@@ -1,5 +1,8 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import CoreImage
+import UIKit
 
 /// 全屏扫码：相机取景 + 中央玻璃取景框 + 四角 brand 高光。
 struct PairScannerView: View {
@@ -10,13 +13,14 @@ struct PairScannerView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var showManual = false
+    @State private var pickerItem: PhotosPickerItem?
 
     var body: some View {
         ZStack {
             Color(oklch: 0.18, 0.01, 50).ignoresSafeArea()
             CameraPreview { code in
                 guard scanned == nil, !busy else { return }
-                if let payload = PairingPayload(qrString: code) { scanned = payload; Task { await pair(payload) } }
+                if let payload = PairingPayload(text: code) { scanned = payload; Task { await pair(payload) } }
                 else { error = "这不是 YzVibe 的配对二维码" }
             }
             .ignoresSafeArea()
@@ -38,7 +42,11 @@ struct PairScannerView: View {
                     Spacer()
                     Text("扫码配对").font(.yzHeadline).foregroundStyle(.white)
                     Spacer()
-                    circleButton("photo") {}
+                    PhotosPicker(selection: $pickerItem, matching: .images, photoLibrary: .shared()) {
+                        Image(systemName: "photo").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 44, height: 44).background(Circle().fill(.white.opacity(0.12)))
+                    }
+                    .disabled(busy)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 6)
                 .liquidGlass(in: Capsule())
@@ -62,6 +70,10 @@ struct PairScannerView: View {
         }
         .environment(\.colorScheme, .dark)
         .sheet(isPresented: $showManual) { ManualEndpointView().presentationDetents([.medium, .large]) }
+        .onChange(of: pickerItem) { _, item in
+            guard let item else { return }
+            Task { await scanFromLibrary(item); pickerItem = nil }
+        }
     }
 
     private func circleButton(_ symbol: String, action: @escaping () -> Void) -> some View {
@@ -69,6 +81,24 @@ struct PairScannerView: View {
             Image(systemName: symbol).font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 44, height: 44).background(Circle().fill(.white.opacity(0.12)))
         }
+    }
+
+    /// 相册里选一张图，识别其中的二维码后直接配对。
+    private func scanFromLibrary(_ item: PhotosPickerItem) async {
+        guard !busy else { return }
+        error = nil
+        busy = true
+        guard let data = try? await item.loadTransferable(type: Data.self) else {
+            busy = false; error = "读不出这张图片，换一张试试"; return
+        }
+        guard let code = await QRImageScanner.firstCode(in: data) else {
+            busy = false; error = "这张图里没找到二维码，换一张或改用「手动添加 › 粘贴配置」"; return
+        }
+        guard let payload = PairingPayload(text: code) else {
+            busy = false; error = "这不是 YzVibe 的配对二维码"; return
+        }
+        scanned = payload
+        await pair(payload)          // pair 自己管 busy
     }
 
     private func pair(_ payload: PairingPayload) async {
@@ -159,5 +189,34 @@ struct CameraPreview: UIViewRepresentable {
             guard let obj = objects.first as? AVMetadataMachineReadableCodeObject, let s = obj.stringValue else { return }
             onCode(s)
         }
+    }
+}
+
+/// 从图片里识别二维码（相册选图配对用）。取内容最长的一个，避免截图里夹带其它小码。
+enum QRImageScanner {
+    /// 识别放到后台线程，避免大图卡住界面。
+    static func firstCode(in data: Data) async -> String? {
+        await Task.detached(priority: .userInitiated) { decode(data) }.value
+    }
+
+    static func decode(_ data: Data) -> String? {
+        guard let image = UIImage(data: data), let cg = image.cgImage else { return nil }
+        return firstCode(in: CIImage(cgImage: cg))
+    }
+
+    static func firstCode(in image: CIImage) -> String? {
+        let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: nil,
+                                  options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
+        let codes = (detector?.features(in: image) as? [CIQRCodeFeature] ?? [])
+            .compactMap(\.messageString)
+            .filter { !$0.isEmpty }
+        if let best = codes.max(by: { $0.count < $1.count }) { return best }
+        // 有些截图的二维码偏小或对比度低，放大一倍再试一次
+        let scaled = image.transformed(by: CGAffineTransform(scaleX: 2, y: 2))
+        guard scaled.extent.width <= 8000, scaled.extent.height <= 8000 else { return nil }
+        return (detector?.features(in: scaled) as? [CIQRCodeFeature] ?? [])
+            .compactMap(\.messageString)
+            .filter { !$0.isEmpty }
+            .max(by: { $0.count < $1.count })
     }
 }

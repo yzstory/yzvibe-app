@@ -121,11 +121,19 @@ export async function printStatus(info) {
   if (st) console.log(`  会话     ${st.stats.sessions} 个（运行中 ${st.stats.running}，待审批 ${st.stats.pendingApprovals}），已配对手机 ${st.stats.devices} 台`);
 }
 
-export async function printPairing(info) {
+/** 三种配对方式：扫码 / 手机浏览器打开外链 / 复制 JSON 粘贴进 App。`only` 可指定 'json' | 'link' 只输出一项（便于管道）。 */
+export async function printPairing(info, { only = null } = {}) {
   const st = await fetchStatus(info);
   const p = st.pairing;
-  console.log(`用手机 YzVibe App「设备 › 扫码配对」扫描（${Math.max(1, Math.round((new Date(p.expiresAt) - Date.now()) / 60000))} 分钟内有效，一次性；过期后再运行 yzvibe qr）：\n`);
+  if (only === 'json') return console.log(JSON.stringify(p.config, null, 2));
+  if (only === 'link') return console.log(p.link);
+  const minutes = Math.max(1, Math.round((new Date(p.expiresAt) - Date.now()) / 60000));
+  console.log(`用手机 YzVibe App「设备 › 扫码配对」扫描（${minutes} 分钟内有效，一次性；过期后再运行 yzvibe qr）：\n`);
   await printQR(p.url);
+  console.log(`② 或者用手机浏览器打开这个链接，页面会自动唤起 App：\n   ${p.link}\n`);
+  console.log(`③ 或者复制下面的 JSON，在 App「设备 › 手动添加 › 粘贴配置」里粘贴：\n`);
+  console.log(JSON.stringify(p.config, null, 2) + '\n');
+  console.log(`（只要链接：yzvibe qr --link；只要 JSON：yzvibe qr --json）`);
   if (st.mode === 'local') console.log('提示：手机需与电脑在同一 Wi-Fi；远程访问请用 `yzvibe restart --access=remote`（Cloudflare Tunnel）。');
 }
 

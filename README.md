@@ -19,7 +19,7 @@ YzVibe 把手机变成桌面 AI 编程会话（Claude Code 等）的遥控器：
 ```
 
 1. 电脑上运行 `npx yzvibe`，终端打印一次性二维码
-2. 手机 App 扫码配对，之后随时重连
+2. 手机 App 扫码配对（也可以用手机浏览器打开终端给的外链自动唤起 App，或把 `yzvibe qr --json` 的 JSON 粘进 App），之后随时重连
 3. 新建会话（选 Agent 与工作目录）→ 发指令 → 看流式回复与工具调用
 4. Claude 需要执行敏感操作时，手机收到审批卡：允许 / 仅此一次 / 拒绝（高风险可要求 Face ID）
 5. 需要时浏览远程文件、预览、按需下载；发图片给会话
@@ -82,7 +82,7 @@ cd connector && npm test
 | 自定义 Relay | `npx yzvibe --access=https://<url>` | 已有 cloudflared / ngrok 隧道；地址会保存复用，`--force` 换新 |
 | Tailscale | `npx yzvibe --access=<tailscale-ip>` | 手机加入同一 tailnet |
 
-连接器在后台常驻：`yzvibe status` 看状态，`yzvibe qr` 随时再出示二维码（配对码过期自动换新），`yzvibe logs -f` 看日志，`yzvibe stop` 停止。`yzvibe install` 注册为 macOS launchd / Linux systemd 用户服务，登录即启动、崩溃自动拉起。
+连接器在后台常驻：`yzvibe status` 看状态，`yzvibe qr` 随时再出示配对方式（二维码 / 手机浏览器外链 / 可粘贴的 JSON 配置，配对码过期自动换新），`yzvibe logs -f` 看日志，`yzvibe stop` 停止。`yzvibe install` 注册为 macOS launchd / Linux systemd 用户服务，登录即启动、崩溃自动拉起。
 
 ## 审批是怎么实现的
 

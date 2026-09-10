@@ -4,7 +4,7 @@
 //   yzvibe run [flags]        前台运行（Ctrl+C 退出；调试或 launchd 用）
 //   yzvibe stop / restart     停止 / 用上次的参数重启
 //   yzvibe status             运行状态、地址、会话数
-//   yzvibe qr                 再次出示配对二维码（配对码过期会自动换新）
+//   yzvibe qr [--json|--link] 再次出示配对方式：二维码 / 外链 / 可粘贴的 JSON 配置
 //   yzvibe logs [-f]          看日志（~/.yzvibe/yzvibe.log），-f 持续跟随
 //   yzvibe install [flags]    注册为开机自启服务（macOS launchd / Linux systemd --user）
 //   yzvibe uninstall          取消开机自启
@@ -36,7 +36,7 @@ if (command === 'help' || args.help || args.h) {
   stop       停止后台连接器
   restart    用上次的参数重启（也可附带新参数）
   status     运行状态、地址、会话数
-  qr         再次出示配对二维码
+  qr         再次出示配对方式：二维码 + 外链 + JSON 配置（--json / --link 只输出一项）
   logs [-f]  查看日志（-f 持续跟随）
   install    注册开机自启（macOS launchd / Linux systemd --user）
   uninstall  取消开机自启`);
@@ -96,7 +96,7 @@ async function main() {
     case 'qr': {
       const info = readDaemonInfo();
       if (!info) { console.log('[yzvibe] 连接器没有在运行，先 yzvibe start。'); process.exitCode = 1; return; }
-      await printPairing(info);
+      await printPairing(info, { only: args.json ? 'json' : args.link ? 'link' : null });
       return;
     }
     case 'logs':
