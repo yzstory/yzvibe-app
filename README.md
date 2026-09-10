@@ -1,145 +1,216 @@
-# YzVibe
+<p align="center">
+  <img src="docs/assets/yzvibe-logo.png" width="112" height="112" alt="YzVibe Logo：暖橙底色上的奶油白 V 形连接符号" />
+</p>
+<h1 align="center">YzVibe</h1>
+<p align="center"><strong>离开电脑，继续 Vibe。</strong></p>
+<p align="center">在 iPhone 上继续电脑里的 AI 编程会话：发指令、看输出、批操作、取文件。</p>
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#系统架构">系统架构</a> ·
+  <a href="docs/ARCHITECTURE.md">架构详解</a> ·
+  <a href="docs/BRAND.md">Logo 与 iOS 图标</a> ·
+  <a href="shared/protocol.md">通信协议</a>
+</p>
 
-**离开电脑，AI 会话照样往前推。**
+***
 
-YzVibe 把手机变成桌面 AI 编程会话（Claude Code 等）的遥控器：发消息、看进度、审批敏感操作、取文件。会话始终跑在你自己的电脑上，无账号、无云端、手机不执行任何代码。
+YzVibe 是一个本地优先的 AI 编程遥控器。桌面连接器在你的电脑上运行 Claude Code 或 Codex，iOS App 负责交互和展示。你可以在手机上新建会话，也可以打开连接器发现的终端历史会话，接着往下聊。
 
-产品形态参考 [Vibelet](https://vibelet.icu/zh/)，视觉为 iOS 26 液态玻璃 × 暖调纸感配色。
+**无需 YzVibe 账号或自建云端工作区。** 会话记录保存在电脑上，手机不执行代码。Agent 仍通过各自配置的模型服务工作；远程连接可经过隧道，锁屏通知使用 Apple APNs。
 
-- 设计画布（Claude Design）：https://claude.ai/code/artifact/d168c7db-23fa-426c-ad13-2b5bce984f41
+## 能做什么
 
-## 它是怎么工作的
+| 能力     | 当前实现                                               |
+| ------ | -------------------------------------------------- |
+| 随时续聊   | 多设备、多会话；选择 Agent、工作目录、模式、模型和思考强度；恢复终端历史会话          |
+| 看清执行过程 | 对话更新、工具状态、命令真实输出、文件改动 diff、用量与额度信息                 |
+| 手机上审批  | Claude 权限请求进入聊天卡片和审批收件箱；支持拒绝理由、Face ID 确认和可撤销的放行规则 |
+| 传图与取文件 | 向会话发送图片；浏览远程目录、预览和下载文件                             |
+| 离线后接上  | 前台重连，补齐断线期间的消息；可选 APNs 审批与完成通知                     |
+| 日常常驻   | 后台守护、日志轮转、设备撤销、资源清理、macOS / Linux 用户服务             |
 
-```
-┌──────────────┐  HTTPS / WebSocket   ┌──────────────────┐   stream-json    ┌─────────────┐
-│  手机 App     │ ◄──────────────────► │  桌面连接器        │ ◄─────────────► │ Claude Code │
-│  iOS（已实现）│  Tunnel / LAN / TS   │  npx yzvibe       │   MCP 审批桥     │ Codex …     │
-│  Android/小程序（预留）│              │  Node.js           │                 └─────────────┘
-└──────────────┘                      └──────────────────┘
-```
+客户端目前为 **SwiftUI / iOS 17+**，iOS 26 使用 Liquid Glass，低版本使用材质模糊。Android 和微信小程序仅预留目录。
 
-1. 电脑上运行 `npx yzvibe`，终端打印一次性二维码
-2. 手机 App 扫码配对（也可以用手机浏览器打开终端给的外链自动唤起 App，或把 `yzvibe qr --json` 的 JSON 粘进 App），之后随时重连
-3. 新建会话（选 Agent 与工作目录）→ 发指令 → 看流式回复、工具调用与它们的真实输出
-4. Claude 需要执行敏感操作时，手机收到审批卡：允许 / 拒绝，或「总是允许…」把它变成一条规则（高风险可要求 Face ID）
-5. 配好远程推送后，锁屏也能收到审批；点开直接进到那条请求
-6. 需要时浏览远程文件、预览、按需下载；发图片给会话
+### Claude Code 与 Codex 的区别
 
-## 仓库结构
+以下是本仓库驱动的行为，具体参数映射见 [agents/options.js](connector/src/agents/options.js)。
 
-```
-YzVibe/
-├─ docs/
-│  ├─ PRD.md            产品需求：定位、用户、功能矩阵（MoSCoW）、信息架构、流程、里程碑
-│  └─ DESIGN.md         设计规范：oklch 颜色 token、玻璃配方、字阶、组件、三端映射
-├─ shared/protocol.md   手机 ⇄ 连接器协议（REST + WebSocket + 数据模型），三端共用
-├─ connector/           桌面连接器（Node.js）：REST/WS、配对二维码、Claude Code 驱动、MCP 审批桥
-├─ ios/                 SwiftUI 实现：YzVibeKit 库 + App 壳 + XcodeGen
-├─ design/canvas/       设计画布源文件（build.py 生成 10 块画板）
-├─ android/             预留：Kotlin + Compose
-├─ miniprogram/         预留：微信小程序
-└─ task_plan.md / findings.md / progress.md   规划与研究记录
-```
+| 会话模式   | Claude Code      | Codex                    |
+| ------ | ---------------- | ------------------------ |
+| Plan   | 原生规划模式，通过权限桥处理请求 | 只读沙箱 + 规划提示词             |
+| Normal | 敏感操作发到手机审批       | 工作目录可写沙箱；沙箱外操作被拒绝，不发手机审批 |
+| Trust  | 跳过权限检查           | 跳过审批和沙箱                  |
+
+Trust 会允许 Agent 直接执行操作，请在了解其含义后选择。Mock 驱动用于演示与开发，不调用真实模型。
+
+## 系统架构
+
+![1.00](docs/assets/architecture.svg)
+
+1. **配对**：电脑生成一次性配对码，手机扫码、打开配对链接或粘贴 JSON，换取设备 Token。
+2. **执行**：手机通过 REST 发指令，连接器在指定工作目录启动本地 Agent；输出经 WebSocket 返回。
+3. **审批**：Claude 经 MCP 审批桥提出请求，连接器匹配放行规则，或等待手机决定。
+4. **恢复**：手机回到前台后重新连接并同步遗漏内容；配置 APNs 后可在锁屏接收通知。
+
+组件职责、审批时序和数据边界见 [架构详解](docs/ARCHITECTURE.md)。
 
 ## 快速开始
 
-### 1. 连接器（电脑）
-```bash
-npx yzvibe                               # 后台启动（Cloudflare Tunnel）并打印二维码，终端可以直接关掉
-# 或者从仓库里跑：
-cd connector && npm install
-node bin/yzvibe.js                       # 等价于 npx yzvibe
-node bin/yzvibe.js start --access=local  # 局域网
-node bin/yzvibe.js start --agent=mock    # 没有 Claude 也能演示完整流程
-node bin/yzvibe.js qr / status / logs -f / stop / restart
-node bin/yzvibe.js devices / revoke <手机>  # 看已配对的手机 / 吊销某一台
-node bin/yzvibe.js push [--test]         # 远程推送配置与自检
-node bin/yzvibe.js install               # 注册开机自启（macOS launchd），崩溃自动拉起
-```
-连接器默认在后台运行，`run` 子命令才是前台（Ctrl+C 退出）。需要本机已安装并登录 `claude` CLI。会话数据与日志保存在 `~/.yzvibe/`。
+### 1. 在电脑上启动连接器
 
-### 2. iOS App
+需要 **Node.js 20+**。使用真实 Agent 前，先在电脑安装并登录对应的 `claude` 或 `codex` CLI，确认能在目标工作目录正常运行。
+
+在仓库根目录执行：
+
+```bash
+cd connector
+npm install
+
+# 同一 Wi-Fi 下连接，后台启动并展示配对二维码
+node bin/yzvibe.js start --access=local
+```
+
+也可以选择以下启动方式；如果连接器已经运行，使用 `restart` 应用新参数：
+
+```bash
+# Cloudflare 临时隧道；需要 cloudflared，缺失时回落局域网
+node bin/yzvibe.js start
+
+# 默认使用 Codex（也可在手机新建会话时选择）
+node bin/yzvibe.js start --access=local --agent=codex
+
+# 前台 Mock 演示，无需 Agent 登录；Ctrl+C 退出
+node bin/yzvibe.js run --access=local --agent=mock
+```
+
+连接器的 npm 包名为 `yzvibe`，支持 `npx yzvibe` 入口；上面的源码方式可直接运行当前仓库版本。
+
+### 2. 编译并安装 iOS App
+
+需要 macOS、Xcode（支持项目使用的 iOS 26 SDK）和 XcodeGen：
+
 ```bash
 brew install xcodegen
-cd ios && xcodegen generate && open YzVibe.xcodeproj
+# 在仓库根目录执行
+cd ios
+xcodegen generate
+open YzVibe.xcodeproj
 ```
-真机运行后：设备 › 扫码配对 → 扫终端里的二维码。没有连接器时可点「先看看演示数据」。
 
-只编译库、跑测试（不需要生成工程）：
+在 Xcode 的 **Signing & Capabilities** 中选择自己的开发团队，并根据签名需要修改 Bundle Identifier；如需持久保存团队配置，可修改 [ios/project.yml](ios/project.yml) 的 `DEVELOPMENT_TEAM`。选择 iPhone 真机后运行。
+
+App 已接入新的 `AppIcon` 资源。进入 **设备 → 扫码配对**，扫描电脑终端里的二维码，然后新建会话并发送指令。还没有连接器时，可以选择「先看看演示数据」。
+
+更多构建、测试与 TestFlight 说明见 [iOS README](ios/README.md)。
+
+## 连接与日常管理
+
+以下命令均在 `connector/` 中运行。
+
+| 连接方式              | 启动参数                                 | 使用场景              |
+| ----------------- | ------------------------------------ | ----------------- |
+| 局域网               | `--access=local`                     | 手机与电脑在同一网络        |
+| Cloudflare Tunnel | `--access=remote`（默认）                | 通过临时 HTTPS 地址远程连接 |
+| 自有隧道              | `--access=https://your-host.example` | 已有反向代理或隧道，使用固定地址  |
+| Tailscale         | `--access=100.x.x.x`                 | 手机和电脑加入同一 tailnet |
+
+临时隧道重建后地址可能变化，需要运行 `qr` 重新配对。连接器会保存访问配置；使用 `--force` 可不复用已保存的 Relay 地址。
+
 ```bash
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+node bin/yzvibe.js status          # 查看运行状态
+node bin/yzvibe.js qr              # 再次显示配对方式
+node bin/yzvibe.js qr --json       # 可粘贴到 App 的配置
+node bin/yzvibe.js logs -f         # 跟踪日志
+node bin/yzvibe.js devices        # 查看已配对手机
+node bin/yzvibe.js revoke <设备ID>  # 撤销某台手机的访问
+node bin/yzvibe.js restart        # 重启
+node bin/yzvibe.js stop           # 停止
+node bin/yzvibe.js install        # 安装 macOS launchd / Linux systemd 用户服务
+```
+
+默认端口为 `19876`，被占用时向后寻找空闲端口；可用 `--port=` 指定。默认数据目录为 `~/.yzvibe/`，可用 `YZVIBE_HOME` 覆盖。完整命令见 [连接器 README](connector/README.md)。
+
+## 锁屏通知（可选）
+
+iOS 挂起 App 后，WebSocket 无法持续接收消息。要在锁屏时收到审批和回复完成通知，需要配置远程推送。
+
+连接器直接向 Apple APNs 发送推送，无需部署 YzVibe 推送服务器：
+
+1. 使用自己的 Apple 开发者配置，获取 APNs `.p8` 密钥。
+2. 将 `AuthKey_XXXXXXXXXX.p8` 放入 `~/.yzvibe/`。
+3. 创建 `~/.yzvibe/apns.json`，填写自己的团队与 App Bundle ID：
+
+```json
+{
+  "teamId": "YOUR_TEAM_ID",
+  "bundleId": "icu.yzvibe.YzVibe",
+  "environment": "sandbox"
+}
+```
+
+Xcode 调试安装使用 `sandbox`，TestFlight / App Store 分发使用 `production`。若修改了 App 的 Bundle ID，此处需要保持一致。
+
+```bash
+# 在 connector/ 中执行
+node bin/yzvibe.js restart
+node bin/yzvibe.js push --test
+```
+
+在 App「我 → 通知 → 远程推送」中检查注册与配置状态。未配置 APNs 时仍可在 App 在线期间查看和处理审批。
+
+## 数据与权限
+
+- **桌面保存状态**：会话、消息、配对设备、审批规则与上传文件位于 `~/.yzvibe/`；工作文件保留在所选工作目录。连接器会定期清理过期资源，详见 [清理策略](connector/README.md#定期清理)。
+- **设备访问可撤销**：一次性配对码换取设备 Token，iOS 将凭据保存在 Keychain；撤销设备后使 Token 失效并断开连接。
+- **审批可追溯**：按工具、命令前缀或完整命令创建放行规则，可设置会话 / 全局范围及有效期；命中规则会留下聊天记录。
+- **文件访问有边界**：目录浏览限制在会话目录；文件读取还支持主目录中的非敏感文件，并拦截私钥等敏感路径。
+- **外部服务仍参与通信**：模型请求由本机 Agent 发出；隧道参与远程传输；APNs 载荷可能包含通知摘要。这里的“本地优先”指无需 YzVibe 云端保存工作区，并非所有数据都不离开电脑。
+
+## 开发与验证
+
+```bash
+# 连接器测试
+cd connector
+npm test
+```
+
+在仓库根目录编译 iOS 库及测试目标（不执行测试）：
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 swift build --package-path ios --build-tests \
   --triple arm64-apple-ios17.0-simulator \
-  --sdk "$(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --sdk iphonesimulator --show-sdk-path)"
+  --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)"
 ```
 
-### 3. 连接器测试
-```bash
-cd connector && npm test
+执行 iOS 单元测试需要安装模拟器运行时，步骤见 [iOS 测试说明](ios/README.md)。[CI](.github/workflows/ci.yml) 包含 Node.js 20 / 22 测试及 iOS 库编译、测试任务。
+
+## 仓库导航
+
+```text
+YzVibe/
+├── connector/          Node.js 连接器、Agent 驱动、审批桥与测试
+├── ios/                SwiftUI App、YzVibeKit、AppIcon 与 XcodeGen 配置
+├── shared/protocol.md  REST / WebSocket 协议与数据模型
+├── docs/
+│   ├── ARCHITECTURE.md 架构说明与可编辑 Mermaid 图
+│   ├── BRAND.md        Logo 理念、资源位置与使用说明
+│   ├── assets/         README 使用的 Logo 和 SVG 架构图
+│   ├── PRD.md          产品需求与规划
+│   └── DESIGN.md       UI 设计规范
+├── design/             Logo 生成原图、提示词与设计画布
+├── android/            Android 预留目录
+└── miniprogram/        微信小程序预留目录
 ```
 
-## 连接方式
+## 后续方向
 
-| 方式 | 命令 | 说明 |
-|---|---|---|
-| Cloudflare Tunnel（默认） | `npx yzvibe` | 免费免注册，需要 `cloudflared`；隧道断开会自动重连（临时地址会变，需重新扫码） |
-| 局域网 | `npx yzvibe --access=local` | 手机与电脑同一 Wi-Fi |
-| 自定义 Relay | `npx yzvibe --access=https://<url>` | 已有 cloudflared / ngrok 隧道；地址会保存复用，`--force` 换新 |
-| Tailscale | `npx yzvibe --access=<tailscale-ip>` | 手机加入同一 tailnet |
+- Live Activity / 灵动岛展示会话状态。
+- Android 与微信小程序客户端。
+- 持续完善远程连接、通知和多 Agent 交互体验。
 
-连接器在后台常驻：`yzvibe status` 看状态，`yzvibe qr` 随时再出示配对方式（二维码 / 手机浏览器外链 / 可粘贴的 JSON 配置，配对码过期自动换新），`yzvibe logs -f` 看日志，`yzvibe stop` 停止。`yzvibe install` 注册为 macOS launchd / Linux systemd 用户服务，登录即启动、崩溃自动拉起。
-
-## 远程推送：让「离开电脑」真正成立
-
-iOS 把 App 切到后台几十秒后就会挂起，WebSocket 必然断开。没有远程推送，锁屏之后的审批请求会一直在电脑上等到超时，手机什么都收不到。
-连接器**直接连苹果的 APNs**，不经任何第三方服务器。准备一次即可：
-
-1. 苹果开发者后台建一个 APNs 密钥，下载 `AuthKey_XXXXXXXXXX.p8`
-2. 把它放进电脑的 `~/.yzvibe/`
-3. 写 `~/.yzvibe/apns.json`：`{ "teamId": "你的 TeamID", "bundleId": "icu.yzvibe.YzVibe", "environment": "sandbox" }`
-   （Xcode 直接装的调试版填 `sandbox`，TestFlight / App Store 版填 `production`；填错连接器会自动换另一个重试）
-4. `yzvibe restart`，然后 `yzvibe push --test` 发一条自检
-
-App 里在「我 › 通知 › 远程推送」能看到每一步的状态。没配置也不影响其它功能，只是锁屏收不到审批。
-
-## 审批是怎么实现的
-
-连接器以 `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool mcp__yzvibe__approve` 启动 Claude。
-Claude 需要权限时调用 MCP 工具 `approve`（`connector/src/mcp-approve.js`），它转发到连接器并等待手机的决定。
-
-审批卡上有两个按钮加一个菜单：
-
-- **允许 / 拒绝** — 只对这一次生效，拒绝的原因会回传给 Claude
-- **总是允许…** — 存成一条规则，同类请求以后自动放行。可以按工具（本会话 1 小时内不再问 Bash）或按命令前缀（放行所有 `npm test` 开头的命令）。规则存在连接器的 `~/.yzvibe/rules.json`，在 App「我 › 安全 › 审批规则」里能看到用了多少次，随时撤销
-
-自动放行时聊天里会留一条「已按规则自动允许」的记录，不会悄悄执行。
-新建会话选 Trust 模式则改传 `--dangerously-skip-permissions`，完全不产生审批。
-
-## 会话里能看到什么
-
-工具调用不再只显示「运行中 / 完成」：点开工具卡能看到命令的真实输出，`Edit` / `Write` 显示按 +/- 着色的改动 diff。
-输出太长会截断中间部分并注明。审批卡里的文件改动同样带 diff，不用先猜再批。
-
-App 回到前台时会立刻重连事件通道，并从「服务端确认过的最后一条消息」往后补齐离线期间的内容，
-不会出现「切走再回来，会话停在几分钟前」的情况。
-
-## 设计原则
-
-- **本地优先**：无账号、无云端工作区，数据留在用户机器，Token 存钥匙串
-- **审批是第一公民**：独立收件箱 + 远程推送 + Face ID + 可撤销的放行规则
-- **一次扫码**：配对 ≤ 10 秒，重连零成本
-- **手机不执行代码**：只展示、只转发
-- **玻璃只用于漂浮层**：导航、Tab、输入条、审批卡是玻璃；内容卡片永远不透明
-
-## 路线图
-
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| M0 | 规划 + 设计稿 | ✅ |
-| M1 | iOS 静态 UI + Mock 数据 | ✅ |
-| M2 | 连接器 MVP + iOS 真实联调（协议、审批桥、文件、上传） | ✅ 已在真机上跑通 |
-| M3 | APNs 远程推送、断线重同步、工具输出可见、审批规则、资源回收、CI | ✅ 代码完成，推送需自备 APNs 密钥 |
-| M4 | Live Activity / 灵动岛、Android、小程序 | ⏳ |
+以上为规划，当前可用能力以代码及本文功能表为准。
 
 ## 许可
-MIT
+
+连接器的 [package.json](connector/package.json) 声明为 MIT。仓库目前尚未包含独立的 `LICENSE` 文件。

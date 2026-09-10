@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">YzVibe 系统架构</title>
+  <desc id="desc">iOS 通过局域网、Tailscale 或 HTTPS 隧道与 Node.js 连接器交换 REST 指令和 WebSocket 事件。连接器管理本地 Claude Code 与 Codex 子进程、审批、文件和持久化，并可直接向 Apple APNs 发送通知。Agent 连接各自配置的外部模型服务。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M1 1 7 4 1 7" fill="none" stroke="#9A7462" stroke-width="1.5"/></marker>
+    <style>
+      text{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Noto Sans CJK SC',sans-serif;fill:#352B26}
+      .eyebrow{font-size:13px;font-weight:700;letter-spacing:2px;fill:#A95738}
+      .heading{font-size:24px;font-weight:650}.body{font-size:17px;fill:#685D54}.small{font-size:14px;fill:#75685E}
+      .line{fill:none;stroke:#9A7462;stroke-width:2;marker-end:url(#arrow)}
+      .both{fill:none;stroke:#9A7462;stroke-width:2;marker-start:url(#arrow);marker-end:url(#arrow)}
+      .dash{stroke-dasharray:6 6}
+    </style>
+  </defs>
+  <rect width="1440" height="960" rx="0" fill="#FBF8F2"/>
+  <text x="56" y="55" class="eyebrow">YZVIBE / SYSTEM ARCHITECTURE</text>
+  <text x="56" y="104" font-size="36" font-weight="700">手机掌控，电脑执行。</text>
+  <text x="56" y="140" class="body">本地会话 · 双 Agent 驱动 · 可选远程通知</text>
+  <rect x="418" y="184" width="968" height="518" rx="24" fill="#F3EEE5" stroke="#E3D9CC"/>
+  <text x="446" y="221" class="eyebrow">02 / YOUR COMPUTER</text>
+  <text x="1354" y="221" text-anchor="end" class="small">Node.js 20+ · CLI 子进程在本机运行</text>
+
+  <text x="56" y="241" class="eyebrow">01 / IPHONE</text>
+  <rect x="56" y="265" width="286" height="355" rx="20" fill="#FFFFFF" stroke="#E3D9CC"/>
+  <rect x="80" y="290" width="48" height="48" rx="13" fill="#D66A43"/>
+  <path d="M91 303 104 324 117 303" fill="none" stroke="#FFF8ED" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="144" y="321" class="heading">iOS App</text>
+  <text x="80" y="372" class="body">SwiftUI / AppStore</text>
+  <text x="80" y="411" class="body">会话 · 工具输出 · 审批</text>
+  <text x="80" y="450" class="body">图片 · 文件 · 设备管理</text>
+  <path d="M80 475H318" stroke="#EDE6DC"/>
+  <text x="80" y="509" class="body">ConnectorClient</text>
+  <text x="80" y="538" class="small">REST 操作 + WebSocket 事件</text>
+  <text x="80" y="587" class="small">Keychain 保存设备凭据</text>
+
+  <path d="M342 390H456" class="both"/>
+  <text x="398" y="349" text-anchor="middle" class="small">REST</text>
+  <text x="398" y="371" text-anchor="middle" class="small">+ WS</text>
+  <text x="398" y="423" text-anchor="middle" class="small">LAN / TS</text>
+  <text x="398" y="445" text-anchor="middle" class="small">或隧道</text>
+
+  <rect x="456" y="265" width="410" height="285" rx="20" fill="#FFFCF8" stroke="#D66A43" stroke-width="2"/>
+  <text x="482" y="309" class="heading">桌面连接器</text>
+  <text x="482" y="340" class="small">server.js · REST / WebSocket</text>
+  <path d="M482 362H840" stroke="#E9D9CA"/>
+  <text x="482" y="395" class="body">配对 / 设备鉴权 / 事件广播</text>
+  <text x="482" y="431" class="body">Store / 会话调度 / 历史导入</text>
+  <text x="482" y="467" class="body">审批规则 / 文件服务 / 图片上传</text>
+  <text x="482" y="513" class="small">后台守护 · 断线同步 · 资源清理</text>
+
+  <rect x="1010" y="265" width="340" height="137" rx="18" fill="#FFFFFF" stroke="#E3D9CC"/>
+  <text x="1034" y="303" class="heading">Claude Code</text>
+  <text x="1034" y="338" class="body">stream-json · 持续会话进程</text>
+  <text x="1034" y="373" class="small">MCP approve ↔ 手机权限决定</text>
+  <path d="M866 311H1010" class="both"/>
+  <text x="938" y="295" text-anchor="middle" class="small">输入 / 事件</text>
+  <path d="M1010 374H866" class="both dash"/>
+  <text x="938" y="360" text-anchor="middle" class="small">MCP 审批桥</text>
+
+  <rect x="1010" y="437" width="340" height="113" rx="18" fill="#FFFFFF" stroke="#E3D9CC"/>
+  <text x="1034" y="474" class="heading">Codex</text>
+  <text x="1034" y="506" class="body">exec --json / resume</text>
+  <text x="1034" y="531" class="small">每轮一个进程 · 无手机审批回调</text>
+  <path d="M866 479H1010" class="both"/>
+  <text x="938" y="463" text-anchor="middle" class="small">输入 / 事件</text>
+
+  <path d="M661 550V588" class="both"/>
+  <rect x="456" y="592" width="410" height="78" rx="14" fill="#E9E2D6"/>
+  <text x="482" y="625" font-size="19" font-weight="650">本地状态与工作文件</text>
+  <text x="482" y="651" class="small">~/.yzvibe/ · 所选工作目录</text>
+  <text x="1010" y="604" class="small">Agent 通过自身配置访问模型服务</text>
+  <text x="1010" y="630" class="small">Mock 驱动可离线演示交互流程</text>
+  <text x="1010" y="656" class="small">Android / 小程序为后续规划</text>
+
+  <text x="56" y="763" class="eyebrow">03 / EXTERNAL SERVICES</text>
+  <rect x="456" y="790" width="410" height="103" rx="18" fill="#EDF2EC" stroke="#D5DFD2"/>
+  <text x="482" y="830" class="heading">Apple APNs</text>
+  <text x="482" y="864" class="body">可选 · 审批通知 / 回复完成通知</text>
+  <path d="M456 493H439V840H456" class="line dash"/>
+  <text x="450" y="734" class="small">push.js · HTTP/2</text>
+  <path d="M456 848H40V580H56" class="line dash"/>
+  <text x="218" y="834" class="small">推送到手机</text>
+
+  <rect x="1010" y="790" width="340" height="103" rx="18" fill="#FFFFFF" stroke="#E3D9CC"/>
+  <text x="1034" y="830" class="heading">模型服务</text>
+  <text x="1034" y="864" class="body">由 Claude / Codex 配置决定</text>
+  <path d="M1350 335H1367V769H1200V790" class="both"/>
+  <path d="M1350 492H1367" fill="none" stroke="#9A7462" stroke-width="2"/>
+  <text x="56" y="931" class="small">实线：主要数据流　虚线：审批 / 可选通知　｜　APNs 是通知入口，完整会话经连接器同步。</text>
+</svg>
