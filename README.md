@@ -45,10 +45,13 @@ YzVibe/
 ### 1. 连接器（电脑）
 ```bash
 cd connector && npm install
-node bin/yzvibe.js --access=local        # 局域网；或不带参数走 Cloudflare Tunnel
-node bin/yzvibe.js --agent=mock          # 没有 Claude 也能演示完整流程
+node bin/yzvibe.js                       # 后台启动（Cloudflare Tunnel）并打印二维码，终端可以直接关掉
+node bin/yzvibe.js start --access=local  # 局域网
+node bin/yzvibe.js start --agent=mock    # 没有 Claude 也能演示完整流程
+node bin/yzvibe.js qr / status / logs -f / stop / restart
+node bin/yzvibe.js install               # 注册开机自启（macOS launchd），崩溃自动拉起
 ```
-需要本机已安装并登录 `claude` CLI。会话数据保存在 `~/.yzvibe/`。
+连接器默认在后台运行，`run` 子命令才是前台（Ctrl+C 退出）。需要本机已安装并登录 `claude` CLI。会话数据与日志保存在 `~/.yzvibe/`。
 
 ### 2. iOS App
 ```bash
@@ -74,10 +77,12 @@ cd connector && npm test
 
 | 方式 | 命令 | 说明 |
 |---|---|---|
-| Cloudflare Tunnel（默认） | `npx yzvibe` | 免费免注册，需要 `cloudflared`；relay 地址会保存复用，`--force` 换新 |
+| Cloudflare Tunnel（默认） | `npx yzvibe` | 免费免注册，需要 `cloudflared`；隧道断开会自动重连（临时地址会变，需重新扫码） |
 | 局域网 | `npx yzvibe --access=local` | 手机与电脑同一 Wi-Fi |
-| 自定义 Relay | `npx yzvibe --access=https://<url>` | 已有 cloudflared / ngrok 隧道 |
+| 自定义 Relay | `npx yzvibe --access=https://<url>` | 已有 cloudflared / ngrok 隧道；地址会保存复用，`--force` 换新 |
 | Tailscale | `npx yzvibe --access=<tailscale-ip>` | 手机加入同一 tailnet |
+
+连接器在后台常驻：`yzvibe status` 看状态，`yzvibe qr` 随时再出示二维码（配对码过期自动换新），`yzvibe logs -f` 看日志，`yzvibe stop` 停止。`yzvibe install` 注册为 macOS launchd / Linux systemd 用户服务，登录即启动、崩溃自动拉起。
 
 ## 审批是怎么实现的
 

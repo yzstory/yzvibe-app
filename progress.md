@@ -51,3 +51,9 @@
 - iOS：选图后进入输入条上方的待发送区（最多 6 张，可删），可配文字一起发；用户气泡显示缩略图，点开全屏（双指缩放、双击、分享）；附件从连接器 /uploads/:id 拉取并缓存
 - 连接器：只发图不带文字时不再给 Claude 空文本块（API 会拒绝）；Codex 用默认提示；上传索引可在重启后按 id 从磁盘找回
 - 验证：真实 Claude 只发一张红色 PNG 问颜色回答「Red.」；connector 11 个测试、YzVibeKit 19 个测试、App 工程编译通过
+
+## 2026-09-10 连接器后台运行 + 稳定性
+- CLI 改为子命令：`yzvibe [start]` 后台启动并打印二维码后退出（终端可关）、`run` 前台、`stop` / `restart` / `status` / `qr` / `logs [-f]`、`install` / `uninstall`（macOS launchd KeepAlive / Linux systemd --user，开机自启、崩溃拉起）。实例信息写 `~/.yzvibe/daemon.json`（0600，含内部 secret），日志 `~/.yzvibe/yzvibe.log`（>5MB 轮转）
+- 新增 `GET /internal/status`（secret 鉴权）：CLI 取配对码 / 统计；修复配对码过期后永远无法再配对的 bug（`Pairing.current()` 过期即换新）
+- Cloudflare 临时隧道断开自动重连并重新公告（实测 kill cloudflared 后 12 秒换到新地址）；SIGHUP 也走优雅退出；启动时清理上次残留的 mcp-*.json
+- 验证：connector 13 个测试（新增配对码过期、后台守护端到端）；本机实测 local / tunnel 两种模式的 start / status / qr / logs / restart / stop

@@ -330,3 +330,48 @@ test('导入终端会话：Claude / Codex transcript → 列表 → 接管 → �
   assert.deepEqual(rl.limits.map((l) => [l.id, l.percent]), [['session', 12], ['weekly_all', 3]]);
   await c.close();
 });
+
+test('配对码过期后自动换新（后台长期运行时随时能配对）', async () => {
+  const { Pairing } = await import('../src/pairing.js');
+  const p = new Pairing(50);
+  const old = p.token;
+  assert.equal(p.current(), old);
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(p.consume(old), false);          // 过期的不能用
+  assert.notEqual(p.token, old);                // 且已经换了新的
+  const fresh = p.current();
+  assert.equal(p.consume(fresh), true);
+  assert.notEqual(p.token, fresh);              // 用过即作废
+});
+
+test('后台守护：start → status/qr → stop（真实拉起子进程）', async () => {
+  const { execFile } = await import('node:child_process');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-daemon-'));
+  const bin = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'bin', 'yzvibe.js');
+  const cli = (...a) => new Promise((resolve) => execFile(process.execPath, [bin, ...a], { env: { ...process.env, YZVIBE_HOME: home }, timeout: 30000 }, (err, out, errOut) => resolve({ code: err?.code ?? 0, out: String(out) + String(errOut) })));
+  try {
+    assert.equal((await cli('status')).out.includes('未运行'), true);
+    const started = await cli('start', '--access=local', '--agent=mock', '--port=0');
+    assert.equal(started.code, 0, started.out);
+    assert.match(started.out, /已在后台启动（PID \d+/);
+    assert.match(started.out, /yzvibe:\/\/pair\?host=/);
+    const info = JSON.parse(fs.readFileSync(path.join(home, 'daemon.json'), 'utf8'));
+    assert.ok(info.pid && info.port && info.secret);
+    assert.equal((fs.statSync(path.join(home, 'daemon.json')).mode & 0o777), 0o600);
+    // 再 start 不会起第二个；status / qr 走 /internal/status
+    assert.match((await cli('start')).out, /已在后台运行/);
+    assert.match((await cli('status')).out, /运行中[\s\S]*Agent\s+mock/);
+    assert.match((await cli('qr')).out, new RegExp(`port=${info.port}&token=`));
+    assert.equal((await fetch(`http://127.0.0.1:${info.port}/internal/status`)).status, 403);   // 没 secret 拒绝
+    const st = await (await fetch(`http://127.0.0.1:${info.port}/internal/status`, { headers: { 'x-yzvibe-secret': info.secret } })).json();
+    assert.equal(st.pid, info.pid); assert.equal(st.mode, 'local'); assert.ok(st.pairing.url.startsWith('yzvibe://pair'));
+    assert.match((await cli('logs', '-n', '5')).out, /YzVibe 连接器 v/);
+    // stop 后进程退出、daemon.json 清掉
+    assert.match((await cli('stop')).out, /已停止/);
+    assert.throws(() => process.kill(info.pid, 0));
+    assert.equal(fs.existsSync(path.join(home, 'daemon.json')), false);
+    assert.match((await cli('status')).out, /未运行/);
+  } finally {
+    try { const { pid } = JSON.parse(fs.readFileSync(path.join(home, 'daemon.json'), 'utf8')); process.kill(pid, 'SIGKILL'); } catch {}
+  }
+});

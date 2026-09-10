@@ -5,8 +5,11 @@ import os from 'node:os';
 export class Pairing {
   constructor(ttlMs = 10 * 60_000) { this.ttlMs = ttlMs; this.rotate(); }
   rotate() { this.token = randomBytes(12).toString('base64url'); this.expiresAt = Date.now() + this.ttlMs; return this.token; }
+  get expired() { return Date.now() > this.expiresAt; }
+  /** 当前有效的配对码；过期就换一个新的（长期后台运行时靠这个保证随时能配对）。 */
+  current() { if (this.expired) this.rotate(); return this.token; }
   consume(token) {
-    if (token !== this.token || Date.now() > this.expiresAt) return false;
+    if (token !== this.token || this.expired) { if (this.expired) this.rotate(); return false; }
     this.rotate();
     return true;
   }

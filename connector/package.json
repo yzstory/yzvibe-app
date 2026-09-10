@@ -3,12 +3,19 @@
   "version": "0.1.0",
   "description": "YzVibe 桌面连接器：把本机的 Claude Code / Codex 会话暴露给手机 App（REST + WebSocket + 扫码配对）",
   "type": "module",
-  "bin": { "yzvibe": "bin/yzvibe.js" },
+  "bin": {
+    "yzvibe": "bin/yzvibe.js"
+  },
   "main": "src/server.js",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "start": "node bin/yzvibe.js",
-    "dev": "node bin/yzvibe.js --access=local --agent=mock",
+    "start": "node bin/yzvibe.js start",
+    "run": "node bin/yzvibe.js run",
+    "stop": "node bin/yzvibe.js stop",
+    "status": "node bin/yzvibe.js status",
+    "dev": "node bin/yzvibe.js run --access=local --agent=mock",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

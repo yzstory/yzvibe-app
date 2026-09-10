@@ -16,8 +16,9 @@ import { normalizeOptions, agentCapabilities } from './agents/options.js';
 import { agentQuota } from './quota.js';
 import { scanTerminalSessions, parseTranscript } from './transcripts.js';
 import { listDirectories, makeDirectory } from './fs.js';
+import { writeDaemonInfo, clearDaemonInfo } from './daemon.js';
 
-const VERSION = '0.1.0';
+export const VERSION = '0.1.0';
 
 export const DEFAULT_PORT = 19876;
 
@@ -85,7 +86,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime() });
       if (req.method === 'POST' && p === '/pair') {
         const { token, phoneName } = await readJSON(req);
-        if (!pairing.consume(token)) return json(res, 401, { error: '配对码无效或已过期，请在电脑上重新运行 npx yzvibe' });
+        if (!pairing.consume(token)) return json(res, 401, { error: '配对码无效或已过期，请在电脑上运行 yzvibe qr 重新出示' });
         const d = store.addDevice(phoneName ?? '手机');
         log(`[yzvibe] 手机已配对：${d.name} (${d.id.slice(0, 8)})`);
         await announce();
@@ -100,6 +101,16 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         // 计划被批准后 claude 进程内部已切到普通权限，这里只同步会话记录，不重启进程
         if (toolName === 'ExitPlanMode' && decision !== 'deny') { store.configureSession(sessionId, { mode: 'normal' }); agents.get(sessionId)?.configure({ mode: 'normal' }); }
         return json(res, 200, { decision });
+      }
+      // 内部：本机 CLI（yzvibe status / qr）取当前配对码与统计；过期的配对码在这里自动换新
+      if (req.method === 'GET' && p === '/internal/status') {
+        if (req.headers['x-yzvibe-secret'] !== internalSecret) return json(res, 403, { error: 'forbidden' });
+        const sessions = store.sessions;
+        return json(res, 200, {
+          pid: process.pid, name: deviceName, version: VERSION, port: api.port, uptime: process.uptime(), ...api.access,
+          pairing: { token: pairing.current(), expiresAt: new Date(pairing.expiresAt).toISOString(), url: api.access.host ? pairURL({ host: api.access.host, port: api.port, token: pairing.current(), mode: api.access.mode, name: deviceName }) : null },
+          stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length },
+        });
       }
       // 以下需要设备 Token
       if (!authed(req, url)) return json(res, 401, { error: 'unauthorized' });
@@ -228,7 +239,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     tryPort(port, 20);
   });
   const api = {
-    store, pairing, server, port,
+    store, pairing, server, port, internalSecret,
+    access: { host: null, mode: null },   // startConnector 决定后填入，供 /internal/status 生成配对链接
     listen: listenWithFallback,
     close: () => new Promise((resolve) => { for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
@@ -236,12 +248,36 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   return api;
 }
 
-/** CLI 入口：起服务、决定访问方式、打印二维码。 */
+/** 清掉上次异常退出留下的每会话 MCP 配置（正常退出时 dispose 会删）。 */
+function cleanStaleMcpConfigs(home) {
+  try { for (const f of fs.readdirSync(home)) if (/^mcp-.*\.json$/.test(f)) fs.unlinkSync(path.join(home, f)); } catch {}
+}
+
+/** CLI 入口：起服务、决定访问方式、打印二维码；后台模式下把实例信息写到 ~/.yzvibe/daemon.json。 */
 export async function startConnector(opts) {
+  const daemon = Boolean(process.env.YZVIBE_DAEMON);
+  cleanStaleMcpConfigs(opts.home ?? HOME);
   const c = await createConnector(opts);
   await c.listen();
   const name = opts.name ?? os.hostname();
-  let host, mode, tunnelChild;
+  let host, mode, tunnelChild, stopping = false;
+
+  const startedAt = new Date().toISOString();
+  const saveDaemonInfo = () => writeDaemonInfo({ pid: process.pid, port: c.port, host, mode, name, agent: opts.defaultAgent, secret: c.internalSecret, flags: opts.flags ?? [], managed: process.env.YZVIBE_MANAGED ?? null, startedAt, version: VERSION });
+
+  /** 起 Cloudflare Tunnel；进程意外退出时自动重开（临时隧道的地址会变，需重新扫码）。 */
+  const openTunnel = async () => {
+    const t = await startCloudflareTunnel(c.port);
+    tunnelChild = t.child;
+    t.child.on('exit', async (code) => {
+      if (stopping) return;
+      console.log(`[yzvibe] Cloudflare Tunnel 断开（退出码 ${code}），5 秒后重连…`);
+      await new Promise((r) => setTimeout(r, 5000));
+      try { host = await openTunnel(); c.access.host = host; saveDaemonInfo(); console.log(`[yzvibe] Tunnel 已重连：${host}（地址已变化，手机需重新扫码）`); await announce(); }
+      catch (e) { console.log(`[yzvibe] Tunnel 重连失败：${e.message}；可用 yzvibe restart 重试`); }
+    });
+    return t.url;
+  };
 
   if (opts.access === 'local') { host = lanAddresses()[0]; mode = 'local'; }
   else if (/^https?:\/\//.test(opts.access)) { host = opts.access; mode = 'relay'; saveRelay(host); }
@@ -251,23 +287,30 @@ export async function startConnector(opts) {
     if (relay) { host = relay; mode = 'relay'; console.log(`[yzvibe] 复用已保存的 relay：${relay}（--force 可换新）`); }
     else {
       process.stdout.write('[yzvibe] 正在启动 Cloudflare Tunnel… ');
-      try { const t = await startCloudflareTunnel(c.port); host = t.url; mode = 'tunnel'; tunnelChild = t.child; console.log(host); }
+      try { host = await openTunnel(); mode = 'tunnel'; console.log(host); }
       catch (e) { console.log(`失败（${e.message}），退回局域网`); host = lanAddresses()[0]; mode = 'local'; }
     }
   }
   if (!host) { host = '127.0.0.1'; mode = 'local'; }
+  c.access = { host, mode };
 
   const announce = async () => {
-    const url = pairURL({ host, port: c.port, token: c.pairing.token, mode, name });
+    const url = pairURL({ host, port: c.port, token: c.pairing.current(), mode, name });
     console.log(`\nYzVibe 连接器 v${VERSION} · ${name} · 端口 ${c.port} · 模式 ${mode}${opts.defaultAgent === 'mock' ? ' · Mock Agent' : ''}`);
+    if (daemon) { console.log(`配对链接（10 分钟内有效，一次性；终端里运行 yzvibe qr 显示二维码）：${url}\n`); return; }
     console.log(`用手机 YzVibe App 扫描下面的二维码（10 分钟内有效，一次性）：\n`);
     await printQR(url);
     if (mode === 'local') console.log(`提示：手机需与电脑在同一 Wi-Fi；远程访问请直接运行 npx yzvibe（Cloudflare Tunnel）。`);
   };
   c.setAnnounce(announce);
   await announce();
+  saveDaemonInfo();
 
-  const shutdown = async () => { console.log('\n[yzvibe] 正在退出…'); tunnelChild?.kill(); await c.close(); process.exit(0); };
-  process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
+  const shutdown = async () => {
+    if (stopping) return; stopping = true;
+    console.log('\n[yzvibe] 正在退出…');
+    tunnelChild?.kill(); await c.close(); clearDaemonInfo(); process.exit(0);
+  };
+  process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown); process.on('SIGHUP', shutdown);
   return c;
 }

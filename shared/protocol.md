@@ -68,6 +68,10 @@ type Message = { id, sessionId, role: 'user'|'assistant'|'tool'|'system', text, 
 type Approval= { id, sessionId, deviceId, kind: 'shell'|'write'|'network'|'other', summary, detail, risk, status: 'pending'|'allowed'|'denied'|'expired', createdAt, expiresAt? }
 ```
 
+## 连接器本机内部接口（不对手机开放）
+- `POST /internal/approval`、`GET /internal/status`：只接受带 `X-YzVibe-Secret` 的本机请求，secret 每次启动随机生成，写在 `~/.yzvibe/daemon.json`（0600）。
+- `GET /internal/status` → `{ pid, name, version, port, uptime, host, mode, pairing: { token, expiresAt, url }, stats: { devices, sessions, running, pendingApprovals } }`，供 `yzvibe status / qr` 使用；配对码过期时这里会自动换新，因此连接器常驻后台也随时能配对。
+
 ## 审批在连接器内部如何实现（Claude Code）
 连接器以 `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool mcp__yzvibe__approve --mcp-config <file>` 启动 Agent。
 Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js），它 POST 到连接器 `/internal/approval` 并等待手机决定，再返回 `{behavior:"allow"|"deny"}`。
