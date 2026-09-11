@@ -47,6 +47,17 @@ struct MeView: View {
                                subtitle: "电脑上用 claude / codex 跑过的会话也能接着聊", inset: 0) {
                         Toggle("", isOn: $store.settings.showTerminalSessions).labelsHidden()
                     }
+                    if let d = store.selectedDevice, let n = store.hiddenSessionCount[d.id], n > 0 {
+                        Button {
+                            Task { await store.restoreHiddenSessions(on: d.id) }
+                        } label: {
+                            SettingRow(icon: "arrow.uturn.backward", color: p.labelSecondary, title: "恢复删除的会话",
+                                       subtitle: "这台电脑上有 \(n) 条会话被从列表里删掉了", inset: 0) {
+                                Text("恢复").font(.yzFootnoteStrong).foregroundStyle(p.brand)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
 
                 Section("Agent") {

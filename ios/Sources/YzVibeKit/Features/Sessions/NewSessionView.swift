@@ -112,7 +112,7 @@ struct NewSessionView: View {
                 if req.cwd.isEmpty { req.cwd = presetCwd ?? suggestedDirs.first ?? "" }
             }
             .onChange(of: req.agent) { _, _ in applyDefaults() }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { hideKeyboard(); dismiss() } } }
             .safeAreaInset(edge: .bottom) {
                 Button { Task { await start() } } label: {
                     if busy { ProgressView().tint(p.brandInk) } else { Label("开始会话", systemImage: "arrow.right") }
@@ -209,6 +209,8 @@ struct NewSessionView: View {
         prefs.recentDirs.insert(r.cwd, at: 0)
         prefs.recentDirs = Array(prefs.recentDirs.prefix(10))
         prefs.save()
+        // 先收键盘再关表单：否则键盘高度会被算进下一屏的安全区，聊天输入条会悬在半空
+        hideKeyboard()
         do { _ = try await store.createSession(r); dismiss() } catch { store.toast = error.localizedDescription }
         busy = false
     }

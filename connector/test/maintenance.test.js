@@ -228,3 +228,50 @@ test('实时活动 token：注册、按会话取回、失效清理', async () =>
   assert.equal(c.store.liveActivitiesFor(s.id).length, 0);
   await c.close();
 });
+
+test('删除会话：本地记录清干净，终端会话也不会被重新扫回来', async () => {
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yz-del-claude-'));
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yz-del-codex-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-del-cwd-'));
+  const proj = path.join(claudeHome, 'projects', '-tmp-del'); fs.mkdirSync(proj, { recursive: true });
+  const sid = '99999999-8888-7777-6666-555555555555';
+  fs.writeFileSync(path.join(proj, `${sid}.jsonl`), [
+    JSON.stringify({ type: 'attachment', cwd, gitBranch: 'main', entrypoint: 'cli', sessionId: sid, timestamp: '2026-09-11T10:00:00.000Z', uuid: 'y0' }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '终端里聊过的' }] }, uuid: 'y1', timestamp: '2026-09-11T10:00:01.000Z', cwd }),
+  ].join('\n') + '\n'.padEnd(200, ' '));
+
+  const { c, base, H, home, port } = await boot({ claudeHome, codexHome, importTerminal: true });
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${H.authorization.replace('Bearer ', '')}`);
+  const events = [];
+  await new Promise((r) => ws.on('open', r));
+  ws.on('message', (d) => events.push(JSON.parse(d)));
+
+  const s = await (await fetch(`${base}/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ agent: 'mock', cwd }) })).json();
+  const ids = async () => (await (await fetch(`${base}/sessions`, { headers: H })).json()).map((x) => x.id);
+  assert.ok((await ids()).includes(s.id));
+  assert.ok((await ids()).includes(`claude:${sid}`));
+
+  // 手机端删掉自己建的会话：列表、消息文件、规则都清掉，并广播出去
+  assert.equal((await fetch(`${base}/sessions/${s.id}`, { method: 'DELETE', headers: H })).status, 200);
+  assert.ok(!(await ids()).includes(s.id));
+  assert.equal(fs.existsSync(path.join(home, 'messages', `${s.id}.json`)), false);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(events.some((e) => e.type === 'session.removed' && e.sessionId === s.id));
+
+  // 终端扫出来的会话：删掉后再扫也不该回来
+  assert.equal((await fetch(`${base}/sessions/claude:${sid}`, { method: 'DELETE', headers: H })).status, 200);
+  assert.ok(!(await ids()).includes(`claude:${sid}`));
+  assert.equal((await fetch(`${base}/sessions/claude:${sid}`, { headers: H })).status, 404);
+  const sync = await (await fetch(`${base}/sync`, { headers: H })).json();
+  assert.equal(sync.hiddenSessions, 2);
+  assert.deepEqual((await (await fetch(`${base}/sessions/hidden`, { headers: H })).json()).ids.sort(), [s.id, `claude:${sid}`].sort());
+
+  // 恢复：终端会话重新出现，自己建的那条已经真删了不会回来
+  assert.equal((await (await fetch(`${base}/sessions/hidden`, { method: 'DELETE', headers: H })).json()).restored, 2);
+  const after = await ids();
+  assert.ok(after.includes(`claude:${sid}`));
+  assert.ok(!after.includes(s.id));
+
+  ws.close();
+  await c.close();
+});

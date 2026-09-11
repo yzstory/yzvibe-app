@@ -38,6 +38,10 @@ public protocol ConnectorClient: Sendable {
     func reconnect(device: Device)
     /// 发消息。Agent 正忙时按 `mode` 决定排队还是插队打断，返回是否进了队列。
     func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?)
+    /// 删除会话：连接器上的记录清掉，终端扫出来的也不会再出现（transcript 原文不动）。
+    func deleteSession(device: Device, sessionId: String) async throws
+    /// 恢复所有被删除/隐藏的会话，返回恢复条数。
+    func restoreHiddenSessions(device: Device) async throws -> Int
     /// 撤掉一条还没发出去的排队消息。
     func resumeQueue(device: Device, sessionId: String) async throws -> Session
     func cancelQueued(device: Device, sessionId: String, itemId: String) async throws
@@ -82,6 +86,7 @@ public struct HealthInfo: Codable, Sendable {
 public enum ConnectorEvent: Sendable {
     case sessionCreated(Session)
     case sessionUpdated(Session)
+    case sessionRemoved(sessionId: String)
     case sessionStatus(sessionId: String, status: SessionStatus)
     case messageDelta(sessionId: String, messageId: String, text: String)
     case messageDone(sessionId: String, messageId: String)
@@ -271,6 +276,15 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         let r = try await perform(device, "/sessions/\(sessionId)/messages", method: "POST",
                                   body: Body(text: text, attachments: attachments, mode: mode.rawValue), as: Resp.self)
         return (r.queued ?? false, r.item)
+    }
+
+    public func deleteSession(device: Device, sessionId: String) async throws {
+        _ = try await perform(device, "/sessions/\(sessionId)", method: "DELETE", as: OK.self)
+    }
+
+    public func restoreHiddenSessions(device: Device) async throws -> Int {
+        struct Resp: Decodable { var restored: Int? }
+        return try await perform(device, "/sessions/hidden", method: "DELETE", as: Resp.self).restored ?? 0
     }
 
     public func resumeQueue(device: Device, sessionId: String) async throws -> Session {
@@ -497,6 +511,9 @@ final class ConnectorSocket: @unchecked Sendable {
         case "session.created", "session.updated":
             guard let raw = obj["session"], let d = try? JSONSerialization.data(withJSONObject: raw), let s = try? JSONDecoder.yz.decode(Session.self, from: d) else { return nil }
             return type == "session.created" ? .sessionCreated(s) : .sessionUpdated(s)
+        case "session.removed":
+            guard let sid = obj["sessionId"] as? String else { return nil }
+            return .sessionRemoved(sessionId: sid)
         case "session.status":
             guard let sid = obj["sessionId"] as? String, let st = SessionStatus(rawValue: obj["status"] as? String ?? "") else { return nil }
             return .sessionStatus(sessionId: sid, status: st)
@@ -602,4 +619,6 @@ public final class TokenStore: @unchecked Sendable {
 
 public extension ConnectorClient {
     func resumeQueue(device: Device, sessionId: String) async throws -> Session { throw ConnectorError.unreachable }
+    func deleteSession(device: Device, sessionId: String) async throws {}
+    func restoreHiddenSessions(device: Device) async throws -> Int { 0 }
 }

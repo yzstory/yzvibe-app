@@ -16,6 +16,7 @@ public final class AppStore {
     public var capabilities: [String: [String: AgentCapabilities]] = [:]   // deviceId → agent → 能力
     public var rules: [String: [ApprovalRule]] = [:]                       // deviceId → 审批规则
     public var pushStatus: [String: PushStatus] = [:]                      // deviceId → 连接器的推送配置状态
+    public var hiddenSessionCount: [String: Int] = [:]                     // deviceId → 被删掉、可一键恢复的会话数
     public private(set) var pushToken: String?
     public private(set) var lastSyncAt: Date?
     /// 点开推送后要打开的会话（SessionsView 消费后清空）。
@@ -180,6 +181,7 @@ public final class AppStore {
             capabilities[device.id] = snap.agents
             pushStatus[device.id] = snap.push
             rules[device.id] = snap.rules
+            hiddenSessionCount[device.id] = snap.hiddenSessions
 
             if let health = try? await client.health(device: device), !health.endpoints.isEmpty {
                 if let i = devices.firstIndex(where: { $0.id == device.id }) {
@@ -355,6 +357,43 @@ public final class AppStore {
         return s
     }
 
+    /// 手机上删掉一个会话：本地先移除（列表立刻干净），再通知连接器别再列出来。
+    /// 删的只是 YzVibe 的记录，Claude / Codex 自己的 transcript 不动。
+    public func deleteSession(_ id: String) async {
+        guard let s = session(id) else { return }
+        let device = device(s.deviceId)
+        forgetLocally(id)
+        guard let device, !isDemo else { return }
+        do {
+            try await client.deleteSession(device: device, sessionId: id)
+            hiddenSessionCount[device.id] = (hiddenSessionCount[device.id] ?? 0) + 1
+            setDevice(device.id) { $0.sessionCount = max(0, $0.sessionCount - 1) }
+            toast = "已删除会话"
+        } catch {
+            toast = "删除失败：\(error.localizedDescription)"
+            await refresh(device)               // 删不掉就把它放回来，别让列表骗人
+        }
+    }
+
+    /// 把删掉的会话都放回来（终端扫出来的会重新出现）。
+    public func restoreHiddenSessions(on deviceId: String) async {
+        guard let d = device(deviceId) else { return }
+        do {
+            let n = try await client.restoreHiddenSessions(device: d)
+            hiddenSessionCount[d.id] = 0
+            await refresh(d)
+            toast = n > 0 ? "已恢复 \(n) 个会话" : "没有可恢复的会话"
+        } catch { toast = error.localizedDescription }
+    }
+
+    private func forgetLocally(_ id: String) {
+        sessions.removeAll { $0.id == id }
+        messages[id] = nil
+        loadedMessages.remove(id)
+        syncCursor[id] = nil
+        approvals.removeAll { $0.sessionId == id }
+    }
+
     /// 账号剩余额度；失败时返回带 error 的 QuotaInfo，由面板展示。
     public func quota(for session: Session) async -> QuotaInfo {
         guard let device = device(session.deviceId) else { return QuotaInfo(agent: session.agent.rawValue, error: "设备不在线") }
@@ -503,7 +542,7 @@ public final class AppStore {
         sessions[i].updatedAt = .now
     }
 
-    private func handle(_ ev: ConnectorEvent, device: Device) {
+    func handle(_ ev: ConnectorEvent, device: Device) {
         switch ev {
         case .sessionCreated(var s):
             s.deviceId = device.id
@@ -512,6 +551,9 @@ public final class AppStore {
         case .sessionUpdated(var s):
             s.deviceId = device.id
             if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s }
+        case .sessionRemoved(let sid):
+            forgetLocally(sid)
+            setDevice(device.id) { $0.sessionCount = max(0, $0.sessionCount - 1) }
         case .sessionStatus(let sid, let st):
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }

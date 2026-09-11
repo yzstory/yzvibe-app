@@ -4,6 +4,7 @@ import PhotosUI
 struct ChatView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
+    @Environment(\.dismiss) private var dismiss
     let sessionId: String
     @State private var draft = ""
     @State private var showFiles = false
@@ -13,6 +14,7 @@ struct ChatView: View {
     @State private var showDiff = false
     @State private var showCommands = false
     @State private var newSessionSeed: String?
+    @State private var confirmDelete = false
 
     private var session: Session? { store.session(sessionId) }
     private var subtitle: String {
@@ -64,6 +66,9 @@ struct ChatView: View {
                     if let s = session, let m = s.model {
                         Section("当前模型") { Text(store.capabilities(for: s).label(forModel: m)) }
                     }
+                    Section {
+                        Button(role: .destructive) { confirmDelete = true } label: { Label("删除会话", systemImage: "trash") }
+                    }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .accessibilityLabel("更多")
             }
@@ -77,6 +82,15 @@ struct ChatView: View {
             }
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
+        // 上一屏（新建会话表单 / 搜索框）的键盘有时会把输入条顶在半空，进来先收掉
+        .onAppear { hideKeyboard() }
+        // 会话在别处被删掉时别停在空白页
+        .onChange(of: session == nil) { _, gone in if gone { dismiss() } }
+        .confirmationDialog("删除会话", isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) { Task { await store.deleteSession(sessionId) } }
+        } message: {
+            Text("只从 YzVibe 里移除这条会话，电脑上 Claude / Codex 的记录不会被删。")
+        }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
         .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
         .sheet(isPresented: $showCommands) { CommandPaletteView(sessionId: sessionId) { run($0) } }
@@ -156,10 +170,6 @@ struct ChatView: View {
         case "model", "effort", "mode": store.toast = "在输入框上面那排胶囊里切换"
         default: store.toast = "这个命令还没实现"
         }
-    }
-
-    private func hideKeyboard() {
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {

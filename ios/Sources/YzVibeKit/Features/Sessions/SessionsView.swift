@@ -8,6 +8,7 @@ struct SessionsView: View {
     @State private var showNew = false
     @State private var collapsed: Set<String> = []
     @State private var path: [String] = []
+    @State private var pendingDelete: Session?
 
     private var list: [Session] {
         store.sessions(for: store.selectedDevice, activeOnly: store.settings.activeOnly, query: query)
@@ -43,6 +44,15 @@ struct SessionsView: View {
             }
             .sheet(isPresented: $showNew) { NewSessionView().presentationDetents([.large]) }
             .refreshable { if let d = store.selectedDevice { await store.refresh(d) } }
+            .confirmationDialog("删除会话", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { s in
+                Button("删除「\(s.title)」", role: .destructive) {
+                    let id = s.id
+                    pendingDelete = nil
+                    Task { await store.deleteSession(id) }
+                }
+            } message: { _ in
+                Text("只从 YzVibe 里移除这条会话，电脑上 Claude / Codex 的记录不会被删。可以在「我 › 会话」里恢复。")
+            }
         }
     }
 
@@ -70,6 +80,7 @@ struct SessionsView: View {
             }
         }
         .listStyle(.plain)
+        .scrollDismissesKeyboard(.immediately)
         .environment(\.defaultMinListRowHeight, 0)
     }
 
@@ -81,6 +92,7 @@ struct SessionsView: View {
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .swipeActions(edge: .trailing) {
+                Button(role: .destructive) { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
                 if s.status == .running {
                     Button { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
                         .tint(p.danger)
@@ -96,6 +108,7 @@ struct SessionsView: View {
                 if s.status == .running {
                     Button(role: .destructive) { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
                 }
+                Button(role: .destructive) { pendingDelete = s } label: { Label("删除会话", systemImage: "trash") }
             }
     }
 

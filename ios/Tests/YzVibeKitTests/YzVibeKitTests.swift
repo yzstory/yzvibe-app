@@ -644,6 +644,37 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
         XCTAssertNil(EndpointUpdate(userInfo: ["yz": ["kind": "endpoint", "endpoints": []]]))
     }
 
+    /// 删除会话：本地立刻消失；连接器删失败时要把它放回来，别让列表骗人。
+    @MainActor
+    func testDeleteSessionRemovesLocallyAndRollsBackOnFailure() async {
+        let client = QueueStubClient()
+        let store = AppStore(client: client, seedMock: false)
+        var device = MockData.macStudio; device.online = true
+        store.devices = [device]
+        store.selectedDeviceId = device.id
+        let s1 = Session(id: "s1", deviceId: device.id, agent: .claude, cwd: "/p", title: "t", status: .idle)
+        store.sessions = [s1]
+        store.messages["s1"] = [Message(sessionId: "s1", role: .user, text: "hi")]
+
+        await store.deleteSession("s1")
+        XCTAssertEqual(client.deleted, "s1")
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertNil(store.messages["s1"])
+        XCTAssertEqual(store.hiddenSessionCount[device.id], 1)
+
+        // 删失败：refresh 会把服务端还在的会话拉回来
+        client.failDelete = true
+        client.sessionsOnServer = [s1]
+        store.sessions = [s1]
+        await store.deleteSession("s1")
+        XCTAssertEqual(store.sessions.map(\.id), ["s1"])
+
+        // 连接器广播 session.removed 时本地也要跟着清掉
+        client.failDelete = false
+        store.handle(.sessionRemoved(sessionId: "s1"), device: device)
+        XCTAssertTrue(store.sessions.isEmpty)
+    }
+
     @MainActor
     func testSendQueuesWhenBusyAndCanCancel() async {
         let client = QueueStubClient()
@@ -680,6 +711,10 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     var nextQueued: QueuedMessage?
     var lastMode: SendMode?
     var cancelled: String?
+    var deleted: String?
+    var failDelete = false
+    var restored = 0
+    var sessionsOnServer: [Session] = []
 
     func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
         lastMode = mode
@@ -687,12 +722,17 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
         return (false, nil)
     }
     func cancelQueued(device: Device, sessionId: String, itemId: String) async throws { cancelled = itemId }
+    func deleteSession(device: Device, sessionId: String) async throws {
+        if failDelete { throw ConnectorError.unreachable }
+        deleted = sessionId
+    }
+    func restoreHiddenSessions(device: Device) async throws -> Int { restored }
     func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff { WorkingDiff() }
     func commands(device: Device, sessionId: String) async throws -> CommandCatalog { CommandCatalog() }
 
     func health(device: Device) async throws -> HealthInfo { HealthInfo(name: "T", version: "0", agents: []) }
     func pair(_ payload: PairingPayload) async throws -> Device { MockData.macStudio }
-    func sessions(device: Device) async throws -> [Session] { [] }
+    func sessions(device: Device) async throws -> [Session] { sessionsOnServer }
     func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }
     func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] { [] }
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}

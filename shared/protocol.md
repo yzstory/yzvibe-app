@@ -14,7 +14,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /health | 公开。`{ name, version, agents, connectorId, uptime }`；`connectorId` 是电脑的稳定 ID，手机用它作 Device.id |
 | POST | /pair | 公开。body `{ token, phoneName? }` → `{ deviceToken, deviceName, connectorId }`；token 一次性、10 分钟有效 |
 | GET | /agents | 各 Agent 的能力表：`{ claude: { modes, efforts, models, customModel }, codex: {...} }`，见下文「会话选项」 |
-| GET | /sync | 一次拿全：`{ serverTime, sessions, approvals, agents, rules, push }`。App 回到前台补数据用，省往返 |
+| GET | /sync | 一次拿全：`{ serverTime, sessions, approvals, agents, rules, push, hiddenSessions }`。App 回到前台补数据用，省往返 |
 | GET | /rules?sessionId= | 审批规则列表（带中文 `description`） |
 | POST | /rules | 手动新增一条规则 |
 | DELETE | /rules/:id | 撤销一条规则 |
@@ -31,7 +31,11 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | POST | /sessions | `{ agent, cwd, firstMessage?, continueLast?, mode?, model?, effort? }` → Session（201）；cwd 不存在 → 400。旧字段 `yolo:true` 等价 `mode:'trust'` |
 | GET | /sessions/:id | 单个会话 |
 | PATCH | /sessions/:id | `{ mode?, model?, effort? }` 改会话选项 → Session；`model`/`effort` 传 `null` 或空串恢复默认；广播 `session.updated` |
-| DELETE | /sessions/:id | 结束会话 |
+| DELETE | /sessions/:id | **删除会话**：停掉进程、清掉本地记录与消息文件，并把 id 记进隐藏表（终端扫描不会再把它列出来）。Agent 自己的 transcript 文件不动。广播 `session.removed` |
+| POST | /sessions/:id/close | 结束会话（状态置 `closed`，记录还在） |
+| GET | /sessions/hidden | `{ ids: [...] }`：被删掉、因此不再出现在列表里的会话 id |
+| DELETE | /sessions/hidden | 清空隐藏表 → `{ restored: n }`；终端会话会重新出现，手机自建的已经真删了不会回来 |
+| DELETE | /sessions/hidden/:id | 只恢复一条 → `{ restored: 0\|1 }` |
 | GET | /sessions/:id/messages?after=<messageId> | 增量消息（after 之后的） |
 | POST | /sessions/:id/messages | `{ text, attachments?, mode }` → `{ ok, queued, item? }`。`mode`：`auto`（默认，忙就排队）/ `queue` / `now`（插队并打断当前轮）|
 | POST | /sessions/:id/stop | 中断当前轮 |
@@ -62,6 +66,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 { "type": "session.created",    "session": { ...Session } }
 { "type": "session.updated",    "session": { ...Session } }   // 标题等元数据变化
 { "type": "session.status",     "sessionId": "s1", "status": "idle|running|waiting_approval|error|closed" }
+{ "type": "session.removed",    "sessionId": "s1" }            // 在某台手机上删掉了，其它端同步移除
 { "type": "message.delta",      "sessionId": "s1", "messageId": "m9", "role": "assistant", "text": "..." }
 { "type": "message.done",       "sessionId": "s1", "messageId": "m9" }
 { "type": "tool.call",          "sessionId": "s1", "messageId": "m9", "toolId": "t1", "name": "Bash", "input": {...},
@@ -197,6 +202,7 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 - 列表阶段只读文件头（最近 45 天、每种 Agent 最多 80 个文件，按 mtime 缓存）；id 形如 `claude:<sessionId>` / `codex:<threadId>`。
 - 手机第一次访问某个终端会话（取消息、发消息、改选项）时连接器**接管**它：以同一 id 入库、把 transcript 翻译成消息历史（最多 300 条，工具调用变成工具卡），之后发消息走 `--resume <sessionId>` / `codex exec resume <threadId>`，与手机自建会话无异。接管后列表里不再重复。
 - 已被本连接器创建的会话（agentSessionId 已知）不会被当成终端会话重复列出。`createConnector({ importTerminal: false })` 可关闭。
+- 在手机上删掉一个终端会话只是把它的 id 记进隐藏表（`~/.yzvibe/hidden.json`），transcript 文件本身不动；扫描时按这张表过滤，所以不会被重新扫回来。想找回来用 `DELETE /sessions/hidden`。
 - Codex 额度：`GET /quota?agent=codex` 从最近的 rollout 里的 `token_count.rate_limits` 取（5 小时 / 本周窗口），带 `warning` 说明不是实时值。
 
 

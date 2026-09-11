@@ -14,15 +14,16 @@ struct PairScannerView: View {
     @State private var error: String?
     @State private var showManual = false
     @State private var pickerItem: PhotosPickerItem?
+    @State private var cameraDenied = false
 
     var body: some View {
         ZStack {
             Color(oklch: 0.18, 0.01, 50).ignoresSafeArea()
-            CameraPreview { code in
+            CameraPreview(onCode: { code in
                 guard scanned == nil, !busy else { return }
                 if let payload = PairingPayload(text: code) { scanned = payload; Task { await pair(payload) } }
                 else { error = "这不是 YzVibe 的配对二维码" }
-            }
+            }, onDenied: { cameraDenied = true })
             .ignoresSafeArea()
 
             // 遮罩 + 取景框
@@ -53,7 +54,16 @@ struct PairScannerView: View {
                 .padding(.horizontal, 16)
                 Spacer()
                 VStack(spacing: 14) {
-                    Text(busy ? "正在配对…" : "对准终端里的二维码").font(.yzHeadline).foregroundStyle(.white.opacity(0.9))
+                    if cameraDenied {
+                        Text("没有相机权限").font(.yzHeadline).foregroundStyle(.white.opacity(0.9))
+                        Text("可以去设置里打开相机，或者用右上角相册里的二维码截图配对").font(.yzSubhead)
+                            .foregroundStyle(.white.opacity(0.6)).multilineTextAlignment(.center).padding(.horizontal, 28)
+                        Button { if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) } }
+                            label: { Label("打开设置", systemImage: "gear").foregroundStyle(.white) }
+                            .buttonStyle(.yzGlass)
+                    } else {
+                        Text(busy ? "正在配对…" : "对准终端里的二维码").font(.yzHeadline).foregroundStyle(.white.opacity(0.9))
+                    }
                     Text(error ?? "在电脑上运行下面命令后，扫一次即可完成配对").font(.yzSubhead).foregroundStyle(error == nil ? .white.opacity(0.6) : p.danger).multilineTextAlignment(.center)
                     HStack(spacing: 10) {
                         Image(systemName: "terminal").foregroundStyle(p.amber)
@@ -137,19 +147,25 @@ struct ScanLine: View {
     }
 }
 
-/// AVFoundation 相机 + 二维码识别。模拟器无相机时显示占位。
+/// AVFoundation 相机 + 二维码识别。
+/// 取相机、开输入流、startRunning 全部放后台队列：这几步在主线程上要几百毫秒，
+/// 会把「扫码」按钮按住不放（点了之后界面卡一下才弹出取景画面）。
 struct CameraPreview: UIViewRepresentable {
     var onCode: (String) -> Void
+    /// 用户拒绝过相机权限时回调，界面换成「去设置」。
+    var onDenied: () -> Void = {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode) }
+    func makeCoordinator() -> Coordinator { Coordinator(onCode: onCode, onDenied: onDenied) }
 
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
-        context.coordinator.configure(on: view)
+        context.coordinator.attach(to: view)
         return view
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: PreviewView, coordinator: Coordinator) { coordinator.stop() }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
@@ -158,31 +174,51 @@ struct CameraPreview: UIViewRepresentable {
 
     final class Coordinator: NSObject, AVCaptureMetadataOutputObjectsDelegate {
         let onCode: (String) -> Void
+        let onDenied: () -> Void
         let session = AVCaptureSession()
-        init(onCode: @escaping (String) -> Void) { self.onCode = onCode }
+        private let queue = DispatchQueue(label: "icu.yzvibe.camera")
+        private var configured = false
 
-        func configure(on view: PreviewView) {
-            guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device) else { return }
-            nonisolated(unsafe) let session = self.session
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                guard granted, let self else { return }
-                DispatchQueue.global(qos: .userInitiated).async {
-                    session.beginConfiguration()
-                    if session.canAddInput(input) { session.addInput(input) }
-                    let output = AVCaptureMetadataOutput()
-                    if session.canAddOutput(output) {
-                        session.addOutput(output)
-                        output.setMetadataObjectsDelegate(self, queue: .main)
-                        output.metadataObjectTypes = [.qr]
-                    }
-                    session.commitConfiguration()
-                    DispatchQueue.main.async {
-                        view.previewLayer.session = session
-                        view.previewLayer.videoGravity = .resizeAspectFill
-                    }
-                    session.startRunning()
+        init(onCode: @escaping (String) -> Void, onDenied: @escaping () -> Void) {
+            self.onCode = onCode; self.onDenied = onDenied
+        }
+
+        /// 预览层先挂上（此时还是黑的），相机异步开起来后画面自己填进去。
+        func attach(to view: PreviewView) {
+            view.previewLayer.session = session
+            view.previewLayer.videoGravity = .resizeAspectFill
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized:
+                queue.async { [weak self] in self?.start() }
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                    guard let self else { return }
+                    if granted { self.queue.async { self.start() } } else { DispatchQueue.main.async { self.onDenied() } }
                 }
+            default:
+                DispatchQueue.main.async { [weak self] in self?.onDenied() }
             }
+        }
+
+        private func start() {
+            if !configured {
+                guard let device = AVCaptureDevice.default(for: .video), let input = try? AVCaptureDeviceInput(device: device) else { return }
+                session.beginConfiguration()
+                if session.canAddInput(input) { session.addInput(input) }
+                let output = AVCaptureMetadataOutput()
+                if session.canAddOutput(output) {
+                    session.addOutput(output)
+                    output.setMetadataObjectsDelegate(self, queue: .main)
+                    output.metadataObjectTypes = [.qr]
+                }
+                session.commitConfiguration()
+                configured = true
+            }
+            if !session.isRunning { session.startRunning() }
+        }
+
+        func stop() {
+            queue.async { [session] in if session.isRunning { session.stopRunning() } }
         }
 
         func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput objects: [AVMetadataObject], from connection: AVCaptureConnection) {

@@ -83,11 +83,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   }
   function allSessions() {
     const list = [...store.listSessions(), ...terminalSessions().map(({ file, agentSessionId, ...rest }) => rest)];
-    return list.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    return list.filter((s) => !store.isHidden(s.id)).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
   }
   /** 按 id 取会话；是终端会话就先接管（解析 transcript 预填历史）。 */
   function resolveSession(id) {
-    const s = store.session(id); if (s || !importTerminal) return s;
+    const s = store.session(id); if (s) return s;
+    if (!importTerminal || store.isHidden(id)) return null;
     const t = scanTerminalSessions(scanOpts).find((x) => x.id === id); if (!t) return null;
     log(`[yzvibe] 接管终端会话：${t.agent} ${t.title}`);
     return store.adoptSession(t, parseTranscript(t));
@@ -301,6 +302,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           agents: await agentCapabilities(),
           rules: rules.all().map((r) => ({ ...r, description: describeRule(r) })),
           push: pusher.status(store.devices),
+          hiddenSessions: store.listHidden().length,
         });
       }
       // 审批规则
@@ -323,11 +325,30 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (body.firstMessage) { store.addMessage(s.id, { role: 'user', text: body.firstMessage }); a.send(body.firstMessage).catch(() => {}); }
         return json(res, 201, store.publicSession(s));
       }
+      // 手机上删掉的会话：连终端扫描出来的也要记住别再出现（transcript 文件本身不动）
+      if (p === '/sessions/hidden') {
+        if (req.method === 'GET') return json(res, 200, { ids: store.listHidden() });
+        if (req.method === 'DELETE') return json(res, 200, { restored: store.restoreHidden(null) });
+      }
+      if ((m = p.match(/^\/sessions\/hidden\/([^/]+)$/)) && req.method === 'DELETE') {
+        return json(res, 200, { restored: store.restoreHidden(m[1]) });
+      }
       if ((m = p.match(/^\/sessions\/([^/]+)$/))) {
+        // 删除不用先接管终端会话：直接按 id 标记隐藏即可
+        if (req.method === 'DELETE') {
+          const id = m[1];
+          agents.get(id)?.dispose(); agents.delete(id);
+          store.deleteSession(id);
+          return json(res, 200, { ok: true });
+        }
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         if (req.method === 'GET') return json(res, 200, store.publicSession(s));
         if (req.method === 'PATCH') { configureSession(s, await readJSON(req)); return json(res, 200, store.publicSession(s)); }
-        if (req.method === 'DELETE') { agents.get(s.id)?.dispose(); agents.delete(s.id); store.closeSession(s.id); return json(res, 200, { ok: true }); }
+      }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/close$/)) && req.method === 'POST') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        agents.get(s.id)?.dispose(); agents.delete(s.id); store.closeSession(s.id);
+        return json(res, 200, store.publicSession(s));
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/messages$/))) {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });

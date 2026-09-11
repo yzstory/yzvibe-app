@@ -42,6 +42,7 @@ export class Store extends EventEmitter {
       queue: (s.queue ?? []).map((q) => ({ ...q, deliveryState: q.deliveryState === 'dispatching' ? 'uncertain' : (q.deliveryState ?? 'queued') })),
       queuePaused: Boolean(s.queue?.length),
     }));
+    this.hidden = new Set(readJSON(path.join(home, 'hidden.json'), []));    // 手机上删掉的会话 id（终端会话也不再扫回来）
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.uploads = new Map();                                               // id → { path, mime, name }
@@ -216,6 +217,30 @@ export class Store extends EventEmitter {
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
     return true;
   }
+  /** 手机上「删除会话」：清掉本地记录，并记住不要再从 transcript 扫回来。transcript 原文不动。 */
+  deleteSession(id) {
+    for (const a of this.approvals.filter((x) => x.sessionId === id && x.status === 'pending')) this.resolveApproval(a.id, 'deny', 'system');
+    this.rules?.removeForSession(id);
+    this.sessions = this.sessions.filter((s) => s.id !== id);
+    this.messages.delete(id);
+    try { fs.rmSync(path.join(this.home, 'messages', `${id}.json`)); } catch {}
+    this.hidden.add(id);
+    this.#saveHidden();
+    this.#saveSessions();
+    this.emit('event', { type: 'session.removed', sessionId: id });
+    return true;
+  }
+  isHidden(id) { return this.hidden.has(id); }
+  listHidden() { return [...this.hidden]; }
+  /** 恢复：不传 id 就把隐藏列表整个清空（终端会话下次扫描会重新出现）。 */
+  restoreHidden(id = null) {
+    if (id === null) { const n = this.hidden.size; this.hidden.clear(); this.#saveHidden(); return n; }
+    const had = this.hidden.delete(id);
+    if (had) this.#saveHidden();
+    return had ? 1 : 0;
+  }
+  #saveHidden() { writeJSON(path.join(this.home, 'hidden.json'), [...this.hidden]); }
+
   /** 清理时彻底忘掉一批会话（消息文件已由 cleanup 删除）。 */
   forgetSessions(ids) {
     const set = new Set(ids);

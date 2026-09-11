@@ -781,8 +781,10 @@ public struct SyncSnapshot: Codable, Sendable {
     public var agents: [String: AgentCapabilities]
     public var rules: [ApprovalRule]
     public var push: PushStatus
+    /// 手机上删掉过、连接器不再列出的会话条数（可以在「我」里一键恢复）。
+    public var hiddenSessions: Int = 0
 
-    enum CodingKeys: String, CodingKey { case serverTime, sessions, approvals, agents, rules, push }
+    enum CodingKeys: String, CodingKey { case serverTime, sessions, approvals, agents, rules, push, hiddenSessions }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         serverTime = try c.decodeIfPresent(Date.self, forKey: .serverTime) ?? .now
@@ -791,9 +793,10 @@ public struct SyncSnapshot: Codable, Sendable {
         agents = try c.decodeIfPresent([String: AgentCapabilities].self, forKey: .agents) ?? [:]
         rules = try c.decodeIfPresent([ApprovalRule].self, forKey: .rules) ?? []
         push = try c.decodeIfPresent(PushStatus.self, forKey: .push) ?? PushStatus()
+        hiddenSessions = try c.decodeIfPresent(Int.self, forKey: .hiddenSessions) ?? 0
     }
-    public init(serverTime: Date = .now, sessions: [Session] = [], approvals: [Approval] = [], agents: [String: AgentCapabilities] = [:], rules: [ApprovalRule] = [], push: PushStatus = PushStatus()) {
-        self.serverTime = serverTime; self.sessions = sessions; self.approvals = approvals; self.agents = agents; self.rules = rules; self.push = push
+    public init(serverTime: Date = .now, sessions: [Session] = [], approvals: [Approval] = [], agents: [String: AgentCapabilities] = [:], rules: [ApprovalRule] = [], push: PushStatus = PushStatus(), hiddenSessions: Int = 0) {
+        self.serverTime = serverTime; self.sessions = sessions; self.approvals = approvals; self.agents = agents; self.rules = rules; self.push = push; self.hiddenSessions = hiddenSessions
     }
 }
 
