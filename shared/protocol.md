@@ -132,7 +132,9 @@ App 端 `PairingPayload(text:)` 四种输入通吃：深链、外链、JSON、�
           "endpoints": ["https://新地址", "http://192.168.1.5:19876"], "reason": "tunnel-reconnect" } }
 ```
 
-同一 Wi-Fi 下连接器还会用 Bonjour 广播 `_yzvibe._tcp`（TXT 带 `id=<connectorId>`）。
+同一 Wi-Fi 下连接器还会用 Bonjour 广播 `_yzvibe._tcp`（TXT 带 `id=<connectorId>`、`name=`）。
+手机在所有已知地址都不通时（回到前台重同步，或在设备页点「在同一 Wi-Fi 下找回这台电脑」）
+浏览这个服务，按 `connectorId` 认人后直接换地址；广播里没有 `id` 的旧连接器则逐个探 `/health` 核对身份。
 设备 Token 一直有效，所以只要地址找得回来就不必重新扫码。
 
 ## 锁屏 / 灵动岛实时活动

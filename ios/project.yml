@@ -40,6 +40,8 @@ targets:
         NSCameraUsageDescription: 用于扫描电脑终端里的配对二维码
         NSFaceIDUsageDescription: 用于确认高风险审批
         NSLocalNetworkUsageDescription: 用于在局域网内连接你的电脑
+        # 连接器用 dns-sd 广播 _yzvibe._tcp；隧道地址变了就靠它在同一 Wi-Fi 下找回来
+        NSBonjourServices: [_yzvibe._tcp]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         CFBundleURLTypes:

@@ -644,6 +644,42 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
         XCTAssertNil(EndpointUpdate(userInfo: ["yz": ["kind": "endpoint", "endpoints": []]]))
     }
 
+    /// 隧道换地址后在局域网里找回同一台电脑：认 connectorId，认不出来的（老连接器没广播 id）探 /health 验身份。
+    @MainActor
+    func testReconnectViaLANMatchesTheSameConnector() async {
+        let client = QueueStubClient()
+        let store = AppStore(client: client, seedMock: false)
+        var device = Device(id: "c1", name: "Mac", host: "https://old-tunnel.trycloudflare.com", port: 443, mode: .tunnel)
+        device.online = false
+        store.devices = [device]
+        store.selectedDeviceId = device.id
+
+        // 广播里带了 id：直接换地址
+        store.lanDiscovery = { _ in [DiscoveredConnector(connectorId: "c1", name: "Mac", base: "http://192.168.1.9:19876")] }
+        var ok = await store.reconnectViaLAN(device)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.device("c1")?.host, "192.168.1.9")
+        XCTAssertEqual(store.device("c1")?.port, 19876)
+
+        // 广播里没有 id：探 /health，id 对不上的那台要跳过
+        store.devices = [device]
+        client.healthByBase = ["http://192.168.1.7:19876": HealthInfo(name: "别人的 Mac", version: "1", agents: [], connectorId: "c2"),
+                               "http://192.168.1.8:19876": HealthInfo(name: "Mac", version: "1", agents: [], connectorId: "c1")]
+        store.lanDiscovery = { _ in [DiscoveredConnector(connectorId: nil, name: "A", base: "http://192.168.1.7:19876"),
+                                     DiscoveredConnector(connectorId: nil, name: "B", base: "http://192.168.1.8:19876")] }
+        ok = await store.reconnectViaLAN(device)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(store.device("c1")?.host, "192.168.1.8")
+
+        // 一台都对不上：不动原来的地址
+        store.devices = [device]
+        client.healthByBase = [:]
+        store.lanDiscovery = { _ in [DiscoveredConnector(connectorId: "other", name: "X", base: "http://192.168.1.5:19876")] }
+        ok = await store.reconnectViaLAN(device)
+        XCTAssertFalse(ok)
+        XCTAssertEqual(store.device("c1")?.host, "https://old-tunnel.trycloudflare.com")
+    }
+
     /// 删除会话：本地立刻消失；连接器删失败时要把它放回来，别让列表骗人。
     @MainActor
     func testDeleteSessionRemovesLocallyAndRollsBackOnFailure() async {
@@ -715,6 +751,9 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     var failDelete = false
     var restored = 0
     var sessionsOnServer: [Session] = []
+    /// base URL → 该地址上连接器的身份；用来模拟「局域网里探到的是不是那台电脑」
+    var healthByBase: [String: HealthInfo] = [:]
+    var probedBases: [String] = []
 
     func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
         lastMode = mode
@@ -730,7 +769,12 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     func diff(device: Device, sessionId: String, scope: String) async throws -> WorkingDiff { WorkingDiff() }
     func commands(device: Device, sessionId: String) async throws -> CommandCatalog { CommandCatalog() }
 
-    func health(device: Device) async throws -> HealthInfo { HealthInfo(name: "T", version: "0", agents: []) }
+    func health(device: Device) async throws -> HealthInfo {
+        let base = device.host.contains("://") ? device.host : "http://\(device.host):\(device.port)"
+        probedBases.append(base)
+        guard let h = healthByBase[base] else { throw ConnectorError.unreachable }
+        return h
+    }
     func pair(_ payload: PairingPayload) async throws -> Device { MockData.macStudio }
     func sessions(device: Device) async throws -> [Session] { sessionsOnServer }
     func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }

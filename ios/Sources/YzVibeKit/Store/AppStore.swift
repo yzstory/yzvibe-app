@@ -34,6 +34,8 @@ public final class AppStore {
     /// 每个会话「服务端已确认的最后一条消息」，断线重连后从这里往后补。
     private var syncCursor: [String: String] = [:]
     private var syncing = false
+    /// 局域网发现（测试里换成假的）。
+    public var lanDiscovery: @Sendable (TimeInterval) async -> [DiscoveredConnector] = { await LANDiscovery.shared.discover(timeout: $0) }
 
     public init(client: any ConnectorClient = MockConnectorClient(), seedMock: Bool = true) {
         self.client = client
@@ -171,6 +173,8 @@ public final class AppStore {
             client.reconnect(device: d)
             subscribe(d)
             await syncDevice(d)
+            // 所有已知地址都不通：多半是隧道换了地址，去局域网里找一找
+            if device(d.id)?.online == false { await reconnectViaLAN(d) }
         }
         lastSyncAt = .now
     }
@@ -489,6 +493,33 @@ public final class AppStore {
     // MARK: 地址变化
 
     /// 换用一个新的连接地址（故障转移探到的，或电脑通过静默推送下发的）。
+    /// 连不上了就在局域网里把这台电脑找回来。
+    ///
+    /// 临时隧道每次重开都是新地址，没配推送时连接器没法主动告诉手机；但只要还在同一个 Wi-Fi，
+    /// 它就在广播 `_yzvibe._tcp`。按 connectorId 认人，认准了直接换地址，不用重新扫码。
+    @discardableResult
+    public func reconnectViaLAN(_ device: Device, quiet: Bool = true) async -> Bool {
+        guard !isDemo else { return false }
+        let found = await lanDiscovery(3)
+        var base = found.first { $0.connectorId == device.id }?.base
+        if base == nil {
+            // 老连接器的广播里没有 id，只能挨个探 /health 验明正身
+            for f in found where f.connectorId == nil {
+                var probe = device; probe.adopt(base: f.base)
+                guard let h = try? await client.health(device: probe) else { continue }
+                if h.connectorId == device.id || (h.connectorId == nil && h.name == device.name) { base = f.base; break }
+            }
+        }
+        guard let base else {
+            if !quiet { toast = found.isEmpty ? "同一个 Wi-Fi 下没找到这台电脑" : "找到了别的电脑，但不是这一台" }
+            return false
+        }
+        adoptEndpoint(device.id, base: base)
+        if let fresh = self.device(device.id) { await syncDevice(fresh) }
+        if !quiet { toast = "已切到局域网地址 \(base)" }
+        return true
+    }
+
     public func adoptEndpoint(_ deviceId: String, base: String, endpoints: [String]? = nil) {
         guard let i = devices.firstIndex(where: { $0.id == deviceId }) else { return }
         if let endpoints { for e in endpoints.reversed() where !devices[i].endpoints.contains(e) { devices[i].endpoints.insert(e, at: 0) } }

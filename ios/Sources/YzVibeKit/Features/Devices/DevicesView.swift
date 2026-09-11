@@ -34,7 +34,20 @@ struct DevicesView: View {
                             }
                             .contextMenu {
                                 Button { Task { await store.refresh(device) } } label: { Label("刷新", systemImage: "arrow.clockwise") }
+                                Button { Task { await store.reconnectViaLAN(device, quiet: false) } } label: { Label("在局域网里找", systemImage: "wifi") }
                                 Button(role: .destructive) { store.remove(device) } label: { Label("移除设备", systemImage: "trash") }
+                            }
+                            // 隧道地址变了就连不上；同一个 Wi-Fi 下不用重扫码，找一下就行
+                            if !device.online {
+                                Button { Task { await store.reconnectViaLAN(device, quiet: false) } } label: {
+                                    Label("连不上？在同一 Wi-Fi 下找回这台电脑", systemImage: "wifi")
+                                        .font(.yzFootnoteStrong).foregroundStyle(p.brand)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowInsets(EdgeInsets(top: 0, leading: Spacing.page + 14, bottom: 10, trailing: Spacing.page))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
                             }
                         }
                     } footer: {
