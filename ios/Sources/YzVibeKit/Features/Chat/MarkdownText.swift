@@ -11,7 +11,7 @@ struct MarkdownText: View {
     var onCopy: ((String) -> Void)?
     var sessionId: String? = nil
 
-    private enum Block { case code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String) }
+    private enum Block { case code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String), table(MarkdownTable) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -33,6 +33,8 @@ struct MarkdownText: View {
                     }
                 case .paragraph(let t):
                     inline(t)
+                case .table(let table):
+                    tableView(table)
                 case .image(let title, let path):
                     if let sessionId { ReplyImage(title: title, path: path, sessionId: sessionId).id(path) }
                 }
@@ -46,6 +48,34 @@ struct MarkdownText: View {
             onOpenFile?(path)
             return .handled
         })
+    }
+
+    @ScaledMetric(relativeTo: .callout) private var tableColumnWidth = 180.0
+
+    private func tableView(_ table: MarkdownTable) -> some View {
+        ScrollView(.horizontal) {
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                ForEach(Array(([table.header] + table.rows).enumerated()), id: \.offset) { rowIndex, row in
+                    GridRow {
+                        ForEach(table.header.indices, id: \.self) { column in
+                            inline(row[column])
+                                .fontWeight(rowIndex == 0 ? .semibold : .regular)
+                                .multilineTextAlignment(table.alignments[column].textAlignment)
+                                .frame(width: tableColumnWidth, alignment: table.alignments[column].frameAlignment)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(12)
+                                .frame(maxHeight: .infinity, alignment: .top)
+                                .background(rowIndex == 0 ? p.fill : (rowIndex.isMultiple(of: 2) ? p.fill.opacity(0.35) : Color.clear))
+                                .overlay(Rectangle().stroke(p.border, lineWidth: 0.5))
+                        }
+                    }
+                }
+            }
+            .padding(1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.border, lineWidth: 0.5))
+        .accessibilityHint("可左右滑动查看所有列")
     }
 
     private func inline(_ s: String) -> Text {
@@ -77,7 +107,11 @@ struct MarkdownText: View {
         var code: [String]? = nil
         var lang: String? = nil
         func flush() { if !para.isEmpty { out.append(.paragraph(para.joined(separator: "\n"))); para = [] } }
-        for raw in text.components(separatedBy: "\n") {
+        let lines = text.components(separatedBy: "\n")
+        var index = 0
+        while index < lines.count {
+            let raw = lines[index]
+            index += 1
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("```") {
                 if let c = code { out.append(.code(c.joined(separator: "\n"), lang)); code = nil; lang = nil }
@@ -86,6 +120,12 @@ struct MarkdownText: View {
             }
             if code != nil { code!.append(raw); continue }
             if line.isEmpty { flush(); continue }
+            if let parsed = MarkdownTable.parse(lines, startingAt: index - 1) {
+                flush()
+                out.append(.table(parsed.table))
+                index = parsed.nextIndex
+                continue
+            }
             if sessionId != nil {
                 let parts = MessageImageLinks.parts(line)
                 if parts.contains(where: { if case .image = $0 { return true }; return false }) {
