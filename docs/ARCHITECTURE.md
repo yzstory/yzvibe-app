@@ -115,3 +115,5 @@ Live Activity 已通过 WidgetKit 扩展和 `SessionActivity.swift` 接入，连
 ## 可靠投递与交付记录
 
 Connector 0.1.1 新增 `requests.js` 接收限额与字段验证、`diagnostics.js` 脱敏诊断；Store 将投递接收记录和队列原子保存，并用追加日志恢复流式文本。iOS `AppStoreDelivery.swift` 管理磁盘待发送箱、接收对账和交付记录，WS 快照与增量共用有序通道。详见 [协议补充](../shared/protocol.md#connector-011可靠投递恢复与诊断) 和 [build 11](RELEASE-0.1.0-11.md)。
+
+iOS build 12 的 `AppStoreConnections.swift` 在目标地址身份与 Token 验证成功后提交切换；HTTP 地址版本避免旧故障转移覆盖新选择。`TaskRun` 读取已有消息关联，交付卡放回其所属轮次。详见 [build 12](RELEASE-0.1.0-12.md)。

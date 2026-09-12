@@ -13,9 +13,12 @@
 
 - 连接器 87 项测试通过，新增 HTTP / WebSocket Token 缺失、错误、跨地址使用、持久化及撤销回归。
 - iOS 模拟器 101 项测试通过（53 XCTest + 48 Swift Testing），新增精确地址认证、失败回滚、旧请求竞态、WS 请求头，以及连续轮次交付卡归属回归。
-- App / Widget build 12 Release 真机归档成功，版本与构建号均为 0.1.0 (12)。TestFlight 上传回执将在发布完成后补充。
+- App / Widget build 12 Release 真机归档成功，版本与构建号均为 0.1.0 (12)。源码提交 `f001c51` 已 push 到 `origin/main`。
+- [GitHub Actions #34688562856](https://github.com/yzstory/yzvibe-app/actions/runs/34688562856)：Node 20、Node 22、iOS 单元测试与完整 App / Widget 编译全部通过。
 - 本轮未进行真机手动切换与页面操作验证；连接器测试使用隔离的临时实例，不中断当前运行中的任务。
 
 ## 内部测试
 
 使用 `ios/scripts/ExportOptions-TestFlight.plist`，设置 `testFlightInternalTestingOnly = true`，上传至 [App Store Connect / TestFlight](https://appstoreconnect.apple.com/apps/6811265232/testflight/ios)。上传成功与 Apple 处理完成、内部测试组可安装是不同状态，以实际回执为准。
+
+2026-09-12 18:29:11（Asia/Shanghai）首次上传在账号检查阶段失败：`Failed to Use Accounts`。当前 Xcode Apple Accounts 列表为空，尚未上传 build 12。已打开归档并请用户重新登录原开发者账号，登录后复用 `ios/build/YzVibe-build12.xcarchive` 继续上传，不需要重新构建。
