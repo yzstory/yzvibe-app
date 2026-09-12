@@ -25,7 +25,8 @@
 
 - 连接器：84 项测试通过，覆盖并发重复投递、接收记录写盘失败、附件不完整、重启恢复、旧日志回放、前台 WS 重连、终端会话快照与过大请求。
 - iOS：iPhone 17 Pro / iOS 26.5 模拟器，91 项测试通过（53 XCTest + 38 Swift Testing），包括待发送箱、图片失败、响应丢失对账、App 重启、工具证据字段与有序快照恢复。
-- 完整 App 与 Widget：Release 真机归档成功，版本 0.1.0，构建号 11。
+- 完整 App 与 Widget：Release 真机归档与模拟器构建成功，版本 0.1.0，构建号 11。
+- [GitHub Actions #34684150559](https://github.com/yzstory/yzvibe-app/actions/runs/34684150559)：Node 20、Node 22 与 iOS 编译/测试全部通过，对应实现提交 `82fa16d`。
 - 真机断网、真实 Agent 计费请求、APNs 实际送达、多手机通知和大规模长历史性能未在本轮自动化测试中验证。
 
 ## 内部测试上传
@@ -40,3 +41,9 @@ xcodebuild -exportArchive -archivePath ios/build/YzVibe-build11.xcarchive \
 ```
 
 配置固定构建号，并设置 `testFlightInternalTestingOnly = true`。上传回执与处理状态以 App Store Connect 为准。
+
+### 上传回执
+
+2026-09-12 16:49:54（Asia/Shanghai），Xcode 确认 `Upload succeeded` / `EXPORT SUCCEEDED`；App ID `6811265232`，版本 `0.1.0`，构建号 `11`，上传错误列表为空，包已进入 Apple 处理。
+
+[App Store Connect / TestFlight](https://appstoreconnect.apple.com/apps/6811265232/testflight/ios)。受 macOS 辅助功能与屏幕录制授权未完成影响，本轮未能通过网页核验处理完成和内部测试组可安装状态；不将上传成功等同于已可安装。

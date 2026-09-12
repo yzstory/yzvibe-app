@@ -1,6 +1,11 @@
 # 进度日志
 
-## 会话 6 — 2026-09-12：实现与发布（进行中）
+## 会话 6 — 2026-09-12：实现与发布（上传成功，处理/内测组待核验）
+- 32 个文件改动已提交为 82fa16d 并 push 到 origin/main。
+- build 11 于 16:49:54 成功上传 App Store Connect（App ID 6811265232），内部测试专用，无上传错误，进入 Apple 处理。
+- 完整 App/Widget 模拟器构建通过；本机诊断实际读取 Claude/Codex 版本及已登录状态，未调用模型。
+- UI 阻塞原因已确认：Computer Use 的辅助功能与屏幕录制授权未完成；无法核验网页上的处理完成/内测组可安装状态。
+- GitHub Actions #34684150559 全部通过：Node 20、Node 22、iOS 单元测试、完整 App/Widget 编译。
 - 最终后端 84/84、iOS 91/91 测试通过；App 与 Widget build 11 Release 归档成功。新增可复用内部测试 ExportOptions，更新协议和能力说明。
 - 网页/原生 UI 控制工具三次超时，页面验证暂不可用；沿用本机成功上传过 build 10 的 Xcode 账号完成后续发布。
 - 发送恢复、持久化、快照同步和两项扩展已完成；首轮 iOS 模拟器 90 项测试全通过（53 XCTest + 37 Swift Testing），后端首轮 82 项全通过。
