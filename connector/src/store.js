@@ -136,6 +136,7 @@ export class Store extends EventEmitter {
   listSessions() { return this.sessions.map((s) => this.publicSession(s)); }
   setStatus(id, status) {
     const s = this.session(id); if (!s) return;
+    if (status === 'running' && !['running', 'waiting_approval'].includes(s.status)) s.runStartedAt = new Date().toISOString();
     s.status = status; s.updatedAt = new Date().toISOString();
     this.#saveSessions();
     this.emit('event', { type: 'session.status', sessionId: id, status });

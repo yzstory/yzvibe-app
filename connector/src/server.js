@@ -1,3 +1,4 @@
+import { activityOverview } from './activity-overview.js';
 // YzVibe 连接器：HTTP REST + WebSocket（协议见 shared/protocol.md）
 import http from 'node:http';
 import os from 'node:os';
@@ -105,8 +106,21 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   const phoneOnline = () => [...sockets].some((w) => w.readyState === WebSocket.OPEN);
   const pendingCount = () => store.listApprovals('pending').length;
   const RISK_LABEL = { high: '高风险', medium: '中风险', low: '低风险' };
+  let overviewTimer = null;
+  async function pushOverview() {
+    const targets = store.liveActivitiesFor(`overview:${store.connector.id}`);
+    if (!pusher.ready || !targets.length) return;
+    const state = activityOverview(store.sessions);
+    const idle = state.totalTasks === 0;
+    await pusher.sendLiveActivity(targets, { state, event: idle ? 'end' : 'update', dismissSeconds: idle ? 15 : 0 });
+    if (idle) for (const target of targets) store.dropLiveActivity(target.token);
+  }
   store.on('event', (ev) => {
     if (!pusher.ready) return;
+    if (['session.status', 'session.updated', 'session.created', 'session.removed', 'approval.resolved'].includes(ev.type) && !overviewTimer) {
+      overviewTimer = setTimeout(() => { overviewTimer = null; void pushOverview().catch(() => {}); }, 1200);
+      overviewTimer.unref?.();
+    }
     try {
       if (ev.type === 'approval.requested') {
         const s = store.session(ev.sessionId);
@@ -290,7 +304,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (!sessionId || !/^[0-9a-fA-F]{40,200}$/.test(String(token ?? ''))) return json(res, 400, { error: '参数不合法' });
         store.setLiveActivity(authDevice.id, sessionId, { token, environment });
         log(`[yzvibe] ${authDevice.name} 为会话 ${String(sessionId).slice(0, 8)} 开了实时活动`);
-        pushLiveActivity(sessionId).catch(() => {});
+        if (sessionId === `overview:${store.connector.id}`) pushOverview().catch(() => {});
+        else pushLiveActivity(sessionId).catch(() => {});
         return json(res, 200, { ok: true });
       }
       // 一次性把会话 / 待审批 / 能力表 / 规则拿全：App 回到前台补数据用，省往返
@@ -549,7 +564,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     endpoints: () => collectEndpoints({ host: api.access.host, port: api.port, mode: api.access.mode }),
     listen: listenWithFallback,
     rules, pusher,
-    close: () => new Promise((resolve) => { closing = true; stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
+    close: () => new Promise((resolve) => { closing = true; clearTimeout(overviewTimer); stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
   return api;

@@ -6,6 +6,8 @@ public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .sessions
     @State private var pairingFromLink = false
+    @AppStorage("yz.didWelcomePomelo") private var didWelcome = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -42,6 +44,15 @@ public struct RootTabView: View {
             .environment(store)
             .preferredColorScheme(appearance.colorScheme)
             .overlay(alignment: .top) { ToastView(text: $store.toast) }
+            .overlay {
+                if !didWelcome {
+                    PomeloWelcomeView {
+                        withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.2)) { didWelcome = true }
+                    }.transition(.opacity)
+                }
+            }
+            .onChange(of: store.selectedDeviceId) { _, _ in store.syncLiveActivity("") }
+            .onChange(of: store.settings.liveActivity) { _, _ in store.syncLiveActivity("") }
             .overlay { if pairingFromLink { pairingOverlay } }
             // 手机浏览器打开连接器的 /pair 外链后，落地页跳到 yzvibe://pair?… 唤起这里
             .onOpenURL { url in Task { await handle(url) } }
@@ -82,6 +93,16 @@ public struct RootTabView: View {
 
     /// 处理 `yzvibe://pair?…` 深链：直接配对并跳到设备页。
     private func handle(_ url: URL) async {
+        if url.scheme == "yzvibe", ["tasks", "session"].contains(url.host ?? "") {
+            didWelcome = true
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let id = items.first(where: { $0.name == "device" })?.value, store.device(id) != nil { store.selectedDeviceId = id }
+            tab = .sessions
+            if url.host == "tasks" { store.settings.activeOnly = true }
+            await store.resync()
+            if let id = items.first(where: { $0.name == "id" })?.value { store.openSessionRequest = id }
+            return
+        }
         guard let payload = PairingPayload(text: url.absoluteString) else {
             store.toast = "这不是有效的 YzVibe 配对链接"
             return

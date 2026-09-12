@@ -91,6 +91,17 @@ struct ChatView: View {
                 }
             }
         }
+        .overlay {
+            if store.loadingMessages.contains(sessionId), messages.isEmpty {
+                PomeloLoadingView(title: "正在取回会话…")
+            } else if let error = store.messageLoadErrors[sessionId], messages.isEmpty {
+                ContentUnavailableView {
+                    Label("暂时没能载入会话", systemImage: "wifi.exclamationmark")
+                } description: { Text(error) } actions: {
+                    Button("重新加载") { Task { await store.loadMessages(sessionId) } }
+                }
+            }
+        }
         .navigationTitle(session?.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -124,7 +135,6 @@ struct ChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom) { composer }
-        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
@@ -165,6 +175,12 @@ struct ChatView: View {
     @ViewBuilder
     private var messageList: some View {
         LazyVStack(spacing: 14) {
+            if store.loadingMessages.contains(sessionId), !messages.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在同步历史…").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                }
+            }
             ForEach(messages) { m in
                 MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
             }

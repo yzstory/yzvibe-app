@@ -8,95 +8,121 @@ struct YzVibeWidgetsBundle: WidgetBundle {
     var body: some Widget { SessionLiveActivity() }
 }
 
-/// 锁屏 / 灵动岛上的会话状态：在跑什么、要不要你批、排了几条。
+private let orange = Color(red: 1, green: 0.58, blue: 0.28)
+
 struct SessionLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SessionActivityAttributes.self) { context in
-            LockScreenView(context: context)
-                .activityBackgroundTint(Color(red: 0.13, green: 0.12, blue: 0.11))
-                .activitySystemActionForegroundColor(.white)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    BrandLogo(size: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(context.state.headline).font(.subheadline.bold())
+                        Text(context.attributes.deviceName).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    RunningSignal(state: context.state, stale: context.isStale)
+                }
+                TaskRows(context: context)
+            }
+            .padding(14)
+            .activityBackgroundTint(Color(red: 0.075, green: 0.07, blue: 0.065))
+            .activitySystemActionForegroundColor(.white)
+            .widgetURL(overviewURL(context.attributes))
         } dynamicIsland: { context in
             DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    HStack(spacing: 6) {
-                        BrandLogo(size: 24)
-                        Text(context.attributes.agent)
-                    }
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                DynamicIslandExpandedRegion(.leading) { BrandLogo(size: 26) }
                 DynamicIslandExpandedRegion(.trailing) {
-                    StatusPill(state: context.state)
+                    RunningSignal(state: context.state, stale: context.isStale)
                 }
                 DynamicIslandExpandedRegion(.center) {
-                    Text(context.attributes.title).font(.headline).lineLimit(1)
+                    Text(context.isStale ? "等待电脑同步" : context.state.headline)
+                        .font(.subheadline.bold()).lineLimit(1).contentTransition(.numericText())
                 }
-                DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(context.state.headline).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                        FooterLine(context: context)
+                DynamicIslandExpandedRegion(.bottom) { TaskRows(context: context).padding(.top, 4) }
+            } compactLeading: {
+                HStack(spacing: 4) {
+                    BrandLogo(size: 22)
+                    if let count = context.state.totalTasks, count > 1 {
+                        Text("\(count)").font(.caption2.bold()).foregroundStyle(orange).contentTransition(.numericText())
                     }
                 }
-            } compactLeading: {
-                BrandLogo(size: 22)
             } compactTrailing: {
-                if context.state.needsApproval {
-                    Text("\(max(1, context.state.pendingApprovals))").font(.caption2).bold().foregroundStyle(tint(context.state))
-                } else if context.state.isRunning {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: context.state.symbol).foregroundStyle(tint(context.state))
-                }
+                RunningSignal(state: context.state, stale: context.isStale).frame(maxWidth: 58)
             } minimal: {
-                BrandLogo(size: 22)
-                    .accessibilityValue(context.state.shortStatus)
+                ZStack(alignment: .bottomTrailing) {
+                    BrandLogo(size: 22)
+                    Circle().fill(context.state.needsApproval ? .red : orange).frame(width: 6, height: 6)
+                }.accessibilityLabel(context.state.headline)
             }
-            .keylineTint(tint(context.state))
+            .widgetURL(overviewURL(context.attributes))
+            .keylineTint(orange)
         }
-    }
-
-    private func tint(_ s: SessionActivityAttributes.ContentState) -> Color {
-        s.needsApproval ? Color(red: 0.85, green: 0.33, blue: 0.27) : s.isRunning ? Color(red: 0.90, green: 0.72, blue: 0.35) : Color(red: 0.40, green: 0.66, blue: 0.55)
     }
 }
 
-private struct StatusPill: View {
+/// ActivityKit owns timer refresh and update animations; no repeatForever or artificial progress.
+private struct RunningSignal: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let state: SessionActivityAttributes.ContentState
+    let stale: Bool
     var body: some View {
-        Text(state.shortStatus)
-            .font(.caption2).bold()
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(.white.opacity(0.14)))
-    }
-}
-
-private struct FooterLine: View {
-    let context: ActivityViewContext<SessionActivityAttributes>
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(context.attributes.folder).font(.caption2).monospaced().lineLimit(1).truncationMode(.head)
-            Spacer(minLength: 4)
-            if context.state.queued > 0 { Label("\(context.state.queued)", systemImage: "clock").font(.caption2) }
-            if let c = context.state.contextPercent { Text("上下文 \(c)%").font(.caption2) }
-        }
-        .foregroundStyle(.tertiary)
-    }
-}
-
-private struct LockScreenView: View {
-    let context: ActivityViewContext<SessionActivityAttributes>
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            BrandLogo(size: 34)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(context.attributes.title).font(.headline).lineLimit(1)
-                    Spacer()
-                    StatusPill(state: context.state)
-                }
-                Text(context.state.headline).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
-                FooterLine(context: context)
+        Group {
+            if stale {
+                Image(systemName: "wifi.exclamationmark").accessibilityLabel("等待同步")
+            } else if state.needsApproval {
+                Label("\(max(1, state.pendingApprovals))", systemImage: "exclamationmark.shield.fill")
+                    .contentTransition(.numericText())
+            } else if let start = state.startedAt, state.isRunning {
+                Text(start, style: .timer).monospacedDigit().contentTransition(.numericText(countsDown: false))
+                    .accessibilityLabel("任务运行时间")
+            } else {
+                Image(systemName: state.isRunning ? "waveform" : "checkmark.circle.fill")
+                    .symbolEffect(.pulse, options: .nonRepeating, value: reduceMotion ? nil : state.updatedAt)
             }
         }
-        .padding(14)
+        .font(.caption2.bold()).foregroundStyle(state.needsApproval ? .red : orange)
+        .lineLimit(1).minimumScaleFactor(0.7)
     }
+}
+
+private struct TaskRows: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let context: ActivityViewContext<SessionActivityAttributes>
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let tasks = context.state.tasks {
+                ForEach(tasks.prefix(3)) { task in
+                    Link(destination: sessionURL(task.id, context.attributes)) {
+                        HStack(spacing: 8) {
+                            Image(systemName: task.status == "waiting_approval" ? "exclamationmark.shield.fill" : "waveform")
+                                .foregroundStyle(task.status == "waiting_approval" ? .red : orange).frame(width: 18)
+                                .symbolEffect(.pulse, options: .nonRepeating, value: reduceMotion ? nil : context.state.updatedAt)
+                            Text(task.title).font(.caption.weight(.medium)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(task.status == "waiting_approval" ? "待批准" : task.agent)
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }.frame(minHeight: 25).contentShape(Rectangle())
+                    }.tint(.white)
+                }
+                let remaining = max(0, (context.state.totalTasks ?? tasks.count) - 3)
+                if remaining > 0 {
+                    Text("还有 \(remaining) 个 · 轻点查看全部").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(context.attributes.title).font(.subheadline).lineLimit(1)
+                Text(context.state.headline).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+    }
+}
+
+private func overviewURL(_ attributes: SessionActivityAttributes) -> URL {
+    var c = URLComponents(); c.scheme = "yzvibe"; c.host = "tasks"
+    c.queryItems = [URLQueryItem(name: "device", value: attributes.sessionId.hasPrefix("overview:") ? String(attributes.sessionId.dropFirst(9)) : nil)]
+    return c.url!
+}
+private func sessionURL(_ id: String, _ attributes: SessionActivityAttributes) -> URL {
+    var c = URLComponents(url: overviewURL(attributes), resolvingAgainstBaseURL: false)!
+    c.host = "session"; c.queryItems?.append(URLQueryItem(name: "id", value: id)); return c.url!
 }

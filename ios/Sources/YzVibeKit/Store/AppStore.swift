@@ -32,6 +32,9 @@ public final class AppStore {
     private let persistence = DevicePersistence()
     private var eventTasks: [String: Task<Void, Never>] = [:]
     private var loadedMessages: Set<String> = []
+    public private(set) var loadingMessages: Set<String> = []
+    public private(set) var messageLoadErrors: [String: String] = [:]
+    public private(set) var loadingDevices: Set<String> = []
     /// 每个会话「服务端已确认的最后一条消息」，断线重连后从这里往后补。
     private var syncCursor: [String: String] = [:]
     private var syncing = false
@@ -149,6 +152,8 @@ public final class AppStore {
 
     /// 拉取会话 + 待审批，并刷新在线状态与计数。
     public func refresh(_ device: Device) async {
+        guard loadingDevices.insert(device.id).inserted else { return }
+        defer { loadingDevices.remove(device.id) }
         do {
             let fresh = try await client.sessions(device: device).map { var s = $0; s.deviceId = device.id; return s }
             sessions.removeAll { $0.deviceId == device.id }
@@ -186,9 +191,12 @@ public final class AppStore {
             if device(d.id)?.online == false { await reconnectViaLAN(d) }
         }
         lastSyncAt = .now
+        syncLiveActivity("")
     }
 
     private func syncDevice(_ device: Device) async {
+        guard loadingDevices.insert(device.id).inserted else { return }
+        defer { loadingDevices.remove(device.id) }
         do {
             let snap = try await client.sync(device: device)
             capabilities[device.id] = snap.agents
@@ -273,25 +281,23 @@ public final class AppStore {
                 await self.resync()
             }
         }
-        await PushCenter.shared.start()
+        async let registerNotifications: Void = PushCenter.shared.start()
         for d in devices { subscribe(d) }
         await resync()
+        await registerNotifications
     }
 
     // MARK: 锁屏 / 灵动岛实时活动
 
     /// 把会话状态同步到实时活动上。活动的推送 token 交给电脑后，锁屏时也会持续更新。
     public func syncLiveActivity(_ sessionId: String) {
-        guard !isDemo, settings.liveActivity else { return }
-        guard #available(iOS 16.2, *), let s = session(sessionId) else { return }
-        let device = device(s.deviceId)
-        let attrs = SessionActivityAttributes(sessionId: s.id, title: s.title, agent: s.agent.displayName,
-                                              folder: s.folderName, deviceName: device?.name ?? "电脑")
-        let pending = approvals.filter { $0.sessionId == s.id && $0.status == .pending }.count
-        let state = SessionActivityAttributes.ContentState(
-            status: s.status.rawValue, headline: headline(for: s, pending: pending),
-            pendingApprovals: pending, queued: s.queue.count,
-            contextPercent: s.usage?.turn.contextFraction.map { Int(($0 * 100).rounded()) })
+        guard !isDemo else { return }
+        guard settings.liveActivity, let device = selectedDevice else {
+            Task { await SessionActivityCenter.stopAll() }; return
+        }
+        let attrs = SessionActivityAttributes(sessionId: "overview:\(device.id)", title: "YzVibe", agent: "YzVibe",
+                                              folder: "进行中的任务", deviceName: device.name)
+        let state = SessionActivityAttributes.ContentState.overview(sessions.filter { $0.deviceId == device.id })
         Task { @MainActor in
             SessionActivityCenter.onPushToken = { [weak self] sid, token in
                 Task { @MainActor in await self?.registerLiveActivity(sessionId: sid, token: token) }
@@ -313,7 +319,8 @@ public final class AppStore {
     }
 
     private func registerLiveActivity(sessionId: String, token: String) async {
-        guard let s = session(sessionId), let d = device(s.deviceId) else { return }
+        let deviceId = sessionId.hasPrefix("overview:") ? String(sessionId.dropFirst(9)) : session(sessionId)?.deviceId
+        guard let deviceId, let d = device(deviceId) else { return }
         try? await client.registerLiveActivity(device: d, sessionId: sessionId, token: token)
     }
 
@@ -349,14 +356,16 @@ public final class AppStore {
     // MARK: 会话与消息
 
     public func loadMessages(_ sessionId: String) async {
-        guard !loadedMessages.contains(sessionId), let s = session(sessionId), let device = device(s.deviceId) else { return }
+        guard !loadedMessages.contains(sessionId), let s = session(sessionId), let device = device(s.deviceId), loadingMessages.insert(sessionId).inserted else { return }
+        messageLoadErrors[sessionId] = nil
+        defer { loadingMessages.remove(sessionId) }
         do {
             var list = try await client.messages(device: device, sessionId: sessionId, after: nil)
             for i in list.indices { list[i].sessionId = sessionId }
             messages[sessionId] = list
             syncCursor[sessionId] = list.last?.id
             loadedMessages.insert(sessionId)
-        } catch { toast = error.localizedDescription }
+        } catch { if !(error is CancellationError) { messageLoadErrors[sessionId] = error.localizedDescription } }
     }
 
     public func createSession(_ req: NewSessionRequest) async throws -> Session {
@@ -629,6 +638,9 @@ public final class AppStore {
 
     private func setStatus(_ status: SessionStatus, for sessionId: String) {
         guard let i = sessions.firstIndex(where: { $0.id == sessionId }) else { return }
+        if status == .running && sessions[i].status != .running && sessions[i].status != .waitingApproval {
+            sessions[i].runStartedAt = .now
+        }
         sessions[i].status = status
         sessions[i].updatedAt = .now
     }
@@ -642,8 +654,10 @@ public final class AppStore {
         case .sessionUpdated(var s):
             s.deviceId = device.id
             if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s }
+            syncLiveActivity(s.id)
         case .sessionRemoved(let sid):
             forgetLocally(sid)
+            syncLiveActivity(sid)
             setDevice(device.id) { $0.sessionCount = max(0, $0.sessionCount - 1) }
         case .sessionStatus(let sid, let st):
             setStatus(st, for: sid)

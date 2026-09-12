@@ -746,6 +746,7 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
 
 /// 队列测试用的假连接器。
 final class QueueStubClient: ConnectorClient, @unchecked Sendable {
+    var messagesHandler: (@Sendable () async throws -> [Message])?
     var nextQueued: QueuedMessage?
     var lastMode: SendMode?
     var cancelled: String?
@@ -780,7 +781,7 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     func pair(_ payload: PairingPayload) async throws -> Device { MockData.macStudio }
     func sessions(device: Device) async throws -> [Session] { sessionsOnServer }
     func createSession(device: Device, request: NewSessionRequest) async throws -> Session { MockData.sessions[0] }
-    func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] { [] }
+    func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] { try await messagesHandler?() ?? [] }
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
     func stop(device: Device, sessionId: String) async throws {}
     func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?, answers: [String: String]?) async throws {}

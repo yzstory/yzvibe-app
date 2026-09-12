@@ -88,7 +88,10 @@ Agent 正忙时收到的消息不会被丢掉也不会打断它：进队列（`s
 
 手机开活动时把它的推送 token 交给 `POST /devices/live-activity`，之后会话每次状态变化，
 连接器直接推一条 `apns-push-type: liveactivity`（topic 是 `<bundleId>.push-type.liveactivity`），
-App 被挂起也能刷新。会话闲下来推一条 `event: "end"` 收尾。
+App 被挂起也能刷新。新版使用 `overview:<connectorId>` 汇总当前电脑的运行和待审批任务，
+长按展开最多显示 3 条，待审批优先，超出时显示剩余数量；点击任务可回到对应会话。
+只有最后一个任务结束才推 `event: "end"` 收尾，旧版单会话 token 仍兼容。
+运行提示使用系统计时文本和状态更新动画；实时活动首次由前台 App 创建，后台通过 APNs 更新。
 注意 `content-state` 里的 `Date` 要用 Swift 的默认编码（自 2001-01-01 起的秒数），不是 ISO8601。
 
 ## 换了地址也不用重新扫码

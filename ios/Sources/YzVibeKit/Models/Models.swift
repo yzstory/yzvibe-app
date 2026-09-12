@@ -290,6 +290,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     public var status: SessionStatus
     public var createdAt: Date
     public var updatedAt: Date
+    public var runStartedAt: Date? = nil
     public var pendingApprovals: Int
     public var mode: SessionMode
     public var model: String?
@@ -317,7 +318,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
     /// 工作目录最后一段，用于分组标题。
     public var folderName: String { (cwd as NSString).lastPathComponent }
 
-    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch, queue, queuePaused, baseCommit }
+    enum CodingKeys: String, CodingKey { case id, deviceId, agent, cwd, title, status, createdAt, updatedAt, pendingApprovals, mode, model, effort, usage, source, branch, queue, queuePaused, baseCommit, runStartedAt }
     /// 连接器返回的 JSON 不带 deviceId，agent 也可能是未知字符串（如 mock），这里都做容错。
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -329,6 +330,7 @@ public struct Session: Identifiable, Codable, Hashable, Sendable {
         status = SessionStatus(rawValue: try c.decodeIfPresent(String.self, forKey: .status) ?? "") ?? .idle
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        runStartedAt = try c.decodeIfPresent(Date.self, forKey: .runStartedAt)
         pendingApprovals = try c.decodeIfPresent(Int.self, forKey: .pendingApprovals) ?? 0
         mode = SessionMode(rawValue: try c.decodeIfPresent(String.self, forKey: .mode) ?? "") ?? .normal
         model = try c.decodeIfPresent(String.self, forKey: .model).flatMap { $0.isEmpty ? nil : $0 }

@@ -29,7 +29,9 @@ struct SessionsView: View {
         @Bindable var store = store
         NavigationStack(path: $path) {
             Group {
-                if list.isEmpty {
+                if list.isEmpty, let device = store.selectedDevice, store.loadingDevices.contains(device.id) {
+                    PomeloLoadingView(title: "正在加载会话…")
+                } else if list.isEmpty {
                     emptyState
                 } else {
                     sessionList
@@ -81,6 +83,8 @@ struct SessionsView: View {
                 Text("删除后会停止此会话，并清除 YzVibe 中的消息。电脑上 Claude / Codex 的原始记录会保留，可在「我 › 会话」中重新显示；尚未保存到电脑记录的内容无法恢复。")
             }
         }
+        // 由导航路径统一控制，进出会话时同步更新 TabView 的底部占位。
+        .toolbar(path.isEmpty ? .visible : .hidden, for: .tabBar)
     }
 
     // MARK: 列表
