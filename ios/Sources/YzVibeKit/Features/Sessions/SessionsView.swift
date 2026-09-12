@@ -157,7 +157,7 @@ struct SessionsView: View {
         ContentUnavailableView {
             Label(query.isEmpty ? (store.settings.activeOnly ? "暂无活跃会话" : "这台电脑还没有会话") : "没有匹配的会话", systemImage: "bubble.left.and.text.bubble.right")
         } description: {
-            Text(store.settings.activeOnly ? "这里仅显示运行中、待审批或有排队任务的会话。关闭筛选可查看全部会话。" : (query.isEmpty ? "点右上角新建，选择 Agent 与工作目录。" : "换个关键词试试。"))
+            Text(store.settings.activeOnly ? "这里仅显示最近 7 天有更新的会话。关闭筛选可查看全部会话。" : (query.isEmpty ? "点右上角新建，选择 Agent 与工作目录。" : "换个关键词试试。"))
         } actions: {
             if store.settings.activeOnly {
                 Button("查看全部会话") { store.settings.activeOnly = false }
@@ -170,7 +170,7 @@ struct SessionsView: View {
     private var filterMenu: some View {
         @Bindable var store = store
         return Menu {
-            Toggle("仅显示活跃", isOn: $store.settings.activeOnly)
+            Toggle("仅显示活跃（最近 7 天）", isOn: $store.settings.activeOnly)
             Toggle("按文件夹分组", isOn: $store.settings.groupByFolder)
         } label: {
             Image(systemName: store.settings.activeOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")

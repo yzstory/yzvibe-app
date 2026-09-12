@@ -6,7 +6,7 @@ public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .sessions
     @State private var pairingFromLink = false
-    @AppStorage("yz.didWelcomePomelo") private var didWelcome = false
+    @AppStorage("yz.didWelcomePomelo.v2") private var didWelcome = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var systemScheme
@@ -47,7 +47,7 @@ public struct RootTabView: View {
             .overlay {
                 if !didWelcome {
                     PomeloWelcomeView {
-                        withAnimation(.easeOut(duration: reduceMotion ? 0.1 : 0.2)) { didWelcome = true }
+                        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { didWelcome = true }
                     }.transition(.opacity)
                 }
             }

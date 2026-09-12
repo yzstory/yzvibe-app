@@ -45,7 +45,7 @@ struct MeView: View {
                     SettingRow(icon: "folder", color: p.amber, title: "按文件夹分组", inset: 0) {
                         Toggle("", isOn: $store.settings.groupByFolder).labelsHidden()
                     }
-                    SettingRow(icon: "bolt", color: p.brand, title: "仅显示活跃", inset: 0) {
+                    SettingRow(icon: "bolt", color: p.brand, title: "仅显示活跃", subtitle: "最近 7 天有更新的会话", inset: 0) {
                         Toggle("", isOn: $store.settings.activeOnly).labelsHidden()
                     }
                     SettingRow(icon: "terminal", color: p.sage, title: "显示终端里的会话",

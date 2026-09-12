@@ -93,11 +93,12 @@ public final class AppStore {
         settings.modelPresets(for: agent) ?? caps.models
     }
 
-    public func sessions(for device: Device?, activeOnly: Bool, query: String) -> [Session] {
+    public func sessions(for device: Device?, activeOnly: Bool, query: String, now: Date = .now) -> [Session] {
         guard let device else { return [] }
+        let activeSince = now.addingTimeInterval(-7 * 24 * 60 * 60)
         return sessions
             .filter { $0.deviceId == device.id }
-            .filter { !activeOnly || $0.status == .running || $0.status == .waitingApproval || !$0.queue.isEmpty }
+            .filter { !activeOnly || $0.updatedAt >= activeSince }
             .filter { settings.showTerminalSessions || $0.source == .phone }
             .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.cwd.localizedCaseInsensitiveContains(query) }
             .sorted { $0.updatedAt > $1.updatedAt }

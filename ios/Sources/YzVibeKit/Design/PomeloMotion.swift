@@ -30,7 +30,7 @@ struct PomeloLoadingView: View {
     }
 }
 
-/// First-launch hello: a quick hop, a spark on the V, then straight into the app.
+/// First-launch hello: arrive, sparkle, pause long enough to read, then fade out.
 struct PomeloWelcomeView: View {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -52,7 +52,7 @@ struct PomeloWelcomeView: View {
                 }
                 VStack(spacing: 6) {
                     Text("YzVibe").font(.system(.title, design: .rounded, weight: .bold)).foregroundStyle(p.label)
-                    Text("小柚子就位，开工。 ").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                    Text("小柚子就位，开工。").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                 }.opacity(arrived ? 1 : 0)
             }
         }
@@ -60,11 +60,12 @@ struct PomeloWelcomeView: View {
         .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
         .accessibilityHint("轻点进入")
         .task {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.38, dampingFraction: 0.7)) { arrived = true }
+            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.5, dampingFraction: 0.75)) { arrived = true }
             do {
-                try await Task.sleep(for: .milliseconds(reduceMotion ? 150 : 320))
-                withAnimation(.easeOut(duration: 0.18)) { spark = true }
-                try await Task.sleep(for: .milliseconds(reduceMotion ? 150 : 380))
+                try await Task.sleep(for: .milliseconds(500))
+                withAnimation(.easeOut(duration: 0.25)) { spark = true }
+                // Preserve reading time with Reduce Motion too; only the movement changes.
+                try await Task.sleep(for: .milliseconds(1700))
                 finish()
             } catch { }
         }

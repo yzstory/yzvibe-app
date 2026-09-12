@@ -47,17 +47,25 @@ struct ImageAndActivityTests {
         #expect(text.contains("截图："))
     }
 
-    @Test func activeMeansRunningApprovalOrQueue() {
+    @Test func activeMeansUpdatedWithinSevenDaysRegardlessOfStatus() {
         let store = AppStore()
         let originalSettings = store.settings
         defer { store.settings = originalSettings }
         store.settings.showTerminalSessions = true
         let device = MockData.macStudio
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let cutoff = now.addingTimeInterval(-7 * 24 * 60 * 60)
         store.sessions = [SessionStatus.idle, .running, .waitingApproval, .error, .closed].map {
-            Session(id: $0.rawValue, deviceId: device.id, agent: .codex, cwd: "/p", title: "test", status: $0)
+            var session = Session(id: $0.rawValue, deviceId: device.id, agent: .codex, cwd: "/p", title: "test", status: $0)
+            session.updatedAt = now.addingTimeInterval(-60)
+            return session
         }
-        store.sessions.append(Session(id: "queued", deviceId: device.id, agent: .codex, cwd: "/p", title: "test", queue: [QueuedMessage(text: "next")]))
-        #expect(Set(store.sessions(for: device, activeOnly: true, query: "").map(\.id)) == ["running", "waiting_approval", "queued"])
-        #expect(store.sessions(for: device, activeOnly: false, query: "").count == 6)
+        var boundary = Session(id: "boundary", deviceId: device.id, agent: .codex, cwd: "/p", title: "test")
+        boundary.updatedAt = cutoff
+        var old = Session(id: "old-running", deviceId: device.id, agent: .codex, cwd: "/p", title: "test", status: .running, queue: [QueuedMessage(text: "next")])
+        old.updatedAt = cutoff.addingTimeInterval(-1)
+        store.sessions += [boundary, old]
+        #expect(Set(store.sessions(for: device, activeOnly: true, query: "", now: now).map(\.id)) == ["idle", "running", "waiting_approval", "error", "closed", "boundary"])
+        #expect(store.sessions(for: device, activeOnly: false, query: "", now: now).count == 7)
     }
 }
