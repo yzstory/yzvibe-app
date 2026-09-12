@@ -52,6 +52,7 @@ public extension View {
 
 /// 主按钮：品牌橙实心 + 白字（4.58:1）。
 public struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p
     @Environment(\.isEnabled) private var isEnabled
     @ScaledMetric(relativeTo: .body) private var scaled: CGFloat = 1
@@ -64,13 +65,14 @@ public struct PrimaryButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, minHeight: height * scaled)
             .padding(.horizontal, 16)
             .background(Capsule().fill(p.brand).opacity(isEnabled ? 1 : 0.4))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Motion.quick, value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : Motion.quick, value: configuration.isPressed)
     }
 }
 
 /// 次按钮：fill 底。
 public struct SecondaryButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p
     @Environment(\.isEnabled) private var isEnabled
     @ScaledMetric(relativeTo: .body) private var scaled: CGFloat = 1
@@ -83,13 +85,14 @@ public struct SecondaryButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, minHeight: height * scaled)
             .padding(.horizontal, 16)
             .background(Capsule().fill(p.fill).opacity(isEnabled ? 1 : 0.5))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Motion.quick, value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : Motion.quick, value: configuration.isPressed)
     }
 }
 
 /// 描边按钮（拒绝用 danger 色）。
 public struct OutlineButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p
     @Environment(\.isEnabled) private var isEnabled
     @ScaledMetric(relativeTo: .body) private var scaled: CGFloat = 1
@@ -105,13 +108,14 @@ public struct OutlineButtonStyle: ButtonStyle {
             .padding(.horizontal, 16)
             .background(Capsule().strokeBorder((color ?? p.border).opacity(color == nil ? 1 : 0.5), lineWidth: 1))
             .opacity(isEnabled ? 1 : 0.4)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Motion.quick, value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : Motion.quick, value: configuration.isPressed)
     }
 }
 
 /// 玻璃按钮：漂浮在内容之上的次级动作。
 public struct GlassButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p
     @ScaledMetric(relativeTo: .body) private var scaled: CGFloat = 1
     var height: CGFloat = 50
@@ -123,8 +127,8 @@ public struct GlassButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, minHeight: height * scaled)
             .padding(.horizontal, 16)
             .liquidGlass(in: Capsule(), interactive: true)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(Motion.quick, value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(reduceMotion ? nil : Motion.quick, value: configuration.isPressed)
     }
 }
 

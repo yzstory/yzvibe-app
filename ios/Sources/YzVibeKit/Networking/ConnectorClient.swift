@@ -104,7 +104,7 @@ public enum ConnectorError: LocalizedError, Sendable {
         case .unauthorized: "Token 无效或已过期，请重新扫码"
         case .network(let m): "网络错误：\(m)"
         case .decoding: "无法解析连接器返回的数据"
-        case .unreachable: "手机没有连到二维码里的主机。请确认网络可达，或用 --access=local 重新配对。"
+        case .unreachable: "暂时无法连接电脑。请检查电脑与网络；同一 Wi-Fi 下可在设备页选择“在局域网里找”，无需重新配对。"
         }
     }
 }
@@ -149,7 +149,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
             // 别连到另一台电脑上去
             guard health.connectorId == device.id else { continue }
             setBase(url, for: device.id)
-            sockets[device.id]?.updateBase(url)
+            updateSocketBase(url, deviceId: device.id)
             onEndpointResolved?(device.id, raw)
             return true
         }
@@ -268,7 +268,13 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
                               as: OK.self)
     }
 
-    public func reconnect(device: Device) { socket(for: device).reconnectNow() }
+    public func reconnect(device: Device) {
+        // LAN discovery / push updates Device; replace the old HTTP override as well as the WS URL.
+        if let url = device.baseURL { setBase(url, for: device.id) }
+        let socket = socket(for: device)
+        if let url = base(for: device) { socket.updateBase(url) }
+        socket.reconnectNow()
+    }
 
     public func sendMessage(device: Device, sessionId: String, text: String, attachments: [String], mode: SendMode) async throws -> (queued: Bool, item: QueuedMessage?) {
         struct Body: Encodable { var text: String; var attachments: [String]; var mode: String }
@@ -398,6 +404,11 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     private var sockets: [String: ConnectorSocket] = [:]
     private let lock = NSLock()
 
+    private func updateSocketBase(_ url: URL, deviceId: String) {
+        lock.lock(); let socket = sockets[deviceId]; lock.unlock()
+        socket?.updateBase(url)
+    }
+
     private func socket(for device: Device) -> ConnectorSocket {
         lock.lock(); defer { lock.unlock() }
         if let s = sockets[device.id] { return s }
@@ -407,10 +418,46 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 }
 
+/// 每次订阅都有独立的流。取消旧订阅不会终止新订阅或底层连接。
+final class ConnectorEventChannel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var subscribers: [UUID: AsyncStream<ConnectorEvent>.Continuation] = [:]
+
+    func stream() -> AsyncStream<ConnectorEvent> {
+        let id = UUID()
+        return AsyncStream { continuation in
+            lock.lock()
+            subscribers[id] = continuation
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock()
+                self.subscribers[id] = nil
+                self.lock.unlock()
+            }
+        }
+    }
+
+    func yield(_ event: ConnectorEvent) {
+        lock.lock()
+        let current = Array(subscribers.values)
+        lock.unlock()
+        for subscriber in current { subscriber.yield(event) }
+    }
+
+    func finish() {
+        lock.lock()
+        let current = Array(subscribers.values)
+        subscribers.removeAll()
+        lock.unlock()
+        for subscriber in current { subscriber.finish() }
+    }
+}
+
 /// 单设备的 WS 连接：自动重连（指数退避 ≤ 30s），把 JSON 事件翻译为 `ConnectorEvent`。
 final class ConnectorSocket: @unchecked Sendable {
-    let events: AsyncStream<ConnectorEvent>
-    private let continuation: AsyncStream<ConnectorEvent>.Continuation
+    private let channel = ConnectorEventChannel()
+    var events: AsyncStream<ConnectorEvent> { channel.stream() }
     private var task: URLSessionWebSocketTask?
     private var base: URL?
     private let session: URLSession
@@ -418,9 +465,11 @@ final class ConnectorSocket: @unchecked Sendable {
     private var backoff: TimeInterval = 1
     private var pingTimer: Timer?
     private var connecting = false
+    private let stateLock = NSRecursiveLock()
 
     /// 故障转移换了地址后热切换过来。
     func updateBase(_ url: URL) {
+        stateLock.lock(); defer { stateLock.unlock() }
         guard url != base else { return }
         base = url
         backoff = 1
@@ -429,29 +478,33 @@ final class ConnectorSocket: @unchecked Sendable {
 
     init(base: URL?, session: URLSession, token: String?) {
         self.base = base; self.session = session; self.token = token
-        var cont: AsyncStream<ConnectorEvent>.Continuation!
-        events = AsyncStream { cont = $0 }
-        continuation = cont
         connect()
     }
 
     /// 回到前台时立刻重连：iOS 挂起 App 时会悄悄断掉 WebSocket，等指数退避太慢。
     func reconnectNow() {
+        stateLock.lock(); defer { stateLock.unlock() }
         backoff = 1
-        if task?.state == .running {
-            task?.sendPing { [weak self] error in if error != nil { self?.restart() } }
+        if let current = task, current.state == .running {
+            current.sendPing { [weak self] error in
+                guard let self else { return }
+                self.stateLock.lock(); defer { self.stateLock.unlock() }
+                if self.task === current, error != nil { self.restart() }
+            }
         } else {
             restart()
         }
     }
 
     private func restart() {
+        stateLock.lock(); defer { stateLock.unlock() }
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         connect()
     }
 
     private func connect() {
+        stateLock.lock(); defer { stateLock.unlock() }
         guard !connecting else { return }
         connecting = true
         defer { connecting = false }
@@ -470,12 +523,18 @@ final class ConnectorSocket: @unchecked Sendable {
 
     /// 每 30 秒 ping 一次：中间隧道悄悄断链时，只靠 receive 可能一直不报错。
     private func startHeartbeat() {
+        stateLock.lock(); defer { stateLock.unlock() }
         pingTimer?.invalidate()
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            self?.task?.sendPing { [weak self] error in
+            guard let self else { return }
+            self.stateLock.lock(); defer { self.stateLock.unlock() }
+            guard let current = self.task else { return }
+            current.sendPing { [weak self] error in
                 guard error != nil, let self else { return }
-                continuation.yield(.disconnected(error))
-                restart()
+                self.stateLock.lock(); defer { self.stateLock.unlock() }
+                guard self.task === current else { return }
+                self.channel.yield(.disconnected(error))
+                self.restart()
             }
         }
         pingTimer = timer
@@ -483,26 +542,46 @@ final class ConnectorSocket: @unchecked Sendable {
     }
 
     private func receive() {
-        task?.receive { [weak self] result in
+        stateLock.lock(); defer { stateLock.unlock() }
+        guard let current = task else { return }
+        current.receive { [weak self] result in
             guard let self else { return }
+            self.stateLock.lock(); defer { self.stateLock.unlock() }
+            guard self.task === current else { return }
             switch result {
             case .success(let msg):
-                if case .string(let s) = msg, let data = s.data(using: .utf8), let ev = Self.parse(data) { continuation.yield(ev) }
+                if case .string(let s) = msg, let data = s.data(using: .utf8), let ev = Self.parse(data) { channel.yield(ev) }
                 backoff = 1
                 receive()
             case .failure(let err):
-                continuation.yield(.disconnected(err))
+                channel.yield(.disconnected(err))
                 pingTimer?.invalidate()
                 let delay = backoff
                 backoff = min(backoff * 2, 30)
-                DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in self?.connect() }
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self else { return }
+                    self.stateLock.lock(); defer { self.stateLock.unlock() }
+                    guard self.task === current else { return }
+                    self.connect()
+                }
             }
         }
     }
 
+    private func currentTask() -> URLSessionWebSocketTask? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return task
+    }
+
     func send(_ dict: [String: Any]) async throws {
         let data = try JSONSerialization.data(withJSONObject: dict)
-        try await task?.send(.string(String(decoding: data, as: UTF8.self)))
+        try await currentTask()?.send(.string(String(decoding: data, as: UTF8.self)))
+    }
+
+    deinit {
+        pingTimer?.invalidate()
+        task?.cancel(with: .goingAway, reason: nil)
+        channel.finish()
     }
 
     static func parse(_ data: Data) -> ConnectorEvent? {

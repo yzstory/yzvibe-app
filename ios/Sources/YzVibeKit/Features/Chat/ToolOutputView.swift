@@ -1,13 +1,68 @@
 import SwiftUI
 
-/// 工具卡：点开能看到命令的真实输出、文件改动的 diff。
-/// 只显示「运行中 / 完成」时，在手机上根本没法判断该不该批下一步。
+/// 回复内只展示一个入口；调用详情在可手动打开的面板里查看。
+struct ToolCallGroup: View {
+    @Environment(\.palette) private var p
+    let calls: [ToolCall]
+    @State private var showingCalls = false
+
+    private var names: String {
+        var seen: Set<String> = []
+        return calls.map(\.name).filter { seen.insert($0).inserted }.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button { showingCalls = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "terminal").foregroundStyle(p.brand)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(calls.count) 次工具调用").font(.yzFootnoteStrong).foregroundStyle(p.label)
+                    Text(names).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if calls.contains(where: { $0.state == .running }) {
+                    ProgressView().controlSize(.small).accessibilityLabel("工具运行中")
+                }
+                let failures = calls.filter { $0.state == .error }.count
+                if failures > 0 { Chip("\(failures) 项失败", tone: .danger) }
+                Image(systemName: "chevron.right").font(.system(.caption2, weight: .bold)).foregroundStyle(p.labelTertiary)
+            }
+            .padding(12)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fillSecondary))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("打开工具调用列表，展开可查看命令")
+        .sheet(isPresented: $showingCalls) {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(calls, id: \.id) { ToolCallCard(call: $0) }
+                    }
+                    .padding(Spacing.page)
+                }
+                .paperBackground()
+                .navigationTitle("\(calls.count) 次工具调用")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("完成") { showingCalls = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+}
+
+/// 调用详情只展示执行命令 / 输入摘要，不渲染工具输出。
 struct ToolCallCard: View {
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let call: ToolCall
     @State private var expanded = false
 
-    private var hasOutput: Bool { !(call.output ?? "").isEmpty }
     private var symbol: String {
         switch call.name {
         case "Bash", "PowerShell", "Shell": "terminal"
@@ -20,19 +75,23 @@ struct ToolCallCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Button { withAnimation(Motion.quick) { expanded.toggle() } } label: { header }
+            Button { withAnimation(reduceMotion ? nil : Motion.quick) { expanded.toggle() } } label: { header }
                 .buttonStyle(.plain)
-                .disabled(!hasOutput)
-            if expanded, let out = call.output, !out.isEmpty {
+                .accessibilityValue(expanded ? "已展开" : "已折叠")
+            if expanded {
                 Divider_().padding(.vertical, 2)
-                ToolOutputView(text: out, kind: call.outputKind, truncated: call.truncated)
+                Text(call.detail.isEmpty ? "无命令详情" : call.detail)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(p.label)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 10).padding(.bottom, 10)
             }
         }
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fillSecondary)
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(p.border, lineWidth: 1)))
         .contextMenu {
-            if hasOutput { Button("复制输出", systemImage: "doc.on.doc") { UIPasteboard.general.string = call.output } }
             Button("复制命令", systemImage: "terminal") { UIPasteboard.general.string = call.detail }
         }
     }
@@ -51,10 +110,8 @@ struct ToolCallCard: View {
             case .running: ProgressView().controlSize(.small)
             case .error: Chip("失败", tone: .danger)
             }
-            if hasOutput {
-                Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))
-                    .foregroundStyle(p.labelTertiary).rotationEffect(.degrees(expanded ? 0 : -90))
-            }
+            Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))
+                .foregroundStyle(p.labelTertiary).rotationEffect(.degrees(expanded ? 0 : -90))
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .contentShape(Rectangle())

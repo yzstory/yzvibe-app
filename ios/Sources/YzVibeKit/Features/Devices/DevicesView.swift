@@ -6,6 +6,7 @@ struct DevicesView: View {
     @Environment(\.palette) private var p
     @State private var showScanner = false
     @State private var showManual = false
+    @State private var editingDevice: Device?
     var onOpenSessions: () -> Void
 
     var body: some View {
@@ -19,10 +20,17 @@ struct DevicesView: View {
                 } else {
                     Section {
                         ForEach(store.devices) { device in
-                            Button {
-                                store.selectedDeviceId = device.id
-                                onOpenSessions()
-                            } label: { DeviceCard(device: device) }
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Button {
+                                    store.selectedDeviceId = device.id
+                                    onOpenSessions()
+                                } label: { DeviceCard(device: device) }
+                                Button { editingDevice = device } label: {
+                                    Label("配置", systemImage: "slider.horizontal.3")
+                                        .font(.yzFootnoteStrong).foregroundStyle(p.brand)
+                                        .padding(.horizontal, 12).frame(minHeight: 44)
+                                }
+                            }
                             .buttonStyle(.plain)
                             .listRowInsets(EdgeInsets(top: 6, leading: Spacing.page, bottom: 6, trailing: Spacing.page))
                             .listRowSeparator(.hidden)
@@ -33,6 +41,7 @@ struct DevicesView: View {
                                     .tint(p.labelSecondary)
                             }
                             .contextMenu {
+                                Button { editingDevice = device } label: { Label("编辑配置", systemImage: "slider.horizontal.3") }
                                 Button { Task { await store.refresh(device) } } label: { Label("刷新", systemImage: "arrow.clockwise") }
                                 Button { Task { await store.reconnectViaLAN(device, quiet: false) } } label: { Label("在局域网里找", systemImage: "wifi") }
                                 Button(role: .destructive) { store.remove(device) } label: { Label("移除设备", systemImage: "trash") }
@@ -75,6 +84,7 @@ struct DevicesView: View {
             }
             .fullScreenCover(isPresented: $showScanner) { PairScannerView() }
             .sheet(isPresented: $showManual) { ManualEndpointView().presentationDetents([.medium, .large]) }
+            .sheet(item: $editingDevice) { DeviceConfigurationView(device: $0) }
         }
     }
 

@@ -30,7 +30,7 @@ struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
 
     func makeUIView(context: Context) -> UIScrollView {
-        let scroll = UIScrollView()
+        let scroll = ImageScrollView()
         scroll.delegate = context.coordinator
         scroll.minimumZoomScale = 1; scroll.maximumZoomScale = 5
         scroll.showsVerticalScrollIndicator = false; scroll.showsHorizontalScrollIndicator = false
@@ -40,6 +40,7 @@ struct ZoomableImage: UIViewRepresentable {
         iv.contentMode = .scaleAspectFit
         iv.isUserInteractionEnabled = true
         scroll.addSubview(iv)
+        scroll.imageView = iv
         context.coordinator.imageView = iv
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
         tap.numberOfTapsRequired = 2
@@ -48,8 +49,11 @@ struct ZoomableImage: UIViewRepresentable {
     }
 
     func updateUIView(_ scroll: UIScrollView, context: Context) {
-        context.coordinator.imageView?.frame = scroll.bounds
-        scroll.contentSize = scroll.bounds.size
+        if context.coordinator.imageView?.image !== image {
+            context.coordinator.imageView?.image = image
+            scroll.setZoomScale(1, animated: false)
+        }
+        scroll.setNeedsLayout()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -70,5 +74,20 @@ struct ZoomableImage: UIViewRepresentable {
             let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
             scroll.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height), animated: true)
         }
+    }
+}
+
+/// 首次 updateUIView 时 bounds 可能为零，尺寸必须跟随 UIKit 的实际布局。
+final class ImageScrollView: UIScrollView {
+    weak var imageView: UIImageView?
+    private var viewport: CGSize = .zero
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard bounds.width > 0, bounds.height > 0, viewport != bounds.size else { return }
+        viewport = bounds.size
+        setZoomScale(1, animated: false)
+        contentInset = .zero
+        imageView?.frame = CGRect(origin: .zero, size: viewport)
+        contentSize = viewport
     }
 }

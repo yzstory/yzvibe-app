@@ -15,7 +15,7 @@ public struct AmbientBackground: View {
 
 // MARK: - 纸感卡片
 
-/// 内容卡：暖纸白 + 发丝描边 + 几乎不可见的投影。深度靠描边而不是阴影，和系统列表同一个语言。
+/// 稳定的内容层：连续圆角、柔和中性色与细边缘。
 public struct PaperCard<Content: View>: View {
     @Environment(\.palette) private var p
     var padding: CGFloat
@@ -28,9 +28,9 @@ public struct PaperCard<Content: View>: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content()
             .padding(padding)
-            .background(shape.fill(p.surfaceElevated))
-            .overlay(shape.strokeBorder(p.border, lineWidth: 1))
-            .shadow(color: p.shadow.opacity(0.04), radius: 2, y: 1)
+            .background(shape.fill(p.surfaceElevated.gradient))
+            .overlay(shape.strokeBorder(p.border.opacity(0.6), lineWidth: 0.5))
+
     }
 }
 
@@ -65,7 +65,8 @@ public struct Chip: View {
     }
     private var colors: (bg: Color, fg: Color, stroke: Color?) {
         switch tone {
-        case .claude, .brand: return (p.brandSoft, p.brandText, nil)
+        case .brand: return (p.brandSoft, p.brandText, nil)
+        case .claude: return (p.fill, p.labelSecondary, nil)
         case .codex, .custom, .fill: return (p.fill, p.labelSecondary, nil)
         case .sage: return (p.sageSoft, p.sage, nil)
         case .warning: return (p.amberSoft, p.amberText, nil)
@@ -131,7 +132,7 @@ public struct StatusDot: View {
     }
     public var body: some View {
         Circle().fill(color).frame(width: 8, height: 8)
-            .overlay(Circle().stroke(color.opacity(tone == .off ? 0 : 0.22), lineWidth: 3))
+
             .accessibilityHidden(true)
     }
 }
@@ -167,7 +168,7 @@ public struct CodeBlock: View {
                     .lineLimit(lines)
                     .truncationMode(lines == nil ? .tail : .middle)
                     .textSelection(.enabled)
-                    .foregroundStyle(dark ? Color(hex: 0xE8E2DA) : p.labelSecondary)
+                    .foregroundStyle(dark ? Color(hex: 0xEAEAEF) : p.labelSecondary)
                     .frame(maxWidth: copyable ? nil : .infinity, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 8)
             }
@@ -176,7 +177,7 @@ public struct CodeBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                .fill(dark ? Color(hex: 0x2A2724) : p.fillSecondary)
+                .fill(dark ? Color(hex: 0x151518) : p.fillSecondary)
                 .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(dark ? .clear : p.border, lineWidth: 1))
         )
         .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
@@ -186,7 +187,7 @@ public struct CodeBlock: View {
         HStack {
             Text(language?.isEmpty == false ? language! : "text")
                 .font(.yzCaption)
-                .foregroundStyle(dark ? Color(hex: 0xA9A199) : p.labelTertiary)
+                .foregroundStyle(dark ? Color(hex: 0xA4A4AF) : p.labelTertiary)
             Spacer(minLength: 8)
             Button {
                 UIPasteboard.general.string = text
@@ -197,7 +198,7 @@ public struct CodeBlock: View {
                 Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
                     .font(.yzCaption)
                     .labelStyle(.titleAndIcon)
-                    .foregroundStyle(dark ? Color(hex: 0xE8E2DA) : p.labelSecondary)
+                    .foregroundStyle(dark ? Color(hex: 0xEAEAEF) : p.labelSecondary)
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(Capsule().fill(dark ? Color.white.opacity(0.10) : p.fill))
             }

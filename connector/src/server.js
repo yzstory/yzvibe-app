@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Store, HOME, describeRule } from './store.js';
 import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, printQR } from './pairing.js';
-import { startCloudflareTunnel, loadRelay, saveRelay } from './tunnel.js';
+import { startCloudflareTunnel, retryTunnel, loadRelay, saveRelay } from './tunnel.js';
 import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
 import { CodexAgent } from './agents/codex.js';
@@ -554,18 +554,20 @@ export async function startConnector(opts) {
   const startedAt = new Date().toISOString();
   const saveDaemonInfo = () => writeDaemonInfo({ pid: process.pid, port: c.port, host, mode, name, agent: opts.defaultAgent, secret: c.internalSecret, flags: opts.flags ?? [], managed: process.env.YZVIBE_MANAGED ?? null, startedAt, version: VERSION });
 
-  /** 起 Cloudflare Tunnel；进程意外退出时自动重开（临时隧道的地址会变，需重新扫码）。 */
+  /** 起 Cloudflare Tunnel；进程退出或隧道被注销时持续重试（临时地址会变）。 */
   const openTunnel = async () => {
     const t = await startCloudflareTunnel(c.port);
+    if (stopping) { t.child.kill(); return null; }
     tunnelChild = t.child;
     t.child.on('exit', async (code) => {
       if (stopping) return;
       console.log(`[yzvibe] Cloudflare Tunnel 断开（退出码 ${code}），5 秒后重连…`);
-      await new Promise((r) => setTimeout(r, 5000));
       try {
-        host = await openTunnel(); c.access.host = host; saveDaemonInfo();
+        const recovered = await retryTunnel(openTunnel, { stopped: () => stopping });
+        if (!recovered || stopping) return;
+        host = recovered; c.access.host = host; saveDaemonInfo();
         console.log(`[yzvibe] Tunnel 已重连：${host}`);
-        await c.announceEndpoints('tunnel-reconnect');    // 配过推送的手机会自动换地址，不用重新扫码
+        await c.announceEndpoints('tunnel-reconnect');    // 尝试通过推送更新手机地址；静默推送不保证送达
         await announce();
       }
       catch (e) { console.log(`[yzvibe] Tunnel 重连失败：${e.message}；可用 yzvibe restart 重试`); }

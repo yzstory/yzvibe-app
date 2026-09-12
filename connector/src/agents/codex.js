@@ -8,8 +8,8 @@ import { codexOptionArgs, CODEX_PLAN_PREFIX, codexContextWindow } from './option
 import { codexTurnUsage, accumulateUsage } from './usage.js';
 
 export class CodexAgent {
-  constructor({ session, store }) {
-    Object.assign(this, { session, store });
+  constructor({ session, store, spawnProcess = spawn }) {
+    Object.assign(this, { session, store, spawnProcess });
     this.proc = null;
     this.buffer = '';
     this.queue = [];
@@ -43,19 +43,24 @@ export class CodexAgent {
       const up = store.upload(a);
       if (up && up.mime.startsWith('image/')) args.push('-i', up.path);
     }
+    // --image is variadic on new exec: terminate options before positional args.
+    // Pipe the prompt so images cannot swallow it and long messages avoid argv limits.
+    args.push('--');
     if (session.agentSessionId) args.push(session.agentSessionId);
-    args.push(prompt);
+    args.push('-');
 
     this.turnErrored = false;
     store.setStatus(session.id, 'running');
-    this.proc = spawn('codex', args, { cwd: expandHome(session.cwd), stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
+    this.proc = this.spawnProcess('codex', args, { cwd: expandHome(session.cwd), stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env } });
+    let stderr = '';
+    this.proc.stdin.on('error', (error) => { if (error.code !== 'EPIPE') console.error(`[codex stdin] ${error.message}`); });
     this.proc.stdout.on('data', (b) => this.#onData(b));
-    this.proc.stderr.on('data', (b) => { const s = String(b).trim(); if (s && !/^(Reading additional input|Shell cwd was reset)/.test(s)) console.error(`[codex ${session.id.slice(0, 8)}] ${s}`); });
-    this.proc.on('exit', (code) => {
+    this.proc.stderr.on('data', (b) => { const s = String(b).trim(); stderr = (stderr + String(b)).slice(-4000); if (s && !/^(Reading additional input|Shell cwd was reset)/.test(s)) console.error(`[codex ${session.id.slice(0, 8)}] ${s}`); });
+    this.proc.on('close', (code) => {
       this.proc = null;
       if (this.buffer.trim()) { this.#handleLine(this.buffer); this.buffer = ''; }
-      if (code && code !== 0 && !this.turnErrored) store.addMessage(session.id, { role: 'system', text: `codex 退出，代码 ${code}` });
-      store.setStatus(session.id, code === 0 || code === null ? 'idle' : 'error');
+      if (code && code !== 0 && !this.turnErrored) store.addMessage(session.id, { role: 'system', text: `Codex 退出，代码 ${code}${stderr.trim() ? `：${humanError(stderr.trim())}` : ''}` });
+      store.setStatus(session.id, !this.turnErrored && (code === 0 || code === null) ? 'idle' : 'error');
       const next = this.queue.shift();
       if (next) this.#spawn(next.text, next.attachments);
     });
@@ -63,7 +68,9 @@ export class CodexAgent {
       store.addMessage(session.id, { role: 'system', text: `无法启动 codex：${e.message}` });
       store.setStatus(session.id, 'error');
       this.proc = null;
+      this.turnErrored = true;
     });
+    this.proc.stdin.end(prompt ?? '');
   }
 
   #onData(buf) {

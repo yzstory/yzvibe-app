@@ -229,7 +229,7 @@ test('用量归一：Claude result / Codex turn.completed / 累计', async () =>
   assert.equal(t1.model, 'claude-haiku-4-5-20251001'); assert.equal(t1.contextTokens, 40001); assert.equal(t1.contextWindow, 200000);
   assert.equal(t1.cacheWrite, 39991); assert.equal(t1.thinking, 35); assert.equal(t1.costUSD, 0.08);
   const t2 = codexTurnUsage({ input_tokens: 40441, cached_input_tokens: 29952, output_tokens: 115, reasoning_output_tokens: 7 }, 'gpt-5.5', 272000);
-  assert.equal(t2.input, 10489); assert.equal(t2.cacheRead, 29952); assert.equal(t2.contextTokens, 40441); assert.equal(t2.contextWindow, 272000);
+  assert.equal(t2.input, 10489); assert.equal(t2.cacheRead, 29952); assert.equal(t2.contextTokens, null); assert.equal(t2.contextWindow, null);
   let acc = accumulateUsage(null, t1); acc = accumulateUsage(acc, { ...t1, costUSD: 0.02 });
   assert.equal(acc.total.turns, 2); assert.equal(acc.total.cacheWrite, 79982); assert.equal(Math.round(acc.total.costUSD * 100), 10); assert.equal(acc.turn.costUSD, 0.02);
 });
@@ -243,7 +243,7 @@ test('Codex turn.completed 写入 session.usage 并广播', async () => {
   handleCodexEvent({ type: 'turn.completed', usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 5 } }, store, s, { contextWindow: 272000 });
   assert.equal(store.session(s.id).usage.turn.input, 40);
   assert.equal(store.session(s.id).usage.total.turns, 1);
-  assert.ok(events.some((e) => e.type === 'session.updated' && e.session.usage?.turn.contextTokens === 100));
+  assert.ok(events.some((e) => e.type === 'session.updated' && e.session.usage?.turn.contextTokens === null));
 });
 
 test('额度：OAuth usage 归一 / rate_limit_event 兜底 / Codex 不可用', async () => {

@@ -4,7 +4,7 @@ import SwiftUI
 /// 品牌只通过 `.tint` 和内容里的强调色出现。
 public struct RootTabView: View {
     @State private var store: AppStore
-    @State private var tab: Tab = .devices
+    @State private var tab: Tab = .sessions
     @State private var pairingFromLink = false
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.colorScheme) private var systemScheme

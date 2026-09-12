@@ -8,7 +8,11 @@ struct YzVibeApp: App {
 
     var body: some Scene {
         WindowGroup {
+            #if DEBUG
+            RootTabView(store: ProcessInfo.processInfo.arguments.contains("--design-preview") ? AppStore() : nil)
+            #else
             RootTabView()
+            #endif
         }
     }
 }

@@ -478,6 +478,8 @@ final class ToolOutputAndRulesTests: XCTestCase {
 
 /// 断线重同步用的假连接器：只实现这几个测试要用到的方法。
 final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
+    var attachmentData = Data()
+    var attachmentRequests = 0
     var newMessages: [Message] = []
     var lastAfterCursor: String??
     var lastRemember: ApprovalSuggestion?
@@ -501,7 +503,7 @@ final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
     func quota(device: Device, agent: AgentKind) async throws -> QuotaInfo { QuotaInfo(agent: agent.rawValue) }
     func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo { throw ConnectorError.unreachable }
     func download(device: Device, sessionId: String, path: String) async throws -> Data { Data() }
-    func attachment(device: Device, id: String) async throws -> Data { Data() }
+    func attachment(device: Device, id: String) async throws -> Data { attachmentRequests += 1; return attachmentData }
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { [] }
     func preview(device: Device, sessionId: String, path: String) async throws -> String { "" }
     func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { "u1" }

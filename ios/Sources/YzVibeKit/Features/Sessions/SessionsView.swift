@@ -4,11 +4,21 @@ import UIKit
 struct SessionsView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var query = ""
     @State private var showNew = false
     @State private var collapsed: Set<String> = []
     @State private var path: [String] = []
     @State private var pendingDelete: Session?
+
+    init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--design-preview"),
+           ProcessInfo.processInfo.arguments.contains("--design-chat") {
+            _path = State(initialValue: ["s1"])
+        }
+        #endif
+    }
 
     private var list: [Session] {
         store.sessions(for: store.selectedDevice, activeOnly: store.settings.activeOnly, query: query)
@@ -31,6 +41,21 @@ struct SessionsView: View {
                 ToolbarItem(placement: .topBarLeading) { DevicePickerMenu() }
                 ToolbarItem(placement: .topBarTrailing) { filterMenu }
                 ToolbarItem(placement: .topBarTrailing) {
+                    if store.settings.groupByFolder, !list.isEmpty {
+                        let folders = Set(list.map(\.cwd))
+                        let allCollapsed = folders.isSubset(of: collapsed)
+                        Button {
+                            withAnimation(reduceMotion ? nil : Motion.quick) {
+                                if allCollapsed { collapsed.subtract(folders) }
+                                else { collapsed.formUnion(folders) }
+                            }
+                        } label: {
+                            Image(systemName: allCollapsed ? "arrow.up.and.down" : "arrow.down.and.up")
+                        }
+                        .accessibilityLabel(allCollapsed ? "展开全部分组" : "收拢全部分组")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
                         .accessibilityLabel("新建会话")
                 }
@@ -51,7 +76,7 @@ struct SessionsView: View {
                     Task { await store.deleteSession(id) }
                 }
             } message: { _ in
-                Text("只从 YzVibe 里移除这条会话，电脑上 Claude / Codex 的记录不会被删。可以在「我 › 会话」里恢复。")
+                Text("删除后会停止此会话，并清除 YzVibe 中的消息。电脑上 Claude / Codex 的原始记录会保留，可在「我 › 会话」中重新显示；尚未保存到电脑记录的内容无法恢复。")
             }
         }
     }
@@ -69,7 +94,7 @@ struct SessionsView: View {
                         }
                     } header: {
                         FolderHeader(cwd: group.cwd, count: group.sessions.count, collapsed: collapsed.contains(group.cwd)) {
-                            withAnimation(Motion.quick) {
+                            withAnimation(reduceMotion ? nil : Motion.quick) {
                                 if collapsed.contains(group.cwd) { collapsed.remove(group.cwd) } else { collapsed.insert(group.cwd) }
                             }
                         }
@@ -91,16 +116,23 @@ struct SessionsView: View {
             .listRowInsets(EdgeInsets(top: 5, leading: Spacing.page, bottom: 5, trailing: Spacing.page))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-            .swipeActions(edge: .trailing) {
-                Button(role: .destructive) { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                // 确认前不使用 destructive role，避免系统先把行移走。
+                Button { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
+                    .buttonStyle(.automatic)
+                    .tint(p.danger)
+            }
+            .swipeActions(edge: .leading, allowsFullSwipe: false) {
                 if s.status == .running {
                     Button { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
+                        .buttonStyle(.automatic)
                         .tint(p.danger)
                 }
                 Button {
                     UIPasteboard.general.string = s.cwd
                     store.toast = "已复制工作目录"
                 } label: { Label("复制路径", systemImage: "doc.on.doc") }
+                .buttonStyle(.automatic)
                 .tint(p.labelSecondary)
             }
             .contextMenu {
@@ -114,11 +146,13 @@ struct SessionsView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(query.isEmpty ? "这台电脑还没有会话" : "没有匹配的会话", systemImage: "bubble.left.and.text.bubble.right")
+            Label(query.isEmpty ? (store.settings.activeOnly ? "暂无活跃会话" : "这台电脑还没有会话") : "没有匹配的会话", systemImage: "bubble.left.and.text.bubble.right")
         } description: {
-            Text(query.isEmpty ? "点右上角新建，选择 Agent 与工作目录。" : "换个关键词，或清掉「仅活跃」筛选。")
+            Text(store.settings.activeOnly ? "这里仅显示运行中、待审批或有排队任务的会话。关闭筛选可查看全部会话。" : (query.isEmpty ? "点右上角新建，选择 Agent 与工作目录。" : "换个关键词试试。"))
         } actions: {
-            if query.isEmpty {
+            if store.settings.activeOnly {
+                Button("查看全部会话") { store.settings.activeOnly = false }
+            } else if query.isEmpty {
                 Button("新建会话") { showNew = true }.buttonStyle(.borderedProminent).tint(p.brand)
             }
         }
@@ -192,20 +226,21 @@ struct SessionCard: View {
     @Environment(\.palette) private var p
     let session: Session
     var body: some View {
-        PaperCard(padding: 14) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
                     StatusDot(session: session.status)
-                    Chip.agent(session.agent)
+                    Text(session.agent.displayName).font(.yzCaption).foregroundStyle(p.labelSecondary)
                     if session.source != .phone {
                         Chip(session.source.displayName, tone: .fill, icon: session.source == .terminal ? "terminal" : "shippingbox")
                     }
                     if session.pendingApprovals > 0 { Chip("\(session.pendingApprovals) 待审批", tone: .danger) }
                     Spacer(minLength: 4)
-                    Text("\(session.status.displayName) · \(RelativeTime.string(from: session.updatedAt))")
+                    Text(RelativeTime.string(from: session.updatedAt))
                         .font(.yzFootnote).foregroundStyle(p.labelTertiary).lineLimit(1)
                 }
-                Text(session.title).font(.yzTitle3).foregroundStyle(p.label).lineLimit(2)
+                Text(session.title).font(.system(.body, weight: .semibold)).foregroundStyle(p.label).lineLimit(2)
+                    .lineSpacing(3)
                 HStack(spacing: 8) {
                     if let b = session.branch {
                         HStack(spacing: 3) {
@@ -214,10 +249,15 @@ struct SessionCard: View {
                         }
                         .foregroundStyle(p.labelSecondary).lineLimit(1)
                     }
-                    CodeBlock(session.cwd)
+                    Image(systemName: "folder").font(.yzCaption).foregroundStyle(p.labelTertiary)
+                    Text(session.cwd).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1).truncationMode(.middle)
                 }
             }
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .accessibilityElement(children: .combine)
+        .accessibilityValue(session.status.displayName)
     }
 }

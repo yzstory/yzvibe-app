@@ -10,6 +10,7 @@ npm-debug.log*
 .build/
 .swiftpm/
 DerivedData/
+ios/build/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 xcuserdata/

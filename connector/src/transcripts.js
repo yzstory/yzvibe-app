@@ -159,6 +159,42 @@ function codexDirs(codexHome) {
   return out;
 }
 
+const codexContextFiles = new Map();
+const codexContextCache = new Map();
+
+/** 只读取指定线程最后一次 token_count；不以整轮累计或其他线程的数据代替。 */
+export function readCodexContext(threadId, { codexHome = CODEX_HOME } = {}) {
+  if (!threadId || !/^[a-zA-Z0-9-]+$/.test(threadId)) return null;
+  const key = `${codexHome}:${threadId}`;
+  try {
+    let file = codexContextFiles.get(key);
+    if (!file || !fs.existsSync(file)) {
+      for (const dir of codexDirs(codexHome)) {
+        const name = fs.readdirSync(dir).find((n) => n.startsWith('rollout-') && n.endsWith(`-${threadId}.jsonl`));
+        if (name) { file = path.join(dir, name); break; }
+      }
+      if (!file) return null;
+      codexContextFiles.set(key, file);
+    }
+    const st = fs.statSync(file);
+    const hit = codexContextCache.get(key);
+    if (hit?.size === st.size && hit?.mtimeMs === st.mtimeMs) return hit.value;
+    let value = null;
+    for (const line of lines(readTail(file, 1024 * 1024)).reverse()) {
+      const e = parse(line);
+      if (e?.type !== 'event_msg' || e.payload?.type !== 'token_count' || !e.payload.info) continue;
+      const info = e.payload.info, last = info.last_token_usage;
+      const input = last?.input_tokens, output = last?.output_tokens, window = info.model_context_window;
+      if (Number.isFinite(input) && input >= 0 && Number.isFinite(output) && output >= 0 && Number.isFinite(window) && window > 0) {
+        value = { contextTokens: input + output, contextWindow: window };
+      }
+      break;
+    }
+    codexContextCache.set(key, { size: st.size, mtimeMs: st.mtimeMs, value });
+    return value;
+  } catch { return null; }
+}
+
 export function scanCodexSessions({ codexHome = CODEX_HOME } = {}) {
   const out = [];
   for (const { file, st } of recentFiles(codexDirs(codexHome), /^rollout-.*\.jsonl$/)) {

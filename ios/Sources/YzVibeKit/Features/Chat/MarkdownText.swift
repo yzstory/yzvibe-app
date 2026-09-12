@@ -9,8 +9,9 @@ struct MarkdownText: View {
     var onOpenFile: ((String) -> Void)?
     /// 代码块「复制」后的回调（一般用来弹 toast）
     var onCopy: ((String) -> Void)?
+    var sessionId: String? = nil
 
-    private enum Block { case code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String) }
+    private enum Block { case code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -32,6 +33,8 @@ struct MarkdownText: View {
                     }
                 case .paragraph(let t):
                     inline(t)
+                case .image(let title, let path):
+                    if let sessionId { ReplyImage(title: title, path: path, sessionId: sessionId).id(path) }
                 }
             }
         }
@@ -83,6 +86,19 @@ struct MarkdownText: View {
             }
             if code != nil { code!.append(raw); continue }
             if line.isEmpty { flush(); continue }
+            if sessionId != nil {
+                let parts = MessageImageLinks.parts(line)
+                if parts.contains(where: { if case .image = $0 { return true }; return false }) {
+                    flush()
+                    for part in parts {
+                        switch part {
+                        case .text(let text): if !text.trimmingCharacters(in: .whitespaces).isEmpty { out.append(.paragraph(text)) }
+                        case .image(let title, let path): out.append(.image(title, path))
+                        }
+                    }
+                    continue
+                }
+            }
             if let h = Self.heading(line) { flush(); out.append(.heading(h.text, h.level)); continue }
             if let b = Self.bullet(line) { flush(); out.append(.bullet(b)); continue }
             if let n = Self.numbered(line) { flush(); out.append(.numbered(n.n, n.text)); continue }

@@ -6,10 +6,16 @@ struct ChatView: View {
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
     let sessionId: String
-    @State private var draft = ""
+    private var draft: String {
+        get { store.chatDrafts[sessionId]?.text ?? "" }
+        nonmutating set { store.chatDrafts[sessionId, default: ChatDraft()].text = newValue }
+    }
     @State private var showFiles = false
     @State private var showUsage = false
-    @State private var pending: [PendingImage] = []
+    private var pending: [PendingImage] {
+        get { store.chatDrafts[sessionId]?.images ?? [] }
+        nonmutating set { store.chatDrafts[sessionId, default: ChatDraft()].images = newValue }
+    }
     @State private var openFile: FileRef?
     @State private var showDiff = false
     @State private var showCommands = false
@@ -31,7 +37,7 @@ struct ChatView: View {
                     messageList
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
-                        .padding(.bottom, 140)
+                        .padding(.bottom, 24)
                 }
                 .scrollDismissesKeyboard(.immediately)
                 .onTapGesture { hideKeyboard() }
@@ -89,7 +95,7 @@ struct ChatView: View {
         .confirmationDialog("删除会话", isPresented: $confirmDelete) {
             Button("删除", role: .destructive) { Task { await store.deleteSession(sessionId) } }
         } message: {
-            Text("只从 YzVibe 里移除这条会话，电脑上 Claude / Codex 的记录不会被删。")
+            Text("删除后会停止此会话，并清除 YzVibe 中的消息。电脑上 Claude / Codex 的原始记录会保留，可在「我 › 会话」中重新显示；尚未保存到电脑记录的内容无法恢复。")
         }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
         .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
@@ -179,7 +185,7 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            InputBar(text: $draft, pending: $pending,
+            InputBar(text: Binding(get: { draft }, set: { draft = $0 }), pending: Binding(get: { pending }, set: { pending = $0 }),
                      placeholder: busy ? "会排在当前任务后面…" : "发消息给 \(session?.agent.displayName ?? "Agent")…",
                      sendHint: busy ? .queue : .send,
                      onSend: { submit(.auto) },
@@ -238,7 +244,10 @@ struct UserBubble: View {
                 HStack(spacing: 6) {
                     ForEach(message.attachments, id: \.self) { id in
                         AttachmentThumb(id: id, sessionId: message.sessionId, size: message.attachments.count == 1 ? 200 : 110)
-                            .onTapGesture { if store.attachmentImages[id] != nil { viewing = AttachmentRef(id: id) } }
+                            .onTapGesture {
+                                if let image = store.attachmentImages[id] { viewing = AttachmentRef(id: id, image: image) }
+                                else { Task { await store.loadAttachment(id, for: message.sessionId) } }
+                            }
                     }
                 }
             }
@@ -246,21 +255,21 @@ struct UserBubble: View {
                 Text(message.text)
                     .font(.yzBody)
                     .foregroundStyle(p.brandInk)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .padding(.horizontal, 18).padding(.vertical, 14)
                     .background(
-                        UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20, style: .continuous)
+                        UnevenRoundedRectangle(topLeadingRadius: 26, bottomLeadingRadius: 26, bottomTrailingRadius: 10, topTrailingRadius: 26, style: .continuous)
                             .fill(p.brand)
                     )
                     .textSelection(.enabled)
             }
         }
         .fullScreenCover(item: $viewing) { ref in
-            if let img = store.attachmentImages[ref.id] { ImageViewer(image: img) }
+            ImageViewer(image: ref.image)
         }
     }
 }
 
-struct AttachmentRef: Identifiable { let id: String }
+struct AttachmentRef: Identifiable { let id: String; let image: UIImage }
 
 /// 附件缩略图：先看本地缓存，没有就从连接器拉；拉不到显示占位。
 struct AttachmentThumb: View {
@@ -273,11 +282,11 @@ struct AttachmentThumb: View {
     var body: some View {
         ZStack {
             if let img = store.attachmentImages[id] {
-                Image(uiImage: img).resizable().scaledToFill()
+                Image(uiImage: img).resizable().scaledToFit()
             } else if store.failedAttachments.contains(id) {
                 VStack(spacing: 4) {
                     Image(systemName: "photo.badge.exclamationmark").font(.system(.headline)).foregroundStyle(p.labelTertiary)
-                    Text("图片不可用").font(.yzCaption).foregroundStyle(p.labelTertiary)
+                    Text("加载失败，点按重试").font(.yzCaption).foregroundStyle(p.labelSecondary)
                 }
             } else {
                 ProgressView().controlSize(.small)
@@ -288,6 +297,11 @@ struct AttachmentThumb: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(p.border, lineWidth: 1))
         .task(id: id) { await store.loadAttachment(id, for: sessionId) }
+        .onChange(of: store.lastSyncAt) { _, _ in
+            if store.failedAttachments.contains(id) {
+                Task { await store.loadAttachment(id, for: sessionId) }
+            }
+        }
     }
 }
 
@@ -299,23 +313,19 @@ struct AssistantBubble: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !message.text.isEmpty {
-                MarkdownText(text: message.text, onOpenFile: onOpenFile, onCopy: { _ in store.toast = "已复制代码" })
+                MarkdownText(text: message.text, onOpenFile: onOpenFile, onCopy: { _ in store.toast = "已复制代码" }, sessionId: message.sessionId)
                     .foregroundStyle(p.label).textSelection(.enabled)
             }
-            ForEach(message.toolCalls, id: \.id) { ToolCallCard(call: $0) }
+            if !message.toolCalls.isEmpty {
+                ToolCallGroup(calls: message.toolCalls)
+            }
             if message.streaming {
                 HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(p.labelTertiary).frame(width: 6, height: 6) } }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 12)
-        .background(
-            UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous)
-                .fill(p.surfaceElevated)
-        )
-        .overlay(
-            UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20, style: .continuous)
-                .strokeBorder(p.border, lineWidth: 1)
-        )
+        .lineSpacing(4)
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(p.surfaceElevated))
         .contextMenu { Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }
     }
 }
@@ -327,6 +337,11 @@ struct PendingImage: Identifiable, Equatable {
     let data: Data
     let image: UIImage
     static func == (a: PendingImage, b: PendingImage) -> Bool { a.id == b.id }
+}
+
+struct ChatDraft {
+    var text = ""
+    var images: [PendingImage] = []
 }
 
 struct InputBar<Accessory: View>: View {
@@ -379,7 +394,7 @@ struct InputBar<Accessory: View>: View {
             HStack(spacing: 8) {
                 PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
                     Image(systemName: "photo.on.rectangle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                        .frame(width: 36, height: 36).background(Circle().fill(p.fill))
+                        .frame(width: 44, height: 44)
                 }
                 .onChange(of: pickerItems) { _, items in
                     guard !items.isEmpty else { return }
@@ -398,15 +413,14 @@ struct InputBar<Accessory: View>: View {
                 if let onCommands {
                     Button(action: onCommands) {
                         Image(systemName: "slash.circle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                            .frame(width: 36, height: 36).background(Circle().fill(p.fill))
+                            .frame(width: 44, height: 44)
                     }
                 }
-                accessory()
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
                         .font(.system(.callout, weight: .bold)).foregroundStyle(p.brandInk)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 44, height: 44)
                         .background(Circle().fill(p.brand))
                 }
                 .disabled(empty)
@@ -419,9 +433,12 @@ struct InputBar<Accessory: View>: View {
                     }
                 }
             }
+            ScrollView(.horizontal, showsIndicators: false) {
+                accessory().fixedSize(horizontal: true, vertical: false)
+            }
         }
-        .padding(8)
-        .liquidGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(10)
+        .liquidGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
     }
 }
 

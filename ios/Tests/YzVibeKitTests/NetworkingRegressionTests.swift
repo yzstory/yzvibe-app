@@ -72,6 +72,18 @@ struct NetworkingRegressionTests {
         #expect(FixtureProtocol.requests.count(host: "backup.good") == 2)
     }
 
+    @Test func discoveredEndpointReplacesCachedHTTPBase() async throws {
+        let (client, original, session) = fixture()
+        defer { session.invalidateAndCancel() }
+        _ = try await client.sessions(device: original) // caches backup.good
+        var updated = original
+        updated.adopt(base: "https://discovered.good")
+        client.reconnect(device: updated)
+        _ = try await client.sessions(device: updated)
+        #expect(FixtureProtocol.requests.count(host: "discovered.good") >= 1)
+        #expect(FixtureProtocol.requests.count(host: "backup.good") == 2)
+    }
+
     @Test func failedRetryDoesNotRecurse() async {
         let (client, device, session) = fixture(backups: ["https://retry.fail"])
         defer { session.invalidateAndCancel() }

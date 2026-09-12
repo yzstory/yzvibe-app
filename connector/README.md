@@ -39,7 +39,11 @@ node bin/yzvibe.js start --agent=mock    # 不调用 Claude，用内置假 Agent
 
 落地页 `GET /pair` 与 `GET /pair.json` 是公开路由（凭据就是 URL 里的一次性配对码），查看它们不会消费配对码；配对码错误或过期返回 410。
 
-Cloudflare 临时隧道断开时连接器会自动重开一条并写进日志；临时隧道地址会变，手机需重新扫码（`yzvibe qr`）。想要固定地址请用 `--access=https://<自己的隧道>`。
+Cloudflare 临时隧道进程退出，或日志出现 `Unauthorized: Tunnel not found` 时，连接器会重建隧道；失败后按 5 / 10 / 20 / 40 / 60 秒退避持续重试。普通网络断开由 cloudflared 自身重连，避免不必要地更换地址。
+
+临时地址重建后会变化。已配置 APNs 且手机注册推送时会尝试下发新地址，但静默推送不保证送达；同一 Wi-Fi 下可在设备页选择「在局域网里找」，保留原配对。异地且没有可达备用地址或推送时，手机无法凭旧地址发现新地址，仍需更新地址或扫码。
+
+长期使用建议配置有固定域名的 Cloudflare Tunnel，再运行 `yzvibe restart --access=https://<固定域名>`，将隧道源站指向 `http://localhost:19876`（自定义端口时相应调整）。此选项只配置连接器公布的地址，不会创建或托管命名隧道；cloudflared 服务需要独立运行。首次迁移固定地址可重新扫码一次，之后短暂断线无需重新配对。Quick Tunnel 官方说明：https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/ 。
 
 默认端口 19876（`--port=` 或环境变量 `YZVIBE_PORT` 可改）；被占用时自动向后找空闲端口。数据目录可用 `YZVIBE_HOME` 覆盖。
 

@@ -25,6 +25,7 @@ public final class AppStore {
     public var failedAttachments: Set<String> = []
     public var settings = Settings() { didSet { settings.save() } }
     public var toast: String?
+    var chatDrafts: [String: ChatDraft] = [:]
     public private(set) var isDemo: Bool
 
     public let client: any ConnectorClient
@@ -34,6 +35,7 @@ public final class AppStore {
     /// 每个会话「服务端已确认的最后一条消息」，断线重连后从这里往后补。
     private var syncCursor: [String: String] = [:]
     private var syncing = false
+    private var deletingSessionIDs: Set<String> = []
     /// 局域网发现（测试里换成假的）。
     public var lanDiscovery: @Sendable (TimeInterval) async -> [DiscoveredConnector] = { await LANDiscovery.shared.discover(timeout: $0) }
 
@@ -92,7 +94,7 @@ public final class AppStore {
         guard let device else { return [] }
         return sessions
             .filter { $0.deviceId == device.id }
-            .filter { !activeOnly || $0.status != .closed }
+            .filter { !activeOnly || $0.status == .running || $0.status == .waitingApproval || !$0.queue.isEmpty }
             .filter { settings.showTerminalSessions || $0.source == .phone }
             .filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.cwd.localizedCaseInsensitiveContains(query) }
             .sorted { $0.updatedAt > $1.updatedAt }
@@ -126,6 +128,13 @@ public final class AppStore {
 
     public func addManual(host: String, port: Int, token: String) async throws {
         try await pair(PairingPayload(host: host, port: port, token: token, mode: host.contains("://") ? .relay : .local))
+    }
+
+    func updateDevice(_ updated: Device) {
+        guard let index = devices.firstIndex(where: { $0.id == updated.id }) else { return }
+        devices[index] = updated
+        if !isDemo { client.reconnect(device: updated); subscribe(updated) }
+        toast = "设备配置已保存"
     }
 
     public func remove(_ device: Device) {
@@ -239,13 +248,15 @@ public final class AppStore {
     }
 
     public func subscribe(_ device: Device) {
-        eventTasks[device.id]?.cancel()
+        // WS 重连由 client 管理，刷新快照不应反复取消消费者。
+        guard eventTasks[device.id] == nil else { return }
         eventTasks[device.id] = Task { [weak self] in
             guard let self else { return }
             for await ev in client.events(device: device) {
                 if Task.isCancelled { break }
                 handle(ev, device: device)
             }
+            if !Task.isCancelled { eventTasks[device.id] = nil }
         }
     }
 
@@ -361,21 +372,29 @@ public final class AppStore {
         return s
     }
 
-    /// 手机上删掉一个会话：本地先移除（列表立刻干净），再通知连接器别再列出来。
+    /// 连接器确认删除后再移除本地会话，离线或请求失败时保留消息与列表。
     /// 删的只是 YzVibe 的记录，Claude / Codex 自己的 transcript 不动。
     public func deleteSession(_ id: String) async {
         guard let s = session(id) else { return }
-        let device = device(s.deviceId)
-        forgetLocally(id)
-        guard let device, !isDemo else { return }
+        guard deletingSessionIDs.insert(id).inserted else { return }
+        defer { deletingSessionIDs.remove(id) }
+        if isDemo {
+            forgetLocally(id)
+            toast = "已删除会话"
+            return
+        }
+        guard let device = device(s.deviceId) else {
+            toast = "删除失败：找不到会话所属设备"
+            return
+        }
         do {
             try await client.deleteSession(device: device, sessionId: id)
+            forgetLocally(id)
             hiddenSessionCount[device.id] = (hiddenSessionCount[device.id] ?? 0) + 1
             setDevice(device.id) { $0.sessionCount = max(0, $0.sessionCount - 1) }
             toast = "已删除会话"
         } catch {
             toast = "删除失败：\(error.localizedDescription)"
-            await refresh(device)               // 删不掉就把它放回来，别让列表骗人
         }
     }
 
@@ -391,6 +410,7 @@ public final class AppStore {
     }
 
     private func forgetLocally(_ id: String) {
+        chatDrafts[id] = nil
         sessions.removeAll { $0.id == id }
         messages[id] = nil
         loadedMessages.remove(id)
@@ -528,15 +548,23 @@ public final class AppStore {
     }
 
     /// 发送前把本地图片放进缓存，气泡立刻能显示，不用再从连接器拉。
-    public func cacheAttachment(_ image: UIImage, id: String) { attachmentImages[id] = image }
+    public func cacheAttachment(_ image: UIImage, id: String) {
+        attachmentImages[id] = image
+        failedAttachments.remove(id)
+    }
+
+    private var loadingAttachments: Set<String> = []
 
     /// 按需从连接器拉附件；失败记入 failedAttachments，气泡显示占位。
     public func loadAttachment(_ id: String, for sessionId: String) async {
-        guard attachmentImages[id] == nil, !failedAttachments.contains(id), let s = session(sessionId), let device = device(s.deviceId) else { return }
+        guard attachmentImages[id] == nil, let s = session(sessionId), let device = device(s.deviceId), loadingAttachments.insert(id).inserted else { return }
+        defer { loadingAttachments.remove(id) }
+        failedAttachments.remove(id)
         do {
             let data = try await client.attachment(device: device, id: id)
-            if let img = UIImage(data: data) { attachmentImages[id] = img } else { failedAttachments.insert(id) }
-        } catch { failedAttachments.insert(id) }
+            if let img = UIImage(data: data) { cacheAttachment(img, id: id) } else { failedAttachments.insert(id) }
+        } catch is CancellationError { }
+        catch { failedAttachments.insert(id) }
     }
 
     /// 上传图片并返回附件 id。

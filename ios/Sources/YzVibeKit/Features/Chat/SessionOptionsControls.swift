@@ -13,20 +13,20 @@ struct OptionPill: View {
 
     private var colors: (fg: Color, bg: Color, stroke: Color?) {
         switch tone {
-        case .plain: (p.label, p.fill, nil)
-        case .plan: (p.blue, p.blueSoft, p.blue.opacity(0.5))
-        case .trust: (p.danger, p.dangerSoft, p.danger.opacity(0.6))
+        case .plain: (p.labelSecondary, p.fillSecondary.opacity(0.65), nil)
+        case .plan: (p.brandText, p.brandSoft, nil)
+        case .trust: (p.danger, p.dangerSoft, nil)
         }
     }
     var body: some View {
         let c = colors
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(.caption, weight: .semibold))
-            Text(text).font(.system(.footnote, weight: .semibold)).lineLimit(1)
-            Image(systemName: "chevron.up").font(.system(.caption2, weight: .bold)).opacity(0.7)
+            Text(text).font(.system(.caption, weight: .medium)).lineLimit(1)
+            Image(systemName: "chevron.down").font(.system(.caption2, weight: .medium)).opacity(0.6)
         }
         .padding(.horizontal, 11)
-        .frame(height: 36)
+        .frame(minHeight: 44)
         .foregroundStyle(c.fg)
         .background(Capsule().fill(c.bg))
         .overlay { if let s = c.stroke { Capsule().strokeBorder(s, lineWidth: 1) } }

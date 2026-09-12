@@ -28,7 +28,8 @@ export function codexTurnUsage(usage = {}, model, contextWindow) {
     model: model ?? null,
     input: Math.max(0, input - cached), cacheWrite: 0, cacheRead: cached, output: num(usage.output_tokens),
     thinking: num(usage.reasoning_output_tokens),
-    contextTokens: input, contextWindow: contextWindow ?? null,
+    // exec 的 usage 是整轮累计，不能用来表示最后一次调用的上下文。
+    contextTokens: null, contextWindow: null,
     costUSD: null, durationMs: null,
   };
 }

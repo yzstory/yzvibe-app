@@ -6,6 +6,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mimeOf } from './files.js';
 import { suggestionsFor } from './rules.js';
+import { readCodexContext } from './transcripts.js';
 
 export const HOME = process.env.YZVIBE_HOME ?? path.join(os.homedir(), '.yzvibe');
 
@@ -123,7 +124,15 @@ export class Store extends EventEmitter {
     this.emit('event', { type: 'session.created', session: this.publicSession(s) });
     return s;
   }
-  publicSession(s) { const { agentSessionId, file, ...rest } = s; return rest; }
+  publicSession(s) {
+    const { agentSessionId, file, ...rest } = s;
+    if (s.agent === 'codex' && s.usage?.turn) {
+      const context = readCodexContext(agentSessionId) ?? { contextTokens: null, contextWindow: null };
+      // 也覆盖旧版持久化的错误上下文值；累计 token 用量保持原样。
+      rest.usage = { ...s.usage, turn: { ...s.usage.turn, ...context } };
+    }
+    return rest;
+  }
   listSessions() { return this.sessions.map((s) => this.publicSession(s)); }
   setStatus(id, status) {
     const s = this.session(id); if (!s) return;

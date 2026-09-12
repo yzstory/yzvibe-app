@@ -51,9 +51,9 @@ struct MeView: View {
                         Button {
                             Task { await store.restoreHiddenSessions(on: d.id) }
                         } label: {
-                            SettingRow(icon: "arrow.uturn.backward", color: p.labelSecondary, title: "恢复删除的会话",
-                                       subtitle: "这台电脑上有 \(n) 条会话被从列表里删掉了", inset: 0) {
-                                Text("恢复").font(.yzFootnoteStrong).foregroundStyle(p.brand)
+                            SettingRow(icon: "arrow.uturn.backward", color: p.labelSecondary, title: "重新显示电脑上的会话",
+                                       subtitle: "\(n) 条会话已隐藏；仅能找回电脑保留的原始记录", inset: 0) {
+                                Text("重新显示").font(.yzFootnoteStrong).foregroundStyle(p.brand)
                             }
                         }
                         .buttonStyle(.plain)

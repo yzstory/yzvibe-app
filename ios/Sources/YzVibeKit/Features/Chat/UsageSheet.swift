@@ -70,7 +70,7 @@ struct UsageSheet: View {
         PaperCard {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("上下文（本轮）").font(.yzHeadline).foregroundStyle(p.label)
+                    Text("上下文（最近调用）").font(.yzHeadline).foregroundStyle(p.label)
                     Spacer()
                     if let f = s.usage?.turn.contextFraction { Text("\(Int((f * 100).rounded()))%").font(.yzHeadline).monospacedDigit().foregroundStyle(gaugeColor(f)) }
                     else { Text("--").font(.yzHeadline).foregroundStyle(p.labelTertiary) }
@@ -81,7 +81,10 @@ struct UsageSheet: View {
                     Spacer()
                     if let ms = s.usage?.turn.durationMs { Text("本轮 \(String(format: "%.1f", Double(ms) / 1000)) s").font(.yzCaption).foregroundStyle(p.labelTertiary) }
                 }
-                Text("口径：input + cache 写入 + cache 命中，即最后一次调用送进模型的全部输入").font(.yzCaption).foregroundStyle(p.labelTertiary)
+                Text(s.agent == .codex
+                     ? "来自最近一次模型调用：输入（已含缓存命中）+ 输出。窗口取自本会话记录；未读取到时显示 --。"
+                     : "最近一次调用的输入 + cache 写入 + cache 命中，不含输出。")
+                    .font(.yzCaption).foregroundStyle(p.labelTertiary)
             }
         }
     }
@@ -134,14 +137,14 @@ struct UsageSheet: View {
     }
 
     private func turnCard(_ t: TurnUsage, agent: AgentKind) -> some View {
-        SectionCard("本轮 tokens") {
+        SectionCard("本轮累计 tokens") {
             row("输入 tokens", fmt(t.input))
             Divider_()
             row(agent == .codex ? "cache 写入" : "cache 写入", fmt(t.cacheWrite), dim: agent == .codex)
             Divider_()
             row("cache 命中", fmt(t.cacheRead))
             Divider_()
-            row("输出 tokens", fmt(t.output), badge: "未计入上下文")
+            row("输出 tokens", fmt(t.output), badge: agent == .codex ? nil : "未计入上下文")
             if t.thinking > 0 { Divider_(); row(agent == .codex ? "其中推理" : "其中思考", fmt(t.thinking), dim: true) }
             if let c = t.costUSD { Divider_(); row("本轮费用（按目录价）", String(format: "$%.4f", c)) }
         }
