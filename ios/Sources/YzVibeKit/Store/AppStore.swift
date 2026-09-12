@@ -725,7 +725,6 @@ public final class AppStore {
             Task { [weak self] in
                 guard let self else { return }
                 await reconcileOutbox(device)
-                for sid in snapshot.messages.keys { await loadRuns(sid) }
             }
         case .sessionCreated(var s):
             s.deviceId = device.id
@@ -743,7 +742,6 @@ public final class AppStore {
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }
             syncLiveActivity(sid)
-            if st == .idle || st == .error || st == .closed { Task { await loadRuns(sid) } }
         case .messageUpdated(let message):
             if let i = messages[message.sessionId]?.firstIndex(where: { $0.id == message.id }) {
                 messages[message.sessionId]?[i] = message

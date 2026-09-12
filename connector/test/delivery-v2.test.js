@@ -198,3 +198,39 @@ test('diagnostics exports only allowlisted facts, never tokens, names, paths or 
   for (const secret of ['SECRET', device.token, store.home]) assert.equal(encoded.includes(secret), false);
   assert.equal(result.storage.sessions, 1); assert.equal(result.push.registered, true);
 });
+
+test('execution index stores references, hydrates on demand and retains only 50 rounds', t => {
+  const store = new Store(temporary(t));
+  const s = store.createSession({ agent: 'mock', cwd: '/fixture', title: 'fixture' });
+  for (let i = 0; i < 52; i++) {
+    store.setStatus(s.id, 'running');
+    store.upsertToolCall(s.id, { id: `tool-${i}`, name: 'Shell', detail: 'npm test', state: 'done', output: `output-${i}`, exitCode: 0 });
+    store.setStatus(s.id, 'idle');
+  }
+  assert.equal(s.runs.length, 50);
+  assert.ok(s.runs.every(r => !('tools' in r) && !('summary' in r)));
+  const index = store.runIndex(s.id);
+  assert.ok(index.every(r => r.tools.length === 0 && r.summary === ''));
+  assert.equal(store.runDetail(s.id, index.at(-1).id).tools[0].output, 'output-51');
+  assert.ok(store.messagesOf(s.id).some(m => m.toolCalls.some(t => t.id === 'tool-0')));
+  // Simulate an old version's duplicated payload, then migrate without losing output.
+  s.runs[0] = store.runDetail(s.id, s.runs[0].id);
+  fs.writeFileSync(path.join(store.home, 'sessions.json'), JSON.stringify(store.sessions));
+  const recovered = new Store(store.home);
+  assert.equal(recovered.session(s.id).runs[0].tools, undefined);
+  assert.equal(recovered.runDetail(s.id, index[0].id).tools[0].output, 'output-2');
+});
+
+test('execution list excludes output, individual details and legacy API retain it', async t => {
+  const { connector, call, s } = await fixture(t);
+  connector.store.setStatus(s.id, 'running');
+  connector.store.upsertToolCall(s.id, { id: 'check', name: 'Shell', state: 'done', output: 'RESULT', detail: 'npm test' });
+  connector.store.setStatus(s.id, 'idle');
+  const index = await (await call(`/sessions/${s.id}/runs?summary=1`)).json();
+  assert.deepEqual(index[0].tools, []);
+  const detail = await (await call(`/sessions/${s.id}/runs/${index[0].id}`)).json();
+  assert.equal(detail.tools[0].output, 'RESULT');
+  const legacy = await (await call(`/sessions/${s.id}/runs`)).json();
+  assert.equal(legacy[0].tools[0].output, 'RESULT');
+  assert.equal((await call(`/sessions/${s.id}/runs/missing`)).status, 404);
+});

@@ -9,6 +9,7 @@ public protocol ConnectorClient: Sendable {
     func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt?
     func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool
     func runs(device: Device, sessionId: String) async throws -> [TaskRun]
+    func run(device: Device, sessionId: String, id: String) async throws -> TaskRun
     func diagnostics(device: Device) async throws -> ConnectorDiagnostics
     func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck
     func health(device: Device) async throws -> HealthInfo
@@ -336,8 +337,19 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         }
         return true
     }
+    public func run(device: Device, sessionId: String, id: String) async throws -> TaskRun {
+        do { return try await perform(device, "/sessions/\(sessionId)/runs/\(id)", as: TaskRun.self) }
+        catch ConnectorError.server(404, _, _) {
+            return try await legacyRun(device: device, sessionId: sessionId, id: id)
+        }
+    }
+    private func legacyRun(device: Device, sessionId: String, id: String) async throws -> TaskRun {
+        let all = try await runs(device: device, sessionId: sessionId)
+        guard let value = all.first(where: { $0.id == id }) else { throw ConnectorError.server(404, "run_not_found", "执行记录已过期或不存在") }
+        return value
+    }
     public func runs(device: Device, sessionId: String) async throws -> [TaskRun] {
-        try await perform(device, "/sessions/\(sessionId)/runs", as: [TaskRun].self)
+        try await perform(device, "/sessions/\(sessionId)/runs?summary=1", as: [TaskRun].self)
     }
     public func diagnostics(device: Device) async throws -> ConnectorDiagnostics {
         try await perform(device, "/diagnostics", as: ConnectorDiagnostics.self)
@@ -842,6 +854,10 @@ public extension ConnectorClient {
     func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt? { nil }
     func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool { false }
     func runs(device: Device, sessionId: String) async throws -> [TaskRun] { [] }
+    func run(device: Device, sessionId: String, id: String) async throws -> TaskRun {
+        guard let value = try await runs(device: device, sessionId: sessionId).first(where: { $0.id == id }) else { throw ConnectorError.server(404, "run_not_found", "执行记录已过期或不存在") }
+        return value
+    }
     func diagnostics(device: Device) async throws -> ConnectorDiagnostics { throw ConnectorError.network("请更新电脑连接器以查看诊断") }
     func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck { EndpointCheck(id: index, status: "unavailable", latencyMs: 0) }
     func sendQueuedNow(device: Device, sessionId: String, itemId: String) async throws -> Session { throw ConnectorError.unreachable }

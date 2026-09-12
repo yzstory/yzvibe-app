@@ -53,6 +53,16 @@ export class Store extends EventEmitter {
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.uploads = new Map();                                               // id → { path, mime, name }
     this.rules = null;                                                      // server 注入 Rules 实例
+    // Old payloads with message references can be reconstructed without duplicate output.
+    for (const session of this.sessions) {
+      session.runs = (session.runs ?? []).slice(-50).map(run => {
+        if (!run.messageIds?.length || !(run.tools || run.summary || run.files)) return run;
+        const savedIds = new Set(this.messagesOf(session.id).map(m => m.id));
+        if (!run.messageIds.every(id => savedIds.has(id))) return run; // Preserve otherwise-unrecoverable legacy details.
+        const { tools, files, summary, ...index } = run;
+        return index;
+      });
+    }
     for (const old of previous.filter(s => ['running', 'waiting_approval'].includes(s.status))) {
       const list = this.messagesOf(old.id);
       for (const m of list) { m.streaming = false; for (const t of m.toolCalls ?? []) if (t.state === 'running') t.state = 'error'; }
@@ -61,6 +71,7 @@ export class Store extends EventEmitter {
       s.activeRunId = null;
       this.addMessage(old.id, { role: 'system', text: '连接器在任务结束前重启。已恢复保存的内容，执行结果待确认；请检查交付记录后再继续。' });
     }
+    this.#saveSessions();
   }
 
   #initConnector() {
@@ -151,8 +162,8 @@ export class Store extends EventEmitter {
     const s = this.session(id); if (!s) return;
     if (status === 'running' && !['running', 'waiting_approval'].includes(s.status)) {
       const run = { id: randomUUID(), sessionId: id, status: 'running', startedAt: new Date().toISOString(), endedAt: null,
-        startMessageId: this.messagesOf(id).at(-1)?.id ?? null, messageIds: [], tools: [], files: [], artifacts: [], summary: '' };
-      s.runs = [...(s.runs ?? []), run]; s.activeRunId = run.id;
+        startMessageId: this.messagesOf(id).at(-1)?.id ?? null, messageIds: [], artifacts: [] };
+      s.runs = [...(s.runs ?? []), run].slice(-50); s.activeRunId = run.id;
     }
     if (['idle', 'error', 'closed'].includes(status) && s.activeRunId) {
       const run = s.runs?.find(r => r.id === s.activeRunId);
@@ -303,7 +314,21 @@ export class Store extends EventEmitter {
   }
   #saveSessions() { writeJSON(path.join(this.home, 'sessions.json'), this.sessions); }
 
-  runsOf(id) { return this.session(id)?.runs ?? []; }
+  runIndex(id) {
+    return (this.session(id)?.runs ?? []).map(({ tools, files, summary, ...run }) => ({ ...run, tools: [], files: [], summary: '' }));
+  }
+  runDetail(id, runId) {
+    const run = this.session(id)?.runs?.find(r => r.id === runId);
+    if (!run) return null;
+    const ids = new Set(run.messageIds ?? []);
+    const messages = this.messagesOf(id).filter(m => ids.has(m.id));
+    const tools = [...new Map(messages.flatMap(m => m.toolCalls ?? []).map(t => [t.id, t])).values()];
+    return { ...run, tools: tools.length ? tools : (run.tools ?? []),
+      files: tools.length ? [...new Set(tools.flatMap(t => t.files ?? []))] : (run.files ?? []),
+      summary: messages.findLast(m => m.role === 'assistant' && m.text)?.text.slice(0, 1200) ?? run.summary ?? '' };
+  }
+  // Retain the old full-response API for already-installed clients.
+  runsOf(id) { return (this.session(id)?.runs ?? []).map(r => this.runDetail(id, r.id)); }
   activeRun(id) { const s = this.session(id); return s?.runs?.find(r => r.id === s.activeRunId); }
   requestStop(id) { const s = this.session(id); if (s) { s.stopRequested = true; this.#saveSessions(); } }
 
@@ -409,8 +434,6 @@ export class Store extends EventEmitter {
   finishMessage(sessionId, messageId, fullText) {
     const m = this.messagesOf(sessionId).find((x) => x.id === messageId);
     if (m) { if (typeof fullText === 'string') m.text = fullText; m.streaming = false; this.#saveMessages(sessionId); }
-    const run = this.activeRun(sessionId);
-    if (run && m?.text) { run.summary = m.text.slice(0, 1200); this.#saveSessions(); }
     this.emit('event', { type: 'message.done', sessionId, messageId });
   }
   replaceMessageText(sessionId, messageId, text) {
@@ -428,7 +451,11 @@ export class Store extends EventEmitter {
     // 先找真正包含这个工具的消息（工具结果可能晚于新消息到达），其次是本轮指定的消息，最后才退回最后一条助手消息
     let m = [...list].reverse().find((x) => x.toolCalls?.some((t) => t.id === call.id));
     if (!m && messageId) m = this.ensureAssistantMessage(sessionId, messageId);
-    if (!m) m = [...list].reverse().find((x) => x.role === 'assistant') ?? this.addMessage(sessionId, { role: 'assistant' });
+    if (!m) {
+      const run = this.activeRun(sessionId);
+      m = [...list].reverse().find(x => x.role === 'assistant' && (!run || run.messageIds.includes(x.id)))
+        ?? this.addMessage(sessionId, { role: 'assistant' });
+    }
     const patch = { ...call };
     if (patch.output != null) {
       const { output, truncated } = clampOutput(patch.output);
@@ -444,13 +471,6 @@ export class Store extends EventEmitter {
     }
     this.#saveMessages(sessionId);
     const t = m.toolCalls[i >= 0 ? i : m.toolCalls.length - 1];
-    const run = this.activeRun(sessionId);
-    if (run) {
-      const index = run.tools.findIndex(x => x.id === t.id);
-      if (index < 0) run.tools.push({ ...t }); else run.tools[index] = { ...t };
-      run.files = [...new Set(run.tools.flatMap(x => x.files ?? []))];
-      this.#saveSessions();
-    }
     this.emit('event', { type: 'tool.call', sessionId, messageId: m.id, toolId: t.id, name: t.name, input: { detail: t.detail }, state: t.state,
                          output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated), exitCode: t.exitCode ?? null, files: t.files ?? [] });
   }

@@ -9,7 +9,7 @@ struct TaskDeliveryHistoryView: View {
             if let error = store.runErrors[sessionId] { Text(error).foregroundStyle(.secondary) }
             ForEach(store.taskRuns[sessionId] ?? []) { run in
                 NavigationLink {
-                    TaskDeliveryView(run: run, session: store.session(sessionId))
+                    TaskExecutionDetailView(index: run)
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(run.statusLabel)
@@ -20,7 +20,7 @@ struct TaskDeliveryHistoryView: View {
         }
         .overlay {
             if store.taskRuns[sessionId]?.isEmpty == true {
-                ContentUnavailableView("暂无交付记录", systemImage: "checklist", description: Text("更新连接器后执行的任务会记录在这里。"))
+                ContentUnavailableView("暂无执行记录", systemImage: "checklist", description: Text("最近 50 次任务会记录在这里，原始内容仍保留在会话中。"))
             }
         }
         .navigationTitle("最近 50 次任务")
@@ -30,29 +30,31 @@ struct TaskDeliveryHistoryView: View {
     }
 }
 
-struct TaskDeliveryCard: View {
-    @Environment(\.palette) private var p
-    let run: TaskRun
-    let open: () -> Void
+/// Fetch output only after opening one task. No automatic background history requests.
+struct TaskExecutionDetailView: View {
+    @Environment(AppStore.self) private var store
+    let index: TaskRun
+    @State private var detail: TaskRun?
+    @State private var error: String?
     var body: some View {
-        Button(action: open) {
-            PaperCard(padding: 14) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Label("任务交付", systemImage: "checklist").font(.yzHeadline)
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption)
-                    }
-                    Text(run.statusLabel).font(.yzSubhead).foregroundStyle(run.status == "completed" ? p.sage : p.danger)
-                    Text("\(run.files.count) 个关联文件 · \(run.tools.count) 次工具调用 · \(run.tools.filter { $0.state == .error }.count) 项失败")
-                        .font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                    if let date = run.endedAt {
-                        Text("结束于 \(date.formatted(.dateTime.month().day().hour().minute()))")
-                            .font(.yzCaption).foregroundStyle(p.labelTertiary)
-                    }
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }.buttonStyle(.plain)
+        Group {
+            if let detail { TaskDeliveryView(run: detail, session: store.session(index.sessionId)) }
+            else if let error {
+                ContentUnavailableView {
+                    Label("暂时无法读取", systemImage: "wifi.exclamationmark")
+                } description: { Text(error) } actions: {
+                    Button("重试") { Task { await load() } }
+                }
+            } else { ProgressView("正在读取执行记录…") }
+        }.task { await load() }
+    }
+    private func load() async {
+        error = nil
+        guard let session = store.session(index.sessionId), let device = store.device(session.deviceId) else {
+            error = "会话或设备已不可用"; return
+        }
+        do { detail = try await store.client.run(device: device, sessionId: index.sessionId, id: index.id) }
+        catch { self.error = "请检查连接后重试。" }
     }
 }
 
@@ -68,7 +70,7 @@ struct TaskDeliveryView: View {
                 LabeledContent("本轮状态", value: run.statusLabel)
                 LabeledContent("开始时间") { Text(run.startedAt, style: .time) }
                 if let end = run.endedAt { LabeledContent("结束时间") { Text(end, style: .time) } }
-                Text("本卡依据连接器执行记录整理。命令完成不等于测试全部通过；请展开查看实际输出。")
+                Text("依据连接器执行记录整理。命令完成不等于测试全部通过；请展开查看实际输出。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if !run.summary.isEmpty {
@@ -109,7 +111,7 @@ struct TaskDeliveryView: View {
                 }
             }
         }
-        .paperBackground().navigationTitle("任务交付").navigationBarTitleDisplayMode(.inline)
+        .paperBackground().navigationTitle("执行记录").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         .sheet(item: $file) { file in NavigationStack { FileViewerView(session: session, path: file.path) } }
     }

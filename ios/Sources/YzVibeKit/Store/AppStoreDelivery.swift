@@ -141,6 +141,6 @@ extension AppStore {
     func loadRuns(_ sessionId: String) async {
         guard let session = session(sessionId), let device = device(session.deviceId) else { return }
         do { taskRuns[sessionId] = try await client.runs(device: device, sessionId: sessionId); runErrors[sessionId] = nil }
-        catch { runErrors[sessionId] = "交付记录暂时无法读取，请刷新重试。" }
+        catch { runErrors[sessionId] = "执行记录暂时无法读取，请刷新重试。" }
     }
 }

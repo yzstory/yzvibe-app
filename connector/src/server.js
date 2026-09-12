@@ -406,7 +406,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/runs$/)) && req.method === 'GET') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: '会话不存在' });
-        return json(res, 200, store.runsOf(s.id).slice(-50).reverse());
+        return json(res, 200, (url.searchParams.get("summary") === "1" ? store.runIndex(s.id) : store.runsOf(s.id)).slice(-50).reverse());
+      }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/runs\/([\w-]+)$/)) && req.method === 'GET') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: '会话不存在' });
+        const run = store.runDetail(s.id, m[2]);
+        return run ? json(res, 200, run) : json(res, 404, { error: '执行记录已过期或不存在' });
       }
       // 这个目录现在有哪些改动。scope=session 时跟会话开始时的 commit 比
       if ((m = p.match(/^\/sessions\/([^/]+)\/diff$/)) && req.method === 'GET') {

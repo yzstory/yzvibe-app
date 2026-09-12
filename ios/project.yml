@@ -29,7 +29,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "12"
+        CFBundleVersion: "13"
         # 仅使用 Apple 系统提供的加密（URLSession HTTPS/WSS、Keychain）。
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -70,7 +70,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe 实时活动
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "12"
+        CFBundleVersion: "13"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

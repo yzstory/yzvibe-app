@@ -26,7 +26,6 @@ struct ChatView: View {
     @State private var showCommands = false
     @State private var newSessionSeed: String?
     @State private var confirmDelete = false
-    @State private var selectedRun: TaskRun?
     @State private var showDeliveries = false
 
     private var session: Session? { store.session(sessionId) }
@@ -123,7 +122,7 @@ struct ChatView: View {
                     .accessibilityLabel("上下文用量")
                 // 其余动作收进菜单：工具栏平铺五个按钮在 iOS 上会挤掉标题
                 Menu {
-                    Button { showDeliveries = true } label: { Label("任务交付记录", systemImage: "checklist") }
+                    Button { showDeliveries = true } label: { Label("执行记录", systemImage: "checklist") }
                     Button { showDiff = true } label: { Label("改动", systemImage: "plusminus.circle") }
                     Button { showFiles = true } label: { Label("文件", systemImage: "folder") }
                     Button { showCommands = true } label: { Label("命令与 Skill", systemImage: "slash.circle") }
@@ -162,7 +161,6 @@ struct ChatView: View {
         }
         .sheet(item: $openFile) { ref in NavigationStack { FileViewerView(session: session, path: ref.path) } }
         .sheet(isPresented: $showUsage) { if let s = session { UsageSheet(sessionId: s.id).presentationDetents([.large]) } }
-        .sheet(item: $selectedRun) { run in NavigationStack { TaskDeliveryView(run: run, session: session) } }
         .sheet(isPresented: $showDeliveries) { NavigationStack { TaskDeliveryHistoryView(sessionId: sessionId) } }
     }
 
@@ -179,9 +177,6 @@ struct ChatView: View {
 
     @ViewBuilder
     private var messageList: some View {
-        let deliveries = Dictionary(grouping: (store.taskRuns[sessionId] ?? []).compactMap { run in
-            run.anchorMessage(in: messages).map { (anchor: $0, run: run) }
-        }, by: \.anchor)
         LazyVStack(spacing: 14) {
             if store.loadingMessages.contains(sessionId), !messages.isEmpty {
                 HStack(spacing: 8) {
@@ -191,12 +186,6 @@ struct ChatView: View {
             }
             ForEach(messages) { m in
                 MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
-                ForEach((deliveries[m.id] ?? []).map(\.run).sorted { $0.startedAt < $1.startedAt }) { run in
-                    TaskDeliveryCard(run: run) { selectedRun = run }
-                }
-            }
-            if let error = store.runErrors[sessionId] {
-                Button(error + " 点此重试") { Task { await store.loadRuns(sessionId) } }.font(.yzFootnote)
             }
             ForEach(store.outbox.filter { $0.sessionId == sessionId }) { item in
                 OutgoingMessageCard(item: item,
