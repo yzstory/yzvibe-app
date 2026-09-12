@@ -16,3 +16,5 @@
 ## 发布
 
 使用 TestFlight Internal Only 分发。上传状态以 Xcode / App Store Connect 回执为准。
+
+2026-09-12：Release 真机归档成功，App 与 Widget 均为 0.1.0 (14)。源码提交 `6067d36` 已 push 到 `origin/main`。通过 Xcode Organizer 选择 **TestFlight Internal Only** 上传，Xcode 明确回执 **YzVibe 0.1.0 (14) uploaded**。Apple 后续处理完成及测试组可安装状态未单独核验。
