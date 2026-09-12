@@ -93,6 +93,7 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
         if let m = patch["mode"], let raw = m, let mode = SessionMode(rawValue: raw) { s.mode = mode }
         if let v = patch["model"] { s.model = v }
         if let v = patch["effort"] { s.effort = v }
+        if let title = patch["title"], let title { s.title = title }
         configured[sessionId] = s
         return s
     }

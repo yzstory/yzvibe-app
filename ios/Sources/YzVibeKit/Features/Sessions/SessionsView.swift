@@ -10,6 +10,7 @@ struct SessionsView: View {
     @State private var collapsed: Set<String> = []
     @State private var path: [String] = []
     @State private var pendingDelete: Session?
+    @State private var renaming: Session?
 
     init() {
         #if DEBUG
@@ -50,7 +51,7 @@ struct SessionsView: View {
                                 else { collapsed.formUnion(folders) }
                             }
                         } label: {
-                            Image(systemName: allCollapsed ? "arrow.up.and.down" : "arrow.down.and.up")
+                            Image(systemName: allCollapsed ? "chevron.down" : "chevron.up")
                         }
                         .accessibilityLabel(allCollapsed ? "展开全部分组" : "收拢全部分组")
                     }
@@ -67,6 +68,7 @@ struct SessionsView: View {
                 store.openSessionRequest = nil
                 if path.last != sid { path = [sid] }
             }
+            .sheet(item: $renaming) { RenameSessionView(session: $0) }
             .sheet(isPresented: $showNew) { NewSessionView().presentationDetents([.large]) }
             .refreshable { if let d = store.selectedDevice { await store.refresh(d) } }
             .confirmationDialog("删除会话", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }), presenting: pendingDelete) { s in
@@ -117,6 +119,8 @@ struct SessionsView: View {
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button { renaming = s } label: { Label("重命名", systemImage: "pencil") }
+                    .buttonStyle(.automatic).tint(p.brand)
                 // 确认前不使用 destructive role，避免系统先把行移走。
                 Button { pendingDelete = s } label: { Label("删除", systemImage: "trash") }
                     .buttonStyle(.automatic)
@@ -136,6 +140,7 @@ struct SessionsView: View {
                 .tint(p.labelSecondary)
             }
             .contextMenu {
+                Button { renaming = s } label: { Label("重命名", systemImage: "pencil") }
                 Button { UIPasteboard.general.string = s.cwd } label: { Label("复制工作目录", systemImage: "doc.on.doc") }
                 if s.status == .running {
                     Button(role: .destructive) { Task { await store.stop(s.id) } } label: { Label("停止", systemImage: "stop.fill") }
@@ -229,7 +234,11 @@ struct SessionCard: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 6) {
-                    StatusDot(session: session.status)
+                    if session.status == .running {
+                        RunningSessionIndicator()
+                    } else {
+                        StatusDot(session: session.status)
+                    }
                     Text(session.agent.displayName).font(.yzCaption).foregroundStyle(p.labelSecondary)
                     if session.source != .phone {
                         Chip(session.source.displayName, tone: .fill, icon: session.source == .terminal ? "terminal" : "shippingbox")
@@ -259,5 +268,72 @@ struct SessionCard: View {
         .liquidGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityValue(session.status.displayName)
+    }
+}
+
+/// 仅运行中的卡片显示进度环；减少动态效果时使用静态标记。
+private struct RunningSessionIndicator: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.palette) private var p
+    var body: some View {
+        Group {
+            if reduceMotion {
+                Image(systemName: "ellipsis.circle").foregroundStyle(p.brand)
+            } else {
+                ProgressView().controlSize(.mini).tint(p.brand)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityLabel("正在运行")
+    }
+}
+
+private struct RenameSessionView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let session: Session
+    @State private var title: String
+    @State private var saving = false
+    @State private var failed = false
+    @FocusState private var focused: Bool
+    init(session: Session) {
+        self.session = session
+        _title = State(initialValue: session.title)
+    }
+    private var valid: Bool {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !value.isEmpty && value.utf16.count <= 200
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("显示名称") {
+                    TextField("会话名称", text: $title, axis: .vertical)
+                        .lineLimit(1...4).focused($focused).disabled(saving)
+                }
+                if failed {
+                    Text("保存失败，请检查连接或更新电脑端连接器后重试。输入的名称已保留。")
+                        .foregroundStyle(.red)
+                }
+                if !valid { Text("请输入 1–200 个字符的名称").foregroundStyle(.secondary) }
+            }
+            .paperBackground().navigationTitle("重命名会话").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "保存中…" : "保存") {
+                        saving = true; failed = false
+                        Task {
+                            if await store.renameSession(session.id, to: title) { dismiss() }
+                            else { failed = true }
+                            saving = false
+                        }
+                    }.disabled(!valid || saving)
+                }
+            }
+            .task { focused = true }
+        }
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(saving)
     }
 }

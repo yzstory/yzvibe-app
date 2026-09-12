@@ -142,6 +142,15 @@ test('会话选项：新建 / PATCH / WS 切换 / 能力表', async () => {
   assert.equal(patched.mode, 'plan'); assert.equal(patched.effort, 'high'); assert.equal(patched.model, 'sonnet');
   const ev = await waitFor((e) => e.type === 'session.updated' && e.session.id === s1.id && e.session.mode === 'plan');
   assert.equal(ev.session.effort, 'high');
+  const renamed = await (await fetch(`${base}/sessions/${s1.id}`, { method: 'PATCH', headers: H, body: JSON.stringify({ title: '  自定义会话  ' }) })).json();
+  assert.equal(renamed.title, '自定义会话');
+  assert.equal(renamed.mode, 'plan');
+  await waitFor((e) => e.type === 'session.updated' && e.session.title === '自定义会话');
+  for (const title of ['', '  ', null, 'x'.repeat(201)]) {
+    const invalid = await fetch(`${base}/sessions/${s1.id}`, { method: 'PATCH', headers: H, body: JSON.stringify({ title }) });
+    assert.equal(invalid.status, 400);
+  }
+  assert.equal((await (await fetch(`${base}/sessions/${s1.id}`, { headers: H })).json()).title, '自定义会话');
   // 通过 WS 切换；model 传空串表示恢复默认
   ws.send(JSON.stringify({ type: 'session.configure', sessionId: s1.id, mode: 'trust', model: '' }));
   const ev2 = await waitFor((e) => e.type === 'session.updated' && e.session.id === s1.id && e.session.mode === 'trust');

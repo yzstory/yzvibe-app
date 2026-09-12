@@ -427,6 +427,24 @@ public final class AppStore {
 
     // MARK: 会话选项（模式 / 模型 / 思考强度）
 
+    func renameSession(_ sessionId: String, to name: String) async -> Bool {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title.utf16.count <= 200,
+              let session = session(sessionId), let device = device(session.deviceId) else { return false }
+        do {
+            let updated = try await client.configure(device: device, sessionId: sessionId, patch: ["title": title])
+            guard updated.title == title else {
+                toast = "连接器尚不支持重命名，请更新电脑端连接器"
+                return false
+            }
+            if let index = sessions.firstIndex(where: { $0.id == sessionId }) { sessions[index].title = updated.title }
+            return true
+        } catch {
+            toast = error.localizedDescription
+            return false
+        }
+    }
+
     public func setMode(_ mode: SessionMode, for sessionId: String) async {
         await patchSession(sessionId, ["mode": mode.rawValue]) { $0.mode = mode }
     }

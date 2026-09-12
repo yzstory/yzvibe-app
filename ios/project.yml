@@ -29,7 +29,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "3"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # 收到静默推送时在后台补一次数据
@@ -68,7 +68,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe 实时活动
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleVersion: "3"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

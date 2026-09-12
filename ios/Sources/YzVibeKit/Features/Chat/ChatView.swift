@@ -5,6 +5,11 @@ struct ChatView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var followsLatest = true
+    @State private var nearBottom = true
+    @GestureState private var draggingMessages = false
+    private let bottomAnchor = "chat-bottom"
     let sessionId: String
     private var draft: String {
         get { store.chatDrafts[sessionId]?.text ?? "" }
@@ -32,19 +37,58 @@ struct ChatView: View {
     var body: some View {
         ZStack {
             AmbientBackground()
-            ScrollViewReader { proxy in
-                ScrollView {
-                    messageList
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .padding(.bottom, 24)
+            GeometryReader { viewport in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            messageList
+                                .padding(.horizontal, 16)
+                                .padding(.top, 8)
+                                .padding(.bottom, 24)
+                            Color.clear.frame(height: 1).id(bottomAnchor)
+                        }
+                        .onGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.frame(in: .named("chat-scroll")).maxY
+                        } action: { bottom in
+                            nearBottom = bottom <= viewport.size.height + 60
+                            if nearBottom && !draggingMessages { followsLatest = true }
+                        }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
+                            if followsLatest { scrollToBottom(proxy, animated: false) }
+                        }
+                    }
+                    .coordinateSpace(name: "chat-scroll")
+                    .scrollDismissesKeyboard(.immediately)
+                    .simultaneousGesture(DragGesture().updating($draggingMessages) { _, state, _ in state = true })
+                    .onChange(of: draggingMessages) { _, dragging in
+                        if dragging { followsLatest = false }
+                        else if nearBottom { followsLatest = true }
+                    }
+                    .onTapGesture { hideKeyboard() }
+                    .onChange(of: messages.count) { _, _ in
+                        if followsLatest { scrollToBottom(proxy, animated: false) }
+                    }
+                    .onChange(of: queued.count) { _, _ in
+                        if followsLatest { scrollToBottom(proxy, animated: false) }
+                    }
+                    .onAppear { scrollToBottom(proxy, animated: false) }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !nearBottom && !followsLatest {
+                            Button {
+                                followsLatest = true
+                                scrollToBottom(proxy)
+                            } label: {
+                                Label("回到最新", systemImage: "arrow.down")
+                                    .font(.yzFootnoteStrong)
+                                    .padding(.horizontal, 16).frame(height: 44)
+                                    .foregroundStyle(p.brand)
+                                    .liquidGlass(in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 16).padding(.bottom, 10)
+                        }
+                    }
                 }
-                .scrollDismissesKeyboard(.immediately)
-                .onTapGesture { hideKeyboard() }
-                .onChange(of: messages.count) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: queued.count) { _, _ in scrollToBottom(proxy) }
-                .onChange(of: messages.last?.text.count) { _, _ in scrollToBottom(proxy, animated: false) }
-                .onAppear { scrollToBottom(proxy, animated: false) }
             }
         }
         .navigationTitle(session?.title ?? "会话")
@@ -179,8 +223,11 @@ struct ChatView: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        guard let last = messages.last else { return }
-        if animated { withAnimation(Motion.quick) { proxy.scrollTo(last.id, anchor: .bottom) } } else { proxy.scrollTo(last.id, anchor: .bottom) }
+        if animated && !reduceMotion {
+            withAnimation(Motion.quick) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+        } else {
+            proxy.scrollTo(bottomAnchor, anchor: .bottom)
+        }
     }
 
     private var composer: some View {

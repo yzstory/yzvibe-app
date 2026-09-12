@@ -427,7 +427,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   /** 手机改了 mode / model / effort：写入会话并通知已存在的 Agent 实例。 */
   function configureSession(s, body) {
     const patch = normalizeOptions(body, s.agent);
-    if (store.configureSession(s.id, patch)) agents.get(s.id)?.configure(patch);
+    const update = { ...patch };
+    if ('title' in body) {
+      if (typeof body.title !== 'string' || !body.title.trim() || body.title.trim().length > 200) {
+        throw Object.assign(new Error('会话名称须为 1–200 个字符'), { status: 400 });
+      }
+      update.title = body.title.trim();
+    }
+    if (store.configureSession(s.id, update) && Object.keys(patch).length) agents.get(s.id)?.configure(patch);
   }
 
   /** 会话是不是正忙（忙的时候再发消息默认排队，而不是丢掉或打断）。 */

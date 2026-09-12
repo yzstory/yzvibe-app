@@ -158,7 +158,7 @@ export class Store extends EventEmitter {
   configureSession(id, patch) {
     const s = this.session(id); if (!s) return false;
     let changed = false;
-    for (const k of ['mode', 'model', 'effort']) if (k in patch && s[k] !== patch[k]) { s[k] = patch[k]; changed = true; }
+    for (const k of ['mode', 'model', 'effort', 'title']) if (k in patch && s[k] !== patch[k]) { s[k] = patch[k]; changed = true; }
     if (changed) { s.updatedAt = new Date().toISOString(); this.#saveSessions(); this.emit('event', { type: 'session.updated', session: this.publicSession(s) }); }
     return changed;
   }
