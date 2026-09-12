@@ -3,6 +3,8 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func authenticationConfigured(device: Device) -> Bool
+    func validateEndpoint(device: Device, address: String) async throws -> HealthInfo
     func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt
     func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt?
     func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool
@@ -134,6 +136,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     /// 已经探活成功、正在用的地址（Cloudflare 临时隧道换地址后靠它接上）。
     private var resolvedBases: [String: URL] = [:]
+    private var endpointRevisions: [String: Int] = [:]
     private let baseLock = NSLock()
     /// 换到新地址时通知调用方持久化（AppStore 会更新 Device 并存盘）。
     public var onEndpointResolved: (@Sendable (String, String) -> Void)?
@@ -143,24 +146,46 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         return resolvedBases[device.id] ?? device.baseURL
     }
     private func setBase(_ url: URL, for deviceId: String) {
-        baseLock.lock(); resolvedBases[deviceId] = url; baseLock.unlock()
+        baseLock.lock(); defer { baseLock.unlock() }
+        resolvedBases[deviceId] = url
+        endpointRevisions[deviceId, default: 0] += 1
+    }
+
+    private func endpointRevision(_ deviceId: String) -> Int {
+        baseLock.lock(); defer { baseLock.unlock() }
+        return endpointRevisions[deviceId, default: 0]
+    }
+
+    func isCurrentEndpoint(_ address: String, deviceId: String) -> Bool {
+        baseLock.lock(); defer { baseLock.unlock() }
+        return EndpointAddress.matches(resolvedBases[deviceId]?.absoluteString, address)
+    }
+
+    private func commitFailover(_ url: URL, deviceId: String, expectedRevision: Int) -> Bool {
+        baseLock.lock(); defer { baseLock.unlock() }
+        guard endpointRevisions[deviceId, default: 0] == expectedRevision else { return false }
+        resolvedBases[deviceId] = url
+        endpointRevisions[deviceId, default: 0] += 1
+        return true
     }
 
     /// 主地址连不上时，把这台电脑报过的其它地址挨个探一遍，谁通用谁。
-    private func failover(_ device: Device) async -> Bool {
+    private func failover(_ device: Device, expectedRevision: Int) async -> Bool {
+        // A request started on the previous address may finish after a manual switch.
+        guard endpointRevision(device.id) == expectedRevision else { return true }
         let current = base(for: device)
         var tried: Set<URL> = current.map { [$0] } ?? []
         for raw in device.endpoints {
-            guard let url = URL(string: raw), !tried.contains(url) else { continue }
+            guard let url = EndpointAddress.url(raw), EndpointAddress.unavailableReason(raw) == nil, !tried.contains(url) else { continue }
             tried.insert(url)
             var probe = URLRequest(url: url.appendingPathComponent("health"))
             probe.timeoutInterval = 4
-            guard let (data, resp) = try? await session.data(for: probe),
+            guard let (data, resp) = try? await session.data(for: probe, delegate: EndpointRedirectPolicy()),
                   (resp as? HTTPURLResponse)?.statusCode == 200,
                   let health = try? JSONDecoder.yz.decode(HealthInfo.self, from: data) else { continue }
             // 别连到另一台电脑上去
             guard health.connectorId == device.id else { continue }
-            setBase(url, for: device.id)
+            guard commitFailover(url, deviceId: device.id, expectedRevision: expectedRevision) else { return true }
             updateSocketBase(url, deviceId: device.id)
             onEndpointResolved?(device.id, raw)
             return true
@@ -170,10 +195,11 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     /// 带故障转移的请求：第一次报「连不上」就换地址重试一次。
     private func perform<T: Decodable>(_ device: Device, _ path: String, method: String = "GET", body: (any Encodable)? = nil, as type: T.Type) async throws -> T {
+        let revision = endpointRevision(device.id)
         do { return try await perform(request(device, path, method: method, body: body), as: type) }
         catch ConnectorError.unreachable {
             // 写操作可能已执行但响应丢失，不能自动重放。
-            guard method == "GET" || method == "HEAD", await failover(device) else { throw ConnectorError.unreachable }
+            guard method == "GET" || method == "HEAD", await failover(device, expectedRevision: revision) else { throw ConnectorError.unreachable }
             return try await perform(request(device, path, method: method, body: body), as: type)
         }
     }
@@ -316,15 +342,41 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     public func diagnostics(device: Device) async throws -> ConnectorDiagnostics {
         try await perform(device, "/diagnostics", as: ConnectorDiagnostics.self)
     }
+    public func authenticationConfigured(device: Device) -> Bool {
+        !(tokenProvider(device)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    public func validateEndpoint(device: Device, address: String) async throws -> HealthInfo {
+        guard let url = EndpointAddress.url(address) else { throw ConnectorError.badURL }
+        if let reason = EndpointAddress.unavailableReason(address) { throw ConnectorError.network(reason) }
+        // Probe this exact address without credentials, redirects, cached bases or failover.
+        var request = URLRequest(url: url.appendingPathComponent("health"))
+        request.timeoutInterval = 4
+        let (data, response) = try await session.data(for: request, delegate: EndpointRedirectPolicy())
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ConnectorError.unreachable }
+        let health = try JSONDecoder.yz.decode(HealthInfo.self, from: data)
+        guard health.connectorId == device.id else { throw ConnectorError.network("地址对应另一台连接器，已保留原连接。") }
+        guard authenticationConfigured(device: device), let token = tokenProvider(device) else { throw ConnectorError.unauthorized }
+        // /rules is a small, authenticated read supported by existing connectors.
+        request.url = url.appendingPathComponent("rules")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (authData, authResponse) = try await session.data(for: request, delegate: EndpointRedirectPolicy())
+        guard let status = (authResponse as? HTTPURLResponse)?.statusCode else { throw ConnectorError.unreachable }
+        if status == 401 || status == 403 { throw ConnectorError.unauthorized }
+        guard status == 200 else { throw ConnectorError.network("目标地址认证检查失败（HTTP \(status)），已保留原连接。") }
+        _ = try JSONDecoder.yz.decode([ApprovalRule].self, from: authData)
+        return health
+    }
     public func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck {
         let started = Date()
         func result(_ status: String, _ version: String? = nil) -> EndpointCheck {
             EndpointCheck(id: index, status: status, latencyMs: Int(Date().timeIntervalSince(started) * 1000), version: version)
         }
-        guard let url = URL(string: address), ["http", "https"].contains(url.scheme ?? ""), url.user == nil, url.password == nil else { return result("invalid_address") }
+        guard let url = EndpointAddress.url(address) else { return result("invalid_address") }
+        if EndpointAddress.unavailableReason(address) != nil { return result("loopback") }
         var probe = URLRequest(url: url.appendingPathComponent("health")); probe.timeoutInterval = 4
         do {
-            let (data, response) = try await session.data(for: probe)
+            let (data, response) = try await session.data(for: probe, delegate: EndpointRedirectPolicy())
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return result("http_error") }
             let health = try JSONDecoder.yz.decode(HealthInfo.self, from: data)
             let safeVersion = health.version.count < 40 && health.version.allSatisfy { $0.isNumber || ".-".contains($0) } ? health.version : nil
@@ -432,9 +484,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     /// 二进制下载：连不上时同样先做一次地址故障转移。
     private func data(_ device: Device, _ path: String) async throws -> (Data, URLResponse) {
+        let revision = endpointRevision(device.id)
         do { return try await session.data(for: try request(device, path)) }
         catch {
-            guard await failover(device) else { throw ConnectorError.unreachable }
+            guard await failover(device, expectedRevision: revision) else { throw ConnectorError.unreachable }
             return try await session.data(for: try request(device, path))
         }
     }
@@ -458,7 +511,8 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     private func updateSocketBase(_ url: URL, deviceId: String) {
         lock.lock(); let socket = sockets[deviceId]; lock.unlock()
-        socket?.updateBase(url)
+        baseLock.lock(); defer { baseLock.unlock() }
+        socket?.updateBase(resolvedBases[deviceId] ?? url)
     }
 
     private func socket(for device: Device) -> ConnectorSocket {
@@ -564,18 +618,23 @@ final class ConnectorSocket: @unchecked Sendable {
         guard !connecting else { return }
         connecting = true
         defer { connecting = false }
-        guard let root = base, var comps = URLComponents(url: root.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else { return }
-        comps.scheme = comps.scheme == "https" ? "wss" : "ws"
-        if let token { comps.queryItems = [URLQueryItem(name: "token", value: token)] }
-        guard let url = comps.url else { return }
-        var req = URLRequest(url: url)
-        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        guard let root = base, let req = Self.connectionRequest(base: root, token: token) else { return }
         let t = session.webSocketTask(with: req)
         t.maximumMessageSize = 64 * 1024 * 1024
         task = t
         t.resume()
         receive()
         startHeartbeat()
+    }
+
+    static func connectionRequest(base: URL, token: String?) -> URLRequest? {
+        guard var components = URLComponents(url: base.appendingPathComponent("ws"), resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.query = nil
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
     }
 
     /// 每 30 秒 ping 一次：中间隧道悄悄断链时，只靠 receive 可能一直不报错。
@@ -697,6 +756,13 @@ final class ConnectorSocket: @unchecked Sendable {
 struct OK: Decodable { var ok: Bool? }
 private struct ConnectorFailureBody: Decodable { var error: String?; var code: String? }
 
+private final class EndpointRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 struct RememberBody: Encodable {
     var match: String, value: String?, scope: String, ttlMinutes: Int?
     init(_ s: ApprovalSuggestion) { match = s.match; value = s.value; scope = s.scope; ttlMinutes = s.ttlMinutes }
@@ -767,6 +833,8 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func authenticationConfigured(device: Device) -> Bool { false }
+    func validateEndpoint(device: Device, address: String) async throws -> HealthInfo { throw ConnectorError.unreachable }
     func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt {
         let result = try await sendMessage(device: device, sessionId: sessionId, text: text, attachments: attachments, mode: mode)
         return DeliveryReceipt(id: clientMessageId, itemId: result.item?.id, state: result.queued ? "queued" : "sent")

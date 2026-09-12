@@ -179,6 +179,9 @@ struct ChatView: View {
 
     @ViewBuilder
     private var messageList: some View {
+        let deliveries = Dictionary(grouping: (store.taskRuns[sessionId] ?? []).compactMap { run in
+            run.anchorMessage(in: messages).map { (anchor: $0, run: run) }
+        }, by: \.anchor)
         LazyVStack(spacing: 14) {
             if store.loadingMessages.contains(sessionId), !messages.isEmpty {
                 HStack(spacing: 8) {
@@ -188,9 +191,9 @@ struct ChatView: View {
             }
             ForEach(messages) { m in
                 MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
-            }
-            ForEach((store.taskRuns[sessionId] ?? []).filter { $0.status != "running" }.prefix(3)) { run in
-                TaskDeliveryCard(run: run) { selectedRun = run }
+                ForEach((deliveries[m.id] ?? []).map(\.run).sorted { $0.startedAt < $1.startedAt }) { run in
+                    TaskDeliveryCard(run: run) { selectedRun = run }
+                }
             }
             if let error = store.runErrors[sessionId] {
                 Button(error + " 点此重试") { Task { await store.loadRuns(sessionId) } }.font(.yzFootnote)

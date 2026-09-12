@@ -62,8 +62,20 @@ public struct TaskRun: Codable, Identifiable, Sendable {
     public var tools: [ToolCall]
     public var files: [String]
     public var artifacts: [String]
+    public var startMessageId: String? = nil
+    public var messageIds: [String]? = nil
     public var statusLabel: String {
-        switch status { case "running": "进行中"; case "completed": "本轮已结束"; case "failed": "执行失败"; default: "执行中断 · 待确认" }
+        switch status { case "running": "进行中"; case "completed": "任务已结束"; case "failed": "执行失败"; default: "执行中断 · 待确认" }
+    }
+
+    /// Only attach to explicitly recorded messages. Legacy or unloaded rounds stay in history.
+    func anchorMessage(in messages: [Message]) -> String? {
+        guard status != "running" else { return nil }
+        let ids = Set(messageIds ?? [])
+        let owned = messages.filter { $0.sessionId == sessionId && ids.contains($0.id) }
+        if let reply = owned.last(where: { $0.role == .assistant }) { return reply.id }
+        if let last = owned.last { return last.id }
+        return messages.first { $0.sessionId == sessionId && $0.id == startMessageId }?.id
     }
 }
 

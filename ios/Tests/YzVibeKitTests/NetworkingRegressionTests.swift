@@ -4,10 +4,16 @@ import Testing
 
 private final class Requests: @unchecked Sendable {
     private let lock = NSLock()
-    private var urls: [URL] = []
-    func record(_ url: URL) { lock.lock(); defer { lock.unlock() }; urls.append(url) }
-    func reset() { lock.lock(); defer { lock.unlock() }; urls = [] }
-    func count(host: String) -> Int { lock.lock(); defer { lock.unlock() }; return urls.filter { $0.host == host }.count }
+    private var requests: [URLRequest] = []
+    private var handler: (@Sendable (URLRequest) -> Void)?
+    func record(_ request: URLRequest) {
+        lock.lock(); requests.append(request); let action = handler; lock.unlock()
+        action?(request)
+    }
+    func onRequest(_ action: @escaping @Sendable (URLRequest) -> Void) { lock.lock(); defer { lock.unlock() }; handler = action }
+    func reset() { lock.lock(); defer { lock.unlock() }; requests = []; handler = nil }
+    func all() -> [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests }
+    func count(host: String) -> Int { all().filter { $0.url?.host == host }.count }
 }
 
 private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
@@ -16,11 +22,11 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         guard let url = request.url else { return }
-        Self.requests.record(url)
+        Self.requests.record(request)
         if url.host == "primary.fail" || (url.host == "retry.fail" && url.path != "/health") {
             client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost)); return
         }
-        let status = url.host == "server.error" ? 503 : 200
+        let status = url.host == "server.error" ? 503 : url.host == "unauthorized.test" && url.path != "/health" ? 401 : 200
         let id = url.host == "wrong.identity" ? "different-connector" : "test-connector"
         let body = url.path == "/health" ? "{\"name\":\"Fixture\",\"version\":\"1\",\"agents\":[],\"connectorId\":\"\(id)\"}" : "[]"
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
@@ -124,5 +130,72 @@ struct NetworkingRegressionTests {
         #expect(store.messages["s1"]?.first { $0.id == "m2" }?.streaming == false)
         #expect(store.messages["s1"]?.first { $0.id == "m2" }?.toolCalls.first?.output == "passed")
         #expect(store.messages["s1"]?.first { $0.id == "m2" }?.toolCalls.first?.state == .done)
+    }
+
+    @Test func switchingValidatesExactAddressAndSendsTokenOnlyAfterIdentityMatches() async throws {
+        let (client, device, session) = fixture(host: "primary.good")
+        defer { session.invalidateAndCancel() }
+        #expect(client.authenticationConfigured(device: device))
+        _ = try await client.validateEndpoint(device: device, address: "https://selected.good")
+        let requests = FixtureProtocol.requests.all()
+        #expect(requests.map { $0.url?.host } == ["selected.good", "selected.good"])
+        #expect(requests.map { $0.url?.path } == ["/health", "/rules"])
+        #expect(requests[0].value(forHTTPHeaderField: "Authorization") == nil)
+        #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer fixture-token")
+        #expect(requests.allSatisfy { $0.url?.query == nil })
+        _ = try await client.sessions(device: device)
+        #expect(FixtureProtocol.requests.count(host: "primary.good") == 1, "Validation alone must not commit a new base")
+    }
+
+    @Test func wrongIdentityReceivesNoTokenAndFailedValidationDoesNotFallBack() async {
+        for host in ["wrong.identity", "primary.fail", "unauthorized.test"] {
+            let (client, device, session) = fixture(host: "primary.good")
+            defer { session.invalidateAndCancel() }
+            do { _ = try await client.validateEndpoint(device: device, address: "https://\(host)"); Issue.record("Expected validation failure") }
+            catch { }
+            let requests = FixtureProtocol.requests.all()
+            #expect(requests.allSatisfy { $0.url?.host == host })
+            if host == "wrong.identity" { #expect(requests.count == 1 && requests[0].value(forHTTPHeaderField: "Authorization") == nil) }
+            _ = try? await client.sessions(device: device)
+            #expect(FixtureProtocol.requests.count(host: "primary.good") == 1)
+            #expect(FixtureProtocol.requests.count(host: "backup.good") == 0)
+        }
+    }
+
+    @Test func missingTokenCannotPassAnOtherwiseReachableEndpoint() async {
+        let (_, device, session) = fixture(host: "primary.good")
+        defer { session.invalidateAndCancel() }
+        let client = HTTPConnectorClient(session: session, tokenProvider: { _ in nil })
+        #expect(!client.authenticationConfigured(device: device))
+        do { _ = try await client.validateEndpoint(device: device, address: "https://selected.good"); Issue.record("Expected missing credential") }
+        catch ConnectorError.unauthorized { }
+        catch { Issue.record("Unexpected error: \(error)") }
+        #expect(FixtureProtocol.requests.all().count == 1)
+    }
+
+    @Test func staleFailoverCannotUndoAManualSelection() async throws {
+        let (client, device, session) = fixture()
+        defer { session.invalidateAndCancel() }
+        var selected = device; selected.adopt(base: "https://selected.good")
+        let chosen = selected
+        FixtureProtocol.requests.onRequest { request in
+            if request.url?.host == "backup.good", request.url?.path == "/health" { client.reconnect(device: chosen) }
+        }
+        _ = try await client.sessions(device: device)
+        #expect(client.isCurrentEndpoint("https://selected.good", deviceId: device.id))
+        #expect(FixtureProtocol.requests.all().filter { $0.url?.host == "backup.good" }.map { $0.url?.path } == ["/health"])
+        #expect(FixtureProtocol.requests.all().contains { $0.url?.host == "selected.good" && $0.url?.path == "/sessions" })
+    }
+
+    @Test func webSocketUsesTheSelectedHostAndKeepsTokenOutOfURL() throws {
+        for base in ["http://192.168.1.8:19876", "https://remote.test"] {
+            let request = try #require(ConnectorSocket.connectionRequest(base: URL(string: base)!, token: "fixture-secret"))
+            #expect(request.url?.host == URL(string: base)?.host)
+            #expect(request.url?.path == "/ws")
+            #expect(request.url?.scheme == (base.hasPrefix("https") ? "wss" : "ws"))
+            #expect(request.url?.query == nil)
+            #expect(!request.url!.absoluteString.contains("fixture-secret"))
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-secret")
+        }
     }
 }

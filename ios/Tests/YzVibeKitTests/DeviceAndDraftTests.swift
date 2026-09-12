@@ -3,7 +3,7 @@ import UIKit
 @testable import YzVibeKit
 
 @MainActor struct DeviceAndDraftTests {
-    @Test func configurationKeepsPairingIdentityAndReplacesStaleEndpoints() throws {
+    @Test func configurationKeepsPairingIdentityAndRetainsAlternativeEndpoints() throws {
         let original = MockData.macStudio
         var form = DeviceConfiguration(original)
         form.name = "工作电脑"
@@ -12,7 +12,7 @@ import UIKit
         #expect(updated.id == original.id)
         #expect(updated.name == "工作电脑")
         #expect(updated.port == 8443)
-        #expect(updated.endpoints == ["https://new.example.com:8443"])
+        #expect(updated.endpoints == ["https://new.example.com:8443"] + EndpointAddress.candidates(original))
         form.address = "192.168.1.20"; form.port = "19876"
         #expect(form.applying(to: original)?.baseURL?.absoluteString == "http://192.168.1.20:19876")
         for invalid in ["file:///tmp/test", "https://user:secret@example.com", "https://example.com?token=secret", ""] {

@@ -9,10 +9,12 @@ struct ConnectionDiagnosticsView: View {
     @State private var busy = false
     @State private var checkedAt: Date?
     @State private var failure: String?
-    private var addresses: [String] {
-        var seen: Set<String> = []
-        return ([device.baseURL?.absoluteString].compactMap { $0 } + device.endpoints).filter { seen.insert($0).inserted }.prefix(6).map { $0 }
-    }
+    @State private var addresses: [String] = []
+    @State private var switchingAddress: String?
+    @State private var switchFailure: String?
+    @State private var authentication = "尚未验证"
+    private var current: Device { store.device(device.id) ?? device }
+    private var switching: Bool { store.switchingDevices.contains(device.id) }
     private var exportText: String {
         struct Export: Encodable {
             var checkedAt: Date?
@@ -28,21 +30,36 @@ struct ConnectionDiagnosticsView: View {
     var body: some View {
         List {
             Section {
-                LabeledContent("电脑", value: device.name)
+                LabeledContent("电脑", value: current.name)
                 LabeledContent("连接状态", value: (store.device(device.id)?.online ?? false) ? "在线" : "离线")
                 if let date = checkedAt { LabeledContent("检查时间") { Text(date, style: .time) } }
                 if let error = store.connectionErrors[device.id] { Text(error).font(.footnote).foregroundStyle(.secondary) }
             }
-            Section("地址与身份") {
+            Section {
                 if checks.isEmpty { Text(busy ? "正在检查地址…" : "尚未检查").foregroundStyle(.secondary) }
                 ForEach(checks) { check in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(check.id == 0 ? "当前地址" : "备用地址 \(check.id)")
+                            Text(addresses.indices.contains(check.id) ? EndpointAddress.label(addresses[check.id]) : "连接地址")
                             Spacer()
                             Text(label(check.status)).font(.footnote)
                         }
-                        if addresses.indices.contains(check.id) { Text(addresses[check.id]).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                        if addresses.indices.contains(check.id) {
+                            let address = addresses[check.id]
+                            Text(address).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            if let reason = EndpointAddress.unavailableReason(address) {
+                                Text(reason).font(.footnote).foregroundStyle(.secondary)
+                            } else if EndpointAddress.matches(current.baseURL?.absoluteString, address) {
+                                Label("当前使用", systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(.tint)
+                            } else {
+                                Button {
+                                    Task { await switchConnection(address) }
+                                } label: {
+                                    if switchingAddress == address { ProgressView("正在验证并切换…") }
+                                    else { Label("使用此连接", systemImage: "arrow.left.arrow.right") }
+                                }.disabled(busy || switching).buttonStyle(.borderless)
+                            }
+                        }
                         Text("\(check.latencyMs) ms" + (check.version.map { " · 连接器 \($0)" } ?? "")).font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -50,6 +67,18 @@ struct ConnectionDiagnosticsView: View {
                     Text("请确认电脑与连接器正在运行。同一 Wi-Fi 下可返回设备页使用「在局域网里找」。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                if let switchFailure { Text(switchFailure).font(.footnote).foregroundStyle(.red) }
+            } header: {
+                Text("地址与身份")
+            } footer: {
+                Text("切换前验证电脑身份和设备 Token，成功后保留配对与会话。优先使用所选地址，断线时自动尝试备用地址。")
+            }
+            Section("连接认证") {
+                LabeledContent("认证方式", value: "设备 Token · Bearer")
+                LabeledContent("手机凭据", value: store.client.authenticationConfigured(device: current) ? "已保存于钥匙串" : "未配置")
+                LabeledContent("认证检查", value: authentication)
+                Text("配对时自动生成每台手机独立的 Token，用于 HTTP 和 WebSocket 连接。凭据失效时请重新配对。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             if let report {
                 Section("连接器与 Agent") {
@@ -81,27 +110,47 @@ struct ConnectionDiagnosticsView: View {
             Section {
                 Button { Task { await inspect() } } label: {
                     if busy { ProgressView() } else { Label("重新检查", systemImage: "arrow.clockwise") }
-                }.disabled(busy)
-                ShareLink(item: exportText) { Label("导出诊断", systemImage: "square.and.arrow.up") }.disabled(checkedAt == nil || busy)
+                }.disabled(busy || switching)
+                ShareLink(item: exportText) { Label("导出诊断", systemImage: "square.and.arrow.up") }.disabled(checkedAt == nil || busy || switching)
             } footer: {
                 Text("导出内容仅含检查状态、版本和数量，排除地址、设备名称、配对凭据、账户与会话正文。")
             }
         }
         .paperBackground().navigationTitle("连接诊断").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        .interactiveDismissDisabled(switching)
         .task { await inspect() }
+    }
+
+    private func switchConnection(_ address: String) async {
+        switchingAddress = address; switchFailure = nil
+        defer { switchingAddress = nil }
+        do {
+            try await store.switchEndpoint(device.id, address: address)
+            await inspect()
+        } catch {
+            switchFailure = "切换未完成，原连接已保留。\(error.localizedDescription)"
+        }
     }
 
     private func inspect() async {
         guard !busy else { return }
         busy = true; failure = nil; report = nil; checks = []
+        authentication = store.client.authenticationConfigured(device: current) ? "尚未验证" : "未配置"
+        let device = current
+        addresses = Array(EndpointAddress.candidates(device).prefix(6))
         defer { busy = false; checkedAt = .now }
         for (index, address) in addresses.enumerated() {
             guard !Task.isCancelled else { return }
             checks.append(await store.client.checkEndpoint(device: device, address: address, index: index))
         }
-        do { report = try await store.client.diagnostics(device: device) }
-        catch { failure = error.localizedDescription }
+        do {
+            report = try await store.client.diagnostics(device: device)
+            authentication = "验证通过"
+        } catch ConnectorError.unauthorized {
+            authentication = "凭据无效 · 请重新配对"
+            failure = ConnectorError.unauthorized.localizedDescription
+        } catch { failure = error.localizedDescription }
     }
     private func label(_ status: String) -> String {
         switch status {
@@ -109,6 +158,7 @@ struct ConnectionDiagnosticsView: View {
         case "identity_mismatch": "身份不符"
         case "invalid_address": "地址格式错误"
         case "http_error": "服务响应异常"
+        case "loopback": "手机无法使用"
         default: "暂时不可达"
         }
     }

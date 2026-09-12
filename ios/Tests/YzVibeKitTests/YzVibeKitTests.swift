@@ -746,6 +746,11 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
 
 /// 队列测试用的假连接器。
 final class QueueStubClient: ConnectorClient, @unchecked Sendable {
+    var endpointValidation: ((Device, String) async throws -> HealthInfo)?
+    func validateEndpoint(device: Device, address: String) async throws -> HealthInfo {
+        guard let endpointValidation else { throw ConnectorError.unreachable }
+        return try await endpointValidation(device, address)
+    }
     var deliveryHandler: ((String, String, [String]) async throws -> DeliveryReceipt)?
     var receiptHandler: ((String) async throws -> DeliveryReceipt?)?
     var uploadHandler: ((Data) async throws -> String)?

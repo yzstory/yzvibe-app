@@ -30,6 +30,7 @@ public final class AppStore {
     var taskRuns: [String: [TaskRun]] = [:]
     var runErrors: [String: String] = [:]
     var connectionErrors: [String: String] = [:]
+    var switchingDevices: Set<String> = []
     @ObservationIgnored var outboxDisk: OutboxDisk?
     @ObservationIgnored var outboxLoadFailed = false
     @ObservationIgnored var sendingIDs: Set<String> = []
@@ -68,8 +69,11 @@ public final class AppStore {
         let client = HTTPConnectorClient(tokenProvider: { TokenStore.shared.token(for: $0.id) })
         let store = AppStore(client: client, seedMock: false, outboxURL: OutboxDisk.live.url)
         // 隧道换地址后客户端会自己探到能用的那个，这里把它记下来，下次直接用
-        client.onEndpointResolved = { [weak store] deviceId, base in
-            Task { @MainActor in store?.adoptEndpoint(deviceId, base: base) }
+        client.onEndpointResolved = { [weak store, weak client] deviceId, base in
+            Task { @MainActor in
+                guard client?.isCurrentEndpoint(base, deviceId: deviceId) == true else { return }
+                store?.adoptEndpoint(deviceId, base: base)
+            }
         }
         store.devices = store.persistence.load()
         store.selectedDeviceId = UserDefaults.standard.string(forKey: "yz.selectedDevice") ?? store.devices.first?.id
@@ -301,11 +305,17 @@ public final class AppStore {
         guard !isDemo else { return }        // 演示数据里的设备是假的，别去连
         PushCenter.shared.onToken = { [weak self] token, env in Task { @MainActor in await self?.registerPush(token: token, environment: env) } }
         PushCenter.shared.onSilent = { [weak self] in await self?.resync() }
-        // 电脑重启或隧道换地址时会静默推一条过来，收到就直接换地址，不用重新扫码
+        // 在线时保留用户正在使用的地址；更新候选，断线后再故障转移。
         PushCenter.shared.onEndpoint = { [weak self] info in
             Task { @MainActor in
-                guard let self, let id = info.connectorId, let base = info.endpoints.first else { return }
-                self.adoptEndpoint(id, base: base, endpoints: info.endpoints)
+                guard let self, let id = info.connectorId, var current = self.device(id), let base = info.endpoints.first else { return }
+                if current.online {
+                    current.endpoints += info.endpoints
+                    current.endpoints = EndpointAddress.candidates(current)
+                    self.setDevice(id) { $0.endpoints = current.endpoints }
+                } else {
+                    self.adoptEndpoint(id, base: base, endpoints: info.endpoints)
+                }
                 await self.resync()
             }
         }

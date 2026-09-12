@@ -267,11 +267,15 @@ public struct Device: Identifiable, Codable, Hashable, Sendable {
 
     /// 换一个主地址（故障转移成功，或收到推送下发的新地址时）。
     public mutating func adopt(base: String) {
-        guard let u = URL(string: base), let h = u.host else { return }
-        if u.scheme == "https" { host = base.hasSuffix("/") ? String(base.dropLast()) : base }
-        else { host = h; port = u.port ?? Device.defaultPort }
-        endpoints.removeAll { $0 == base }
-        endpoints.insert(base, at: 0)
+        guard let u = EndpointAddress.url(base) else { return }
+        let previous = baseURL?.absoluteString
+        host = u.scheme == "https" ? u.absoluteString : (u.host ?? u.absoluteString)
+        port = u.port ?? (u.scheme == "https" ? 443 : 80)
+        if EndpointAddress.label(base) == "局域网地址" { mode = .local }
+        else if u.host?.hasSuffix(".trycloudflare.com") == true { mode = .tunnel }
+        else if mode == .local { mode = .relay }
+        if let previous { endpoints.append(previous) }
+        endpoints = EndpointAddress.candidates(self)
     }
 
     public var endpoint: String { host.contains("://") ? host : "\(host):\(port)" }

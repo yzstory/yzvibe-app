@@ -46,7 +46,10 @@ struct TaskDeliveryCard: View {
                     Text(run.statusLabel).font(.yzSubhead).foregroundStyle(run.status == "completed" ? p.sage : p.danger)
                     Text("\(run.files.count) 个关联文件 · \(run.tools.count) 次工具调用 · \(run.tools.filter { $0.state == .error }.count) 项失败")
                         .font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                    if let date = run.endedAt { Text(date, style: .relative).font(.yzCaption).foregroundStyle(p.labelTertiary) }
+                    if let date = run.endedAt {
+                        Text("结束于 \(date.formatted(.dateTime.month().day().hour().minute()))")
+                            .font(.yzCaption).foregroundStyle(p.labelTertiary)
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
         }.buttonStyle(.plain)

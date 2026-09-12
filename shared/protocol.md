@@ -59,7 +59,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | GET | /uploads/:id | 取回上传内容 |
 
 ## WebSocket `/ws`
-鉴权：`Authorization: Bearer <deviceToken>` 或 `?token=`。
+鉴权：`Authorization: Bearer <deviceToken>`。服务端保留 `?token=` 兼容旧客户端，iOS 新版本的 HTTP / WebSocket 仅发送 Authorization 请求头，避免凭据进入 URL。
 
 ### 服务端 → 客户端
 ```jsonc
@@ -240,7 +240,8 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 
 ### 交付与诊断
 
-- `GET /sessions/:id/runs`：最近 50 轮，倒序。每轮含 `id, sessionId, status, startedAt, endedAt, summary, tools, files, artifacts`。状态为 `running/completed/failed/interrupted`。`summary` 是助手摘要；`tools` 是真实工具记录，并不自动推断测试通过。
+- `GET /sessions/:id/runs`：最近 50 轮，倒序。每轮含 `id, sessionId, status, startedAt, endedAt, summary, tools, files, artifacts, startMessageId, messageIds`。状态为 `running/completed/failed/interrupted`。`summary` 是助手摘要；`tools` 是真实工具记录，并不自动推断测试通过。iOS 按 `messageIds` 将完成卡放在该轮最后一条助手消息下；没有回复时回到该轮记录的消息/起始请求。旧记录缺少关联或对应消息未加载时仅显示于交付历史，不追加到当前聊天底部。
 - `tool.call` 补全 `output, outputKind, truncated, exitCode, files`，iOS 事件解码与已有工具更新均保留这些字段。
 - `GET /diagnostics`：鉴权后读取版本、Agent 可运行/版本/登录状态、推送配置/此设备注册状态及队列数量。只做版本和登录状态查询，不调用付费模型；不返回账户、密钥、路径或会话内容。
 - 手机对候选地址的 `/health` 不发送凭据，核对 `connectorId`；导出包排除地址、设备名和原始错误文本。
+- 手动选择地址时，直接访问所选地址，禁用重定向与自动故障转移；身份一致后带设备 Token 请求 `/rules`，两项验证通过才持久化地址并重连 HTTP / WS。凭据与会话仍绑定原连接器 ID。所选地址之后不可达时仍允许自动故障转移；在线状态下收到地址推送只更新候选，不覆盖当前选择。真机禁选回环地址。
