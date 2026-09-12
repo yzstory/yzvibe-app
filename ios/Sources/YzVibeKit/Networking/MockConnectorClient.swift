@@ -33,7 +33,7 @@ public final class MockConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
     public func stop(device: Device, sessionId: String) async throws {}
-    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws {}
+    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?, answers: [String: String]?) async throws {}
     public func sync(device: Device) async throws -> SyncSnapshot {
         SyncSnapshot(sessions: MockData.sessions, approvals: MockData.approvals, agents: ["claude": .fallback(for: .claude), "codex": .fallback(for: .codex)],
                      rules: [ApprovalRule(id: "r1", tool: "Bash", match: "prefix", value: "npm test", description: "本会话内放行以 npm test 开头的命令")],

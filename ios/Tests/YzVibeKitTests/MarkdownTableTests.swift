@@ -28,3 +28,19 @@ struct MarkdownTableTests {
         #expect(MarkdownTable.parse(["a | b", "---"], startingAt: 0) == nil)
     }
 }
+
+import SwiftUI
+import UIKit
+
+@MainActor
+struct MarkdownLayoutTests {
+    @Test func tableReplyKeepsFullHeightUnderShortProposal() {
+        let table = "| 方向 | 说明 |\n| --- | --- |\n" + Array(repeating: "| 方向 A | 这是一段需要换行的长说明，用于检查表格的真实高度。 |", count: 3).joined(separator: "\n")
+        let view = MarkdownText(text: table + "\n\n" + String(repeating: "表格后面的说明不能覆盖下一条消息。", count: 5))
+        let host = UIHostingController(rootView: view)
+        let full = host.sizeThatFits(in: CGSize(width: 280, height: 10000))
+        let constrained = host.sizeThatFits(in: CGSize(width: 280, height: 100))
+        #expect(full.height > 300)
+        #expect(abs(full.height - constrained.height) < 1)
+    }
+}

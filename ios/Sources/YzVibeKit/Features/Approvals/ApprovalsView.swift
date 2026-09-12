@@ -64,6 +64,7 @@ struct ApprovalCardView: View {
     let approval: Approval
     var showsContext: Bool
     @State private var busy = false
+    @State private var answers: [String: String] = [:]
 
     private var riskColor: Color { approval.risk == .high ? p.danger : approval.risk == .medium ? p.amber : p.sage }
     private var riskTone: ChipTone { approval.risk == .high ? .danger : approval.risk == .medium ? .warning : .sage }
@@ -73,7 +74,7 @@ struct ApprovalCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: approval.kind.symbol).font(.system(.footnote, weight: .semibold)).foregroundStyle(riskColor)
                     .frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(riskColor.opacity(0.14)))
-                Text(approval.status == .pending ? "需要你的批准" : approval.kind.displayName).font(.yzHeadline).foregroundStyle(p.label)
+                Text(approval.status == .pending ? (approval.questions.isEmpty ? "需要你的批准" : "需要你的回答") : approval.kind.displayName).font(.yzHeadline).foregroundStyle(p.label)
                 Spacer(minLength: 4)
                 if approval.status == .pending { Chip(approval.risk.displayName, tone: riskTone) } else { statusChip }
             }
@@ -84,9 +85,33 @@ struct ApprovalCardView: View {
             }
             CodeBlock(showsContext ? approval.summary : approval.detail, dark: !showsContext, lines: showsContext ? 1 : nil)
             if approval.status == .pending {
+                ForEach(approval.questions) { question in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(question.question).font(.yzBody)
+                        ForEach(question.options ?? [], id: \.label) { option in
+                            Button { answers[question.id] = option.label } label: {
+                                HStack(alignment: .top) {
+                                    Image(systemName: answers[question.id] == option.label ? "checkmark.circle.fill" : "circle")
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(option.label)
+                                        Text(option.description).font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                                    }
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }.buttonStyle(.plain).foregroundStyle(p.brandText)
+                        }
+                        let binding = Binding(get: { answers[question.id, default: ""] }, set: { answers[question.id] = $0 })
+                        if question.isSecret == true {
+                            SecureField("输入回答", text: binding).textFieldStyle(.roundedBorder)
+                        } else {
+                            TextField("输入回答，也可以直接选择上面的选项", text: binding, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                        }
+                    }
+                }
                 HStack(spacing: 8) {
-                    Button("拒绝") { decide(.deny) }.buttonStyle(OutlineButtonStyle(color: p.danger, height: 44))
-                    Button { decide(.allow) } label: { Label("允许", systemImage: "checkmark") }.buttonStyle(PrimaryButtonStyle(height: 44))
+                    Button(approval.questions.isEmpty ? "拒绝" : "取消") { decide(.deny) }.buttonStyle(OutlineButtonStyle(color: p.danger, height: 44))
+                    Button { decide(.allow) } label: { Label(approval.questions.isEmpty ? "允许" : "提交回答", systemImage: "checkmark") }.buttonStyle(PrimaryButtonStyle(height: 44))
+                        .disabled(!approval.questions.allSatisfy { !(answers[$0.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
                 }
                 .disabled(busy)
                 // 「以后别再问我」：存成连接器上的规则，同类请求自动放行，可在「我 › 审批规则」里撤销
@@ -140,7 +165,7 @@ struct ApprovalCardView: View {
             if d != .deny, approval.risk == .high, store.settings.faceIDForHighRisk {
                 guard await BiometricGate.confirm(reason: "确认允许：\(approval.summary)") else { busy = false; return }
             }
-            await store.respond(approval.id, d, remember: remember)
+            await store.respond(approval.id, d, remember: remember, answers: approval.questions.isEmpty ? nil : answers)
             busy = false
         }
     }

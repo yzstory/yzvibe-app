@@ -10,7 +10,7 @@ import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, pri
 import { startCloudflareTunnel, retryTunnel, loadRelay, saveRelay } from './tunnel.js';
 import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
-import { CodexAgent } from './agents/codex.js';
+import { CodexAgent } from './agents/codex-app-server.js';
 import { MockAgent } from './agents/mock.js';
 import { normalizeOptions, agentCapabilities } from './agents/options.js';
 import { agentQuota } from './quota.js';
@@ -403,9 +403,9 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
       if ((m = p.match(/^\/approvals\/([^/]+)$/)) && req.method === 'POST') {
-        const { decision, remember } = await readJSON(req);
+        const { decision, remember, answers } = await readJSON(req);
         if (!['allow', 'deny', 'allow_once'].includes(decision)) return json(res, 400, { error: 'decision 不合法' });
-        return json(res, store.resolveApproval(m[1], decision, 'phone', remember ?? null) ? 200 : 409, { ok: true });
+        return json(res, store.resolveApproval(m[1], decision, 'phone', remember ?? null, answers ?? null) ? 200 : 409, { ok: true });
       }
       // 文件
       if (p === '/files' || p === '/files/preview' || p === '/files/download' || p === '/files/stat') {
@@ -520,7 +520,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
             case 'session.stop': if (s) { store.pauseQueue(s.id); agents.get(s.id)?.stop(); } break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
             case 'session.configure': if (s) configureSession(s, msg); break;
-            case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision, 'phone', msg.remember ?? null); break;
+            case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision, 'phone', msg.remember ?? null, msg.answers ?? null); break;
             case 'ping': ws.send(JSON.stringify({ type: 'pong' })); break;
             default: break;
           }

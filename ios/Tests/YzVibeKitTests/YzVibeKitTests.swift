@@ -496,7 +496,7 @@ final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
     }
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
     func stop(device: Device, sessionId: String) async throws {}
-    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws { lastRemember = remember }
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?, answers: [String: String]?) async throws { lastRemember = remember }
     func approvals(device: Device) async throws -> [Approval] { [] }
     func capabilities(device: Device) async throws -> [String: AgentCapabilities] { [:] }
     func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session { MockData.sessions[0] }
@@ -783,7 +783,7 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     func messages(device: Device, sessionId: String, after cursor: String?) async throws -> [Message] { [] }
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws {}
     func stop(device: Device, sessionId: String) async throws {}
-    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws {}
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?, answers: [String: String]?) async throws {}
     func approvals(device: Device) async throws -> [Approval] { [] }
     func capabilities(device: Device) async throws -> [String: AgentCapabilities] { [:] }
     func configure(device: Device, sessionId: String, patch: [String: String?]) async throws -> Session { MockData.sessions[0] }

@@ -82,7 +82,7 @@ Agent 正忙时收到的消息不会被丢掉也不会打断它：进队列（`s
   实测 64 个里只有 doctor / color / reload-plugins 是终端专用），拿不到时退回扫盘：
   `~/.claude/skills/*/SKILL.md`（常是符号链接，要用 statSync 判断目录）、项目 `.claude/skills/`、
   插件 `installed_plugins.json` 里的 `installPath`，以及 `~/.claude/commands/*.md`。
-  Codex 读 `~/.codex/skills/`；它的 `exec` 不解析斜杠命令，所以这些条目标了 `insertAsText`，手机会把它当提示词插进消息。
+  Codex 读 `~/.codex/skills/`；手机命令目录和技能入口继续保留，带 `insertAsText` 的条目仍按提示词发送。
 
 ## 锁屏 / 灵动岛实时活动
 
@@ -139,7 +139,8 @@ Claude 进程也会回收：会话空闲 15 分钟（`YZVIBE_IDLE_MINUTES` 可�
 - `src/commands.js`：斜杠命令与 skill 的发现与归类
 - `src/endpoints.js`：所有可达地址的收集与 Bonjour 广播
 - `src/agents/claude.js`：`claude -p --input-format stream-json --output-format stream-json` 驱动，多轮复用同一进程，`--resume` 恢复；手机改了模式 / 模型 / 思考强度后在空闲时重启进程带新参数；空闲超时回收进程。事件翻译独立成 `ClaudeStreamTranslator`，可用录制的事件流直接测试
-- `src/agents/codex.js`：`codex exec --json` 驱动，每轮一个进程，`codex exec resume <thread>` 续聊；非交互模式没有审批回调，Normal 靠 workspace-write 沙箱兜底
+- `src/agents/codex-app-server.js` / `codex-rpc.js`：Codex App Server stdio 驱动；原线程续聊、流式文本、工具事件、手机审批与提问表单。每轮结束释放连接，下一轮重新恢复线程并应用最新选项。
+- `src/agents/codex.js`：保留旧 exec 事件解析及测试，不再作为默认驱动。
 - `src/agents/options.js`：Plan / Normal / Trust、模型、思考强度在两种 Agent 上的参数映射与能力表（`GET /agents`），详见 `../shared/protocol.md`「会话选项」
 - `src/mcp-approve.js`：最小 MCP 服务器；Claude 通过 `--permission-prompt-tool mcp__yzvibe__approve` 把权限请求交给它，它转发到手机等待批准
 - `src/agents/mock.js`：演示用假 Agent（流式回复 → 工具调用 → 高风险审批 → 完成）
@@ -156,3 +157,18 @@ npm test     # 41 个用例
 会话选项与能力表、Claude 事件流翻译（录制夹具）、Codex 事件解析、用量与额度归一、
 APNs JWT 与载荷、推送环境回退与失效清理、实时活动载荷、`/sync`、设备撤销、定期清理、
 消息队列（排队 / 取消 / 本轮结束自动接上）、改动视图与命令清单、多地址上报、后台守护真实拉起子进程。
+
+
+## Codex App Server
+
+需要安装支持 `codex app-server` 的 Codex CLI（已用 0.153.4 实测）。沿用本机 Codex 登录、配置、MCP 与技能，无需新的 API key，也不在网络上暴露 App Server 端口。
+
+- Normal：`workspace-write` + `on-request`；工作目录内按沙箱执行，额外权限请求进入现有手机审批卡片和 APNs 推送。允许只批准当前请求，已保存的命令规则仍生效。
+- Plan：只读沙箱与规划提示，禁止提权；Trust：沿用无沙箱、免审批模式。
+- 旧会话使用原 `agentSessionId` 恢复，不复制线程；手机显示名称、消息、附件、草稿、队列等存储不变。原线程恢复失败会明确报错，不会偷偷另建会话。
+- 排队由连接器统一管理；收到 `turn/completed` 后推进。立即发送沿用打断当前轮、优先派发的交互。中断未确认、断线和发送结果不明时暂停队列，不自动重发。
+- 命令、文件修改、额外权限请求可在手机审批；`request_user_input` 在新版 App 的审批区域显示选项和文本框。拒绝、超时、停止、删除或断线均使旧审批失效。
+- 当前上下文直接取 `thread/tokenUsage/updated.last`，与整轮累计分开显示。
+- 需要额外专用界面的 MCP elicitation（例如第三方登录表单）会明确提示并拒绝请求，不会自动同意或一直挂起；可回电脑完成。普通 MCP 工具不受此限制。
+
+升级：更新连接器代码后运行 `yzvibe restart`；现有配对与数据保留。手机 Normal 的允许／拒绝兼容现有版本，提问表单与更完整的实时事件需要新版 iOS App。运行中的会话应结束后再重启连接器。

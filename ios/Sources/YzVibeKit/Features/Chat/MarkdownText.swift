@@ -40,6 +40,7 @@ struct MarkdownText: View {
                 }
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .environment(\.openURL, OpenURLAction { url in
             guard url.scheme == "yzfile",
                   let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
@@ -64,7 +65,6 @@ struct MarkdownText: View {
                                 .frame(width: tableColumnWidth, alignment: table.alignments[column].frameAlignment)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .padding(12)
-                                .frame(maxHeight: .infinity, alignment: .top)
                                 .background(rowIndex == 0 ? p.fill : (rowIndex.isMultiple(of: 2) ? p.fill.opacity(0.35) : Color.clear))
                                 .overlay(Rectangle().stroke(p.border, lineWidth: 0.5))
                         }
@@ -73,6 +73,7 @@ struct MarkdownText: View {
             }
             .padding(1)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(p.border, lineWidth: 0.5))
         .accessibilityHint("可左右滑动查看所有列")

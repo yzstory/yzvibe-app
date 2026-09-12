@@ -126,7 +126,7 @@ export class Store extends EventEmitter {
   }
   publicSession(s) {
     const { agentSessionId, file, ...rest } = s;
-    if (s.agent === 'codex' && s.usage?.turn) {
+    if (s.agent === 'codex' && s.usage?.turn && s.usage.source !== 'app-server') {
       const context = readCodexContext(agentSessionId) ?? { contextTokens: null, contextWindow: null };
       // 也覆盖旧版持久化的错误上下文值；累计 token 用量保持原样。
       rest.usage = { ...s.usage, turn: { ...s.usage.turn, ...context } };
@@ -310,6 +310,12 @@ export class Store extends EventEmitter {
     if (m) { if (typeof fullText === 'string') m.text = fullText; m.streaming = false; this.#saveMessages(sessionId); }
     this.emit('event', { type: 'message.done', sessionId, messageId });
   }
+  replaceMessageText(sessionId, messageId, text) {
+    const m = this.ensureAssistantMessage(sessionId, messageId);
+    m.text = text;
+    this.#saveMessages(sessionId);
+    this.emit('event', { type: 'message.updated', sessionId, message: m });
+  }
   /**
    * 新增 / 更新一张工具卡。`output` 是工具的实际输出（Bash 的 stdout、Edit 的 diff），
    * 手机上可以展开看——之前只显示「运行中 / 完成」，看不到结果就没法判断该不该批下一步。
@@ -344,8 +350,9 @@ export class Store extends EventEmitter {
    * 返回 Promise<'allow'|'deny'|'allow_once'>。命中已保存的审批规则时立刻放行，
    * 并在聊天里留一条系统消息说明是哪条规则放的，避免「悄悄执行了」。
    */
-  requestApproval({ sessionId, kind, summary, detail, risk, toolName, agent }) {
-    const rule = this.rules?.match({ sessionId, agent, toolName, summary });
+  requestApproval({ sessionId, kind, summary, detail, risk, toolName, agent, signal, questions = null, allowRules = true }) {
+    if (signal?.aborted) return Promise.resolve('deny');
+    const rule = allowRules && !questions && this.rules?.match({ sessionId, agent, toolName, summary });
     if (rule) {
       this.addMessage(sessionId, { role: 'system', text: `已按规则自动允许：${summary}`, ruleId: rule.id });
       return Promise.resolve('allow');
@@ -353,32 +360,39 @@ export class Store extends EventEmitter {
     const a = {
       id: randomUUID(), sessionId, deviceId: this.connector.id, kind, summary, detail, risk,
       status: 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-      toolName, agent: agent ?? null, suggestions: suggestionsFor({ toolName, kind, summary }),
+      toolName, agent: agent ?? null, questions,
+      suggestions: allowRules && !questions ? suggestionsFor({ toolName, kind, summary }) : [],
     };
     this.approvals.unshift(a);
     const s = this.session(sessionId); if (s) { s.pendingApprovals += 1; }
     this.addMessage(sessionId, { role: 'system', approvalId: a.id });
     this.setStatus(sessionId, 'waiting_approval');
-    this.emit('event', { type: 'approval.requested', ...this.publicApproval(a) });
     return new Promise((resolve) => {
       a.resolve = resolve;
+      const cancel = () => this.resolveApproval(a.id, 'deny', 'cancelled');
+      signal?.addEventListener('abort', cancel, { once: true });
+      a.cleanup = () => signal?.removeEventListener('abort', cancel);
       a.timer = setTimeout(() => this.resolveApproval(a.id, 'deny', 'timeout'), 10 * 60_000);
       a.timer.unref?.();
+      this.emit('event', { type: 'approval.requested', ...this.publicApproval(a) });
     });
   }
-  publicApproval(a) { const { resolve, timer, ...rest } = a; return { ...rest, approvalId: a.id }; }
+  publicApproval(a) { const { resolve, timer, cleanup, ...rest } = a; return { ...rest, approvalId: a.id }; }
   approval(id) { return this.approvals.find((a) => a.id === id) ?? null; }
   listApprovals(status) { return this.approvals.filter((a) => !status || a.status === status).map((a) => this.publicApproval(a)); }
   /**
    * @param remember 可选 `{ match, value, scope, ttlMinutes }`：把这次的决定存成规则，以后同类请求自动放行。
    */
-  resolveApproval(id, decision, by = 'phone', remember = null) {
+  resolveApproval(id, decision, by = 'phone', remember = null, answers = null) {
     const a = this.approvals.find((x) => x.id === id);
     if (!a || a.status !== 'pending' || !['allow', 'deny', 'allow_once'].includes(decision)) return false;
+    if (a.questions && decision !== 'deny' && !a.questions.every(q =>
+      typeof answers?.[q.id] === 'string' && answers[q.id].trim() && answers[q.id].length <= 10_000)) return false;
     clearTimeout(a.timer);
+    a.cleanup?.();
     a.status = by === 'timeout' ? 'expired' : decision === 'deny' ? 'denied' : 'allowed';
     let rule = null;
-    if (remember && decision !== 'deny' && this.rules) {
+    if (remember && !a.questions && a.suggestions?.length && decision !== 'deny' && this.rules) {
       try {
         rule = this.rules.add({ sessionId: a.sessionId, agent: a.agent, tool: remember.match === 'tool' ? a.toolName : (remember.tool ?? null),
                                 match: remember.match ?? 'tool', value: remember.value ?? a.toolName, scope: remember.scope ?? 'session',
@@ -388,9 +402,9 @@ export class Store extends EventEmitter {
     }
     const s = this.session(a.sessionId); if (s) { s.pendingApprovals = Math.max(0, s.pendingApprovals - 1); }
     // 拒绝工具不代表 Agent 已结束本轮；只有 Agent 的结束事件才能推进队列。
-    this.setStatus(a.sessionId, 'running');
+    if (s && s.status === 'waiting_approval') this.setStatus(a.sessionId, s.pendingApprovals ? 'waiting_approval' : 'running');
     this.emit('event', { type: 'approval.resolved', approvalId: id, decision, by, rule });
-    a.resolve?.(decision);
+    a.resolve?.(a.questions && decision !== 'deny' ? { answers } : decision);
     return true;
   }
 

@@ -11,7 +11,7 @@ public protocol ConnectorClient: Sendable {
     func send(device: Device, sessionId: String, text: String, attachments: [String]) async throws
     func stop(device: Device, sessionId: String) async throws
     /// 回应审批。`remember` 非空时同时在连接器上存一条规则，以后同类请求自动放行。
-    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?) async throws
+    func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion?, answers: [String: String]?) async throws
     func approvals(device: Device) async throws -> [Approval]
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry]
     func preview(device: Device, sessionId: String, path: String) async throws -> String
@@ -91,7 +91,8 @@ public enum ConnectorEvent: Sendable {
     case sessionStatus(sessionId: String, status: SessionStatus)
     case messageDelta(sessionId: String, messageId: String, text: String)
     case messageDone(sessionId: String, messageId: String)
-    case toolCall(sessionId: String, call: ToolCall)
+    case messageUpdated(Message)
+    case toolCall(sessionId: String, call: ToolCall, messageId: String? = nil)
     case approvalRequested(Approval)
     case approvalResolved(approvalId: String, decision: ApprovalDecision)
     case disconnected(Error?)
@@ -226,16 +227,11 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         try await socket(for: device).send(["type": "session.stop", "sessionId": sessionId])
     }
 
-    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion? = nil) async throws {
-        var payload: [String: Any] = ["type": "approval.respond", "approvalId": approvalId, "decision": decision.rawValue]
-        if let r = remember { payload["remember"] = rememberDict(r) }
-        do { try await socket(for: device).send(payload) }
-        catch {
-            // WS 不通就走 HTTP：审批是不能丢的动作
-            struct Body: Encodable { var decision: String; var remember: RememberBody? }
-            _ = try await perform(device, "/approvals/\(approvalId)", method: "POST",
-                                          body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init)), as: OK.self)
-        }
+    public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion? = nil, answers: [String: String]? = nil) async throws {
+        // HTTP acknowledges the decision; a successful socket write alone cannot prove acceptance.
+        struct Body: Encodable { var decision: String; var remember: RememberBody?; var answers: [String: String]? }
+        _ = try await perform(device, "/approvals/\(approvalId)", method: "POST",
+                              body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init), answers: answers), as: OK.self)
     }
 
     public func sync(device: Device) async throws -> SyncSnapshot {
@@ -601,6 +597,10 @@ final class ConnectorSocket: @unchecked Sendable {
         case "session.status":
             guard let sid = obj["sessionId"] as? String, let st = SessionStatus(rawValue: obj["status"] as? String ?? "") else { return nil }
             return .sessionStatus(sessionId: sid, status: st)
+        case "message.updated":
+            guard let raw = obj["message"], let data = try? JSONSerialization.data(withJSONObject: raw),
+                  let message = try? JSONDecoder.yz.decode(Message.self, from: data) else { return nil }
+            return .messageUpdated(message)
         case "message.delta":
             guard let sid = obj["sessionId"] as? String, let mid = obj["messageId"] as? String else { return nil }
             return .messageDelta(sessionId: sid, messageId: mid, text: obj["text"] as? String ?? "")
@@ -612,13 +612,11 @@ final class ConnectorSocket: @unchecked Sendable {
             let state = ToolCall.State(rawValue: obj["state"] as? String ?? "running") ?? .running
             let inputDict = obj["input"] as? [String: Any] ?? [:]
             let input = (inputDict["detail"] as? String) ?? (inputDict.values.first { $0 is String } as? String) ?? ""
-            return .toolCall(sessionId: sid, call: ToolCall(id: obj["toolId"] as? String ?? UUID().uuidString, name: name, detail: input, state: state))
+            return .toolCall(sessionId: sid, call: ToolCall(id: obj["toolId"] as? String ?? UUID().uuidString, name: name, detail: input, state: state), messageId: obj["messageId"] as? String)
         case "approval.requested":
-            guard let sid = obj["sessionId"] as? String, let aid = (obj["approvalId"] ?? obj["id"]) as? String else { return nil }
-            let kind = ApprovalKind(rawValue: obj["kind"] as? String ?? "") ?? .other
-            let risk = RiskLevel(rawValue: obj["risk"] as? String ?? "") ?? .medium
-            return .approvalRequested(Approval(id: aid, sessionId: sid, deviceId: "", kind: kind, summary: obj["summary"] as? String ?? "",
-                                               detail: obj["detail"] as? String ?? "", risk: risk))
+            guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                  let approval = try? JSONDecoder.yz.decode(Approval.self, from: data) else { return nil }
+            return .approvalRequested(approval)
         case "approval.resolved":
             guard let aid = obj["approvalId"] as? String, let d = ApprovalDecision(rawValue: obj["decision"] as? String ?? "") else { return nil }
             return .approvalResolved(approvalId: aid, decision: d)

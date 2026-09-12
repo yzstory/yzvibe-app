@@ -602,21 +602,24 @@ public final class AppStore {
 
     public func stop(_ sessionId: String) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
-        do { try await client.stop(device: device, sessionId: sessionId); setStatus(.idle, for: sessionId) }
+        do { try await client.stop(device: device, sessionId: sessionId) }
         catch { toast = error.localizedDescription }
     }
 
-    public func respond(_ approvalId: String, _ decision: ApprovalDecision, remember: ApprovalSuggestion? = nil) async {
-        guard let idx = approvals.firstIndex(where: { $0.id == approvalId }) else { return }
-        let a = approvals[idx]
-        approvals[idx].status = decision == .deny ? .denied : .allowed
-        if let sIdx = sessions.firstIndex(where: { $0.id == a.sessionId }) {
-            sessions[sIdx].pendingApprovals = max(0, sessions[sIdx].pendingApprovals - 1)
-            sessions[sIdx].status = decision == .deny ? .idle : .running
-        }
-        guard let device = device(a.deviceId) ?? device(session(a.sessionId)?.deviceId ?? "") ?? selectedDevice else { return }
+    public func respond(_ approvalId: String, _ decision: ApprovalDecision, remember: ApprovalSuggestion? = nil, answers: [String: String]? = nil) async {
+        guard let a = approvals.first(where: { $0.id == approvalId }),
+              let device = device(a.deviceId) ?? device(session(a.sessionId)?.deviceId ?? "") ?? selectedDevice else { return }
         do {
-            try await client.respond(device: device, approvalId: approvalId, decision: decision, remember: remember)
+            try await client.respond(device: device, approvalId: approvalId, decision: decision, remember: remember, answers: answers)
+            if let idx = approvals.firstIndex(where: { $0.id == approvalId }), approvals[idx].status == .pending {
+                approvals[idx].status = decision == .deny ? .denied : .allowed
+                if let si = sessions.firstIndex(where: { $0.id == a.sessionId }) {
+                    sessions[si].pendingApprovals = max(0, sessions[si].pendingApprovals - 1)
+                    if sessions[si].status == .waitingApproval && sessions[si].pendingApprovals == 0 {
+                        sessions[si].status = .running
+                    }
+                }
+            }
             if remember != nil { await loadRules(for: device) }
         } catch { toast = error.localizedDescription }
     }
@@ -643,6 +646,10 @@ public final class AppStore {
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }
             syncLiveActivity(sid)
+        case .messageUpdated(let message):
+            if let i = messages[message.sessionId]?.firstIndex(where: { $0.id == message.id }) {
+                messages[message.sessionId]?[i] = message
+            } else { messages[message.sessionId, default: []].append(message) }
         case .messageDelta(let sid, let mid, let text):
             var list = messages[sid, default: []]
             if let i = list.firstIndex(where: { $0.id == mid }) {
@@ -651,21 +658,21 @@ public final class AppStore {
                 list.append(Message(id: mid, sessionId: sid, role: .assistant, text: text, streaming: true))
             }
             messages[sid] = list
-            setStatus(.running, for: sid)
+            if (session(sid)?.pendingApprovals ?? 0) == 0 { setStatus(.running, for: sid) }
         case .messageDone(let sid, let mid):
             if let i = messages[sid]?.firstIndex(where: { $0.id == mid }) { messages[sid]?[i].streaming = false }
             syncCursor[sid] = mid
             if settings.notifyOnReply, let s = session(sid) { Notifier.post(title: "\(s.agent.displayName) 回复完成", body: s.title, id: "reply-\(mid)") }
-        case .toolCall(let sid, let call):
+        case .toolCall(let sid, let call, let messageId):
             var list = messages[sid, default: []]
-            if let i = list.lastIndex(where: { $0.role == .assistant }) {
+            if let i = list.lastIndex(where: { messageId != nil ? $0.id == messageId : $0.role == .assistant }) {
                 if let j = list[i].toolCalls.firstIndex(where: { $0.id == call.id }) {
                     list[i].toolCalls[j].state = call.state
                     if !call.name.isEmpty { list[i].toolCalls[j].name = call.name }
                     if !call.detail.isEmpty { list[i].toolCalls[j].detail = call.detail }
                 } else { list[i].toolCalls.append(call) }
             } else {
-                list.append(Message(sessionId: sid, role: .assistant, text: "", toolCalls: [call]))
+                list.append(Message(id: messageId ?? UUID().uuidString, sessionId: sid, role: .assistant, text: "", toolCalls: [call]))
             }
             messages[sid] = list
         case .approvalRequested(var a):

@@ -32,7 +32,7 @@ export const CODEX = {
   ],
   modes: {
     plan: { flag: 'sandbox_mode=read-only', description: '只读沙箱，只分析与规划，不改文件' },
-    normal: { flag: 'sandbox_mode=workspace-write', description: '在工作目录沙箱内自动执行；沙箱外的操作会被拒绝，不会发审批' },
+    normal: { flag: 'approvalPolicy=on-request · workspace-write', description: '工作目录内自动执行；需要额外权限时发到手机审批' },
     trust: { flag: '--dangerously-bypass-approvals-and-sandbox', description: '无沙箱、无确认，完全信任' },
   },
 };

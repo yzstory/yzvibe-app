@@ -371,6 +371,7 @@ struct AssistantBubble: View {
             }
         }
         .lineSpacing(4)
+        .fixedSize(horizontal: false, vertical: true)
         .padding(18)
         .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(p.surfaceElevated))
         .contextMenu { Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }

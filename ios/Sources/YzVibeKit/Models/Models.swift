@@ -95,7 +95,7 @@ public struct AgentCapabilities: Codable, Hashable, Sendable {
         case .codex:
             return AgentCapabilities(
                 modes: ["plan": .init(flag: "sandbox_mode=read-only", description: "只读沙箱，只分析与规划，不改文件"),
-                        "normal": .init(flag: "sandbox_mode=workspace-write", description: "在工作目录沙箱内自动执行；沙箱外的操作会被拒绝，不会发审批"),
+                        "normal": .init(flag: "approvalPolicy=on-request · workspace-write", description: "工作目录内自动执行；需要额外权限时发到手机审批"),
                         "trust": .init(flag: "--dangerously-bypass-approvals-and-sandbox", description: "无沙箱、无确认，完全信任")],
                 efforts: ["low", "medium", "high", "xhigh", "max"],
                 models: [ModelOption(id: "gpt-5.6-sol", label: "GPT-5.6 Sol"), ModelOption(id: "gpt-5.6-terra", label: "GPT-5.6 Terra"),
@@ -432,6 +432,18 @@ public enum RiskLevel: String, Codable, Sendable {
 
 public enum ApprovalDecision: String, Codable, Sendable { case allow, deny, allowOnce = "allow_once" }
 
+public struct ApprovalQuestion: Identifiable, Codable, Hashable, Sendable {
+    public struct Option: Codable, Hashable, Sendable {
+        public var label: String
+        public var description: String
+    }
+    public var id: String
+    public var header: String
+    public var question: String
+    public var isSecret: Bool?
+    public var options: [Option]?
+}
+
 public struct Approval: Identifiable, Codable, Hashable, Sendable {
     public enum Status: String, Codable, Sendable { case pending, allowed, denied, expired }
     public var id: String
@@ -447,6 +459,7 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
     public var toolName: String?
     /// 连接器给出的「总是允许」选项，点一下就变成一条持久规则。
     public var suggestions: [ApprovalSuggestion]
+    public var questions: [ApprovalQuestion] = []
 
     public init(id: String = UUID().uuidString, sessionId: String, deviceId: String, kind: ApprovalKind, summary: String,
                 detail: String, risk: RiskLevel, status: Status = .pending, createdAt: Date = .now, expiresAt: Date? = nil,
@@ -456,7 +469,7 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
         self.detail = detail; self.risk = risk; self.status = status; self.createdAt = createdAt; self.expiresAt = expiresAt
     }
 
-    enum CodingKeys: String, CodingKey { case id, approvalId, sessionId, deviceId, kind, summary, detail, risk, status, createdAt, expiresAt, toolName, suggestions }
+    enum CodingKeys: String, CodingKey { case id, approvalId, sessionId, deviceId, kind, summary, detail, risk, status, createdAt, expiresAt, toolName, suggestions, questions }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(String.self, forKey: .approvalId) ?? c.decode(String.self, forKey: .id)
@@ -471,6 +484,7 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
         expiresAt = try c.decodeIfPresent(Date.self, forKey: .expiresAt)
         toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
         suggestions = try c.decodeIfPresent([ApprovalSuggestion].self, forKey: .suggestions) ?? []
+        questions = try c.decodeIfPresent([ApprovalQuestion].self, forKey: .questions) ?? []
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -479,6 +493,7 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
         try c.encode(risk, forKey: .risk); try c.encode(status, forKey: .status); try c.encode(createdAt, forKey: .createdAt)
         try c.encodeIfPresent(expiresAt, forKey: .expiresAt); try c.encodeIfPresent(toolName, forKey: .toolName)
         try c.encode(suggestions, forKey: .suggestions)
+        try c.encode(questions, forKey: .questions)
     }
 }
 
