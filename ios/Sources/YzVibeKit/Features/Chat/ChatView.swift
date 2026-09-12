@@ -1,5 +1,7 @@
 import SwiftUI
 import PhotosUI
+import UniformTypeIdentifiers
+import AVFoundation
 
 struct ChatView: View {
     @Environment(AppStore.self) private var store
@@ -21,6 +23,11 @@ struct ChatView: View {
         get { store.chatDrafts[sessionId]?.images ?? [] }
         nonmutating set { store.chatDrafts[sessionId, default: ChatDraft()].images = newValue }
     }
+    private var pendingFiles: [PendingFile] {
+        get { store.chatDrafts[sessionId]?.files ?? [] }
+        nonmutating set { store.chatDrafts[sessionId, default: ChatDraft()].files = newValue }
+    }
+    @State private var showSkills = false
     @State private var openFile: FileRef?
     @State private var showDiff = false
     @State private var showCommands = false
@@ -125,7 +132,8 @@ struct ChatView: View {
                     Button { showDeliveries = true } label: { Label("执行记录", systemImage: "checklist") }
                     Button { showDiff = true } label: { Label("改动", systemImage: "plusminus.circle") }
                     Button { showFiles = true } label: { Label("文件", systemImage: "folder") }
-                    Button { showCommands = true } label: { Label("命令与 Skill", systemImage: "slash.circle") }
+                    Button { showCommands = true } label: { Label("斜杠命令", systemImage: "slash.circle") }
+                    Button { showSkills = true } label: { Label("技能", systemImage: "sparkles") }
                     if let s = session, let m = s.model {
                         Section("当前模型") { Text(store.capabilities(for: s).label(forModel: m)) }
                     }
@@ -136,6 +144,7 @@ struct ChatView: View {
                 .accessibilityLabel("更多")
             }
         }
+        .safeAreaInset(edge: .top) { if let session { ConnectionRecoveryBanner(deviceId: session.deviceId).padding(.horizontal, 16) } }
         .safeAreaInset(edge: .bottom) { composer }
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
@@ -155,6 +164,7 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
         .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
+        .sheet(isPresented: $showSkills) { CommandPaletteView(skillsOnly: true, sessionId: sessionId) { run($0) } }
         .sheet(isPresented: $showCommands) { CommandPaletteView(sessionId: sessionId) { run($0) } }
         .sheet(item: Binding(get: { newSessionSeed.map { FileRef(path: $0) } }, set: { if $0 == nil { newSessionSeed = nil } })) { seed in
             NewSessionView(presetCwd: session?.cwd, presetAgent: session?.agent, presetFirstMessage: seed.path.isEmpty ? nil : seed.path)
@@ -244,12 +254,12 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            InputBar(text: Binding(get: { draft }, set: { draft = $0 }), pending: Binding(get: { pending }, set: { pending = $0 }),
+            InputBar(text: Binding(get: { draft }, set: { draft = $0 }), pending: Binding(get: { pending }, set: { pending = $0 }), files: Binding(get: { pendingFiles }, set: { pendingFiles = $0 }),
                      placeholder: busy ? "会排在当前任务后面…" : "发消息给 \(session?.agent.displayName ?? "Agent")…",
                      sendHint: busy ? .queue : .send,
                      onSend: { submit(.auto) },
                      onSendNow: busy ? { submit(.now) } : nil,
-                     onCommands: { showCommands = true }) {
+                     onCommands: { showCommands = true }, onSkills: { showSkills = true }) {
                 if let s = session { SessionOptionsRow(agent: s.agent, caps: store.capabilities(for: s), mode: modeBinding, model: modelBinding, effort: effortBinding) }
             }
             .padding(.horizontal, 16)
@@ -300,15 +310,14 @@ struct UserBubble: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !message.attachments.isEmpty {
-                HStack(spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 6) {
                     ForEach(message.attachments, id: \.self) { id in
-                        AttachmentThumb(id: id, sessionId: message.sessionId, size: message.attachments.count == 1 ? 200 : 110)
-                            .onTapGesture {
-                                if let image = store.attachmentImages[id] { viewing = AttachmentRef(id: id, image: image) }
-                                else { Task { await store.loadAttachment(id, for: message.sessionId) } }
-                            }
+                        UploadedAttachment(id: id, sessionId: message.sessionId, size: message.attachments.count == 1 ? 200 : 110) { image in
+                            viewing = AttachmentRef(id: id, image: image)
+                        }
                     }
                 }
+            }
             }
             if !message.text.isEmpty {
                 Text(message.text)
@@ -402,6 +411,7 @@ struct PendingImage: Identifiable, Equatable {
 struct ChatDraft {
     var text = ""
     var images: [PendingImage] = []
+    var files: [PendingFile] = []
 }
 
 struct InputBar<Accessory: View>: View {
@@ -409,22 +419,30 @@ struct InputBar<Accessory: View>: View {
     @Environment(\.palette) private var p
     @Binding var text: String
     @Binding var pending: [PendingImage]
+    @Binding var files: [PendingFile]
     let placeholder: String
     var sendHint: SendHint = .send
     let onSend: () -> Void
     /// 非空时长按发送键可以插队并打断当前这一轮。
     var onSendNow: (() -> Void)? = nil
     var onCommands: (() -> Void)? = nil
+    var onSkills: (() -> Void)? = nil
     @ViewBuilder let accessory: () -> Accessory
     @FocusState private var focused: Bool
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var preparing = 0
+    @State private var showPhotos = false
+    @State private var showCamera = false
+    @State private var showFileImporter = false
+    @State private var attachmentError: String?
+    private var attachmentCount: Int { pending.count + files.count }
+    private var totalBytes: Int { pending.reduce(0) { $0 + $1.data.count } + files.reduce(0) { $0 + $1.data.count } }
 
-    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty && pending.isEmpty }
+    private var empty: Bool { text.trimmingCharacters(in: .whitespaces).isEmpty && pending.isEmpty && files.isEmpty }
 
     var body: some View {
         VStack(spacing: 8) {
-            if !pending.isEmpty || preparing > 0 {
+            if !pending.isEmpty || !files.isEmpty || preparing > 0 {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(pending) { img in
@@ -439,6 +457,16 @@ struct InputBar<Accessory: View>: View {
                                 .offset(x: 5, y: -5)
                             }
                         }
+                        ForEach(files) { file in
+                            HStack(spacing: 8) {
+                                Image(systemName: "doc.fill").foregroundStyle(p.brand)
+                                VStack(alignment: .leading) {
+                                    Text(file.name).lineLimit(1)
+                                    Text(ByteCountFormatter.string(fromByteCount: Int64(file.data.count), countStyle: .file)).foregroundStyle(p.labelSecondary)
+                                }.font(.caption)
+                                Button { files.removeAll { $0.id == file.id } } label: { Image(systemName: "xmark.circle.fill") }.accessibilityLabel("移除 \(file.name)")
+                            }.padding(10).frame(maxWidth: 210).background(p.fill, in: RoundedRectangle(cornerRadius: 12))
+                        }
                         ForEach(0..<preparing, id: \.self) { _ in
                             ProgressView().frame(width: 72, height: 72).background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(p.fill))
                         }
@@ -452,9 +480,48 @@ struct InputBar<Accessory: View>: View {
                 .focused($focused)
                 .padding(.horizontal, 12).padding(.top, 8)
             HStack(spacing: 8) {
-                PhotosPicker(selection: $pickerItems, maxSelectionCount: 6, matching: .images) {
+                Menu {
+                    Button { showPhotos = true } label: { Label("照片", systemImage: "photo.on.rectangle") }
+                    Button { Task { await openCamera() } } label: { Label("拍摄", systemImage: "camera") }
+                    Button { showFileImporter = true } label: { Label("文件", systemImage: "folder") }
+                } label: {
                     Image(systemName: "photo.on.rectangle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
                         .frame(width: 44, height: 44)
+                }.accessibilityLabel("添加附件")
+                .disabled(preparing > 0)
+                .photosPicker(isPresented: $showPhotos, selection: $pickerItems, maxSelectionCount: max(1, 6 - attachmentCount), matching: .images)
+                .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                    switch result {
+                    case .success(let urls):
+                        preparing += urls.count
+                        Task { for url in urls {
+                            do {
+                                let file = try await PendingFile.read(url)
+                                if file.mime.hasPrefix("image/"), let (data, _, _) = await ImagePrep.forUpload(file.data), let ui = UIImage(data: data) {
+                                    addPhoto(data, image: ui)
+                                } else {
+                                    var document = file
+                                    if document.mime.hasPrefix("image/") { document.mime = "application/octet-stream" }
+                                    addFile(document)
+                                }
+                            }
+                            catch { attachmentError = error.localizedDescription }
+                            preparing = max(0, preparing - 1)
+                        } }
+                    case .failure(let error): attachmentError = error.localizedDescription
+                    }
+                }
+                .sheet(isPresented: $showCamera) {
+                    CameraCapture { image in
+                        showCamera = false
+                        guard let image, let raw = image.jpegData(compressionQuality: 0.9) else { return }
+                        preparing += 1
+                        Task {
+                            if let (data, _, _) = await ImagePrep.forUpload(raw), let ui = UIImage(data: data) { addPhoto(data, image: ui) }
+                            else { attachmentError = "无法读取照片，请重试。" }
+                            preparing = max(0, preparing - 1)
+                        }
+                    }.ignoresSafeArea()
                 }
                 .onChange(of: pickerItems) { _, items in
                     guard !items.isEmpty else { return }
@@ -464,18 +531,16 @@ struct InputBar<Accessory: View>: View {
                         for item in items {
                             // 选择时就缩到 1568px 长边转 JPEG：省流量、省 token，也避免原图超过 5MB 被 API 拒绝
                             if let raw = try? await item.loadTransferable(type: Data.self), let (data, _, _) = await ImagePrep.forUpload(raw), let ui = UIImage(data: data) {
-                                pending.append(PendingImage(data: data, image: ui))
-                            }
+                                addPhoto(data, image: ui)
+                            } else { attachmentError = "无法读取所选照片，请重试。" }
                             preparing = max(0, preparing - 1)
                         }
                     }
                 }
                 if let onCommands {
-                    Button(action: onCommands) {
-                        Image(systemName: "slash.circle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
-                            .frame(width: 44, height: 44)
-                    }
+                    Button(action: onCommands) { Label("命令", systemImage: "slash.circle").font(.caption.weight(.semibold)).frame(minHeight: 44) }
                 }
+                if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles").font(.caption.weight(.semibold)).frame(minHeight: 44) } }
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
@@ -483,11 +548,11 @@ struct InputBar<Accessory: View>: View {
                         .frame(width: 44, height: 44)
                         .background(Circle().fill(p.brand))
                 }
-                .disabled(empty)
+                .disabled(empty || preparing > 0)
                 .opacity(empty ? 0.45 : 1)
                 .accessibilityLabel(sendHint == .queue ? "排队发送" : "发送")
                 .contextMenu {
-                    if let onSendNow {
+                    if let onSendNow, preparing == 0 {
                         Button { onSend() } label: { Label("排队发送", systemImage: "text.line.first.and.arrowtriangle.forward") }
                         Button(role: .destructive) { onSendNow() } label: { Label("立即发送（打断当前任务）", systemImage: "bolt.fill") }
                     }
@@ -499,12 +564,30 @@ struct InputBar<Accessory: View>: View {
         }
         .padding(10)
         .liquidGlass(in: RoundedRectangle(cornerRadius: 32, style: .continuous))
+        .alert("附件未添加", isPresented: Binding(get: { attachmentError != nil }, set: { if !$0 { attachmentError = nil } })) {
+            Button("好", role: .cancel) { attachmentError = nil }
+        } message: { Text(attachmentError ?? "") }
+    }
+    private func addPhoto(_ data: Data, image: UIImage) {
+        guard attachmentCount < 6, totalBytes + data.count <= 20 * 1024 * 1024 else { attachmentError = "最多添加 6 个附件，总大小不超过 20 MB。"; return }
+        pending.append(PendingImage(data: data, image: image))
+    }
+    private func addFile(_ file: PendingFile) {
+        guard attachmentCount < 6, totalBytes + file.data.count <= 20 * 1024 * 1024 else { attachmentError = "最多添加 6 个附件，总大小不超过 20 MB。"; return }
+        files.append(file)
+    }
+    private func openCamera() async {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else { attachmentError = "此设备无法使用相机。"; return }
+        let granted: Bool
+        if AVCaptureDevice.authorizationStatus(for: .video) == .authorized { granted = true }
+        else { granted = await AVCaptureDevice.requestAccess(for: .video) }
+        if granted { showCamera = true } else { attachmentError = "请在 iPhone 设置中允许 YzVibe 使用相机。" }
     }
 }
 
 extension InputBar where Accessory == EmptyView {
     init(text: Binding<String>, pending: Binding<[PendingImage]>, placeholder: String, onSend: @escaping () -> Void) {
-        self.init(text: text, pending: pending, placeholder: placeholder, onSend: onSend, accessory: { EmptyView() })
+        self.init(text: text, pending: pending, files: .constant([]), placeholder: placeholder, onSend: onSend, accessory: { EmptyView() })
     }
 }
 

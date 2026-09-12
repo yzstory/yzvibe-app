@@ -15,6 +15,8 @@ export function pruneUploads(home, { maxAgeDays = 14, now = Date.now() } = {}) {
       const st = fs.statSync(f);
       if (!st.isFile() || now - st.mtimeMs <= maxAgeDays * DAY) continue;
       bytes += st.size; fs.unlinkSync(f); removed += 1;
+      const id = n.match(/^([0-9a-f-]{36})-/i)?.[1];
+      if (id) { try { fs.unlinkSync(path.join(home, 'upload-info', `${id}.json`)); } catch {} }
     } catch {}
   }
   return { removed, bytes };

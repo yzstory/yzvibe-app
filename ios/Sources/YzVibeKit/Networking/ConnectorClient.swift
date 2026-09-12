@@ -3,6 +3,7 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo
     func authenticationConfigured(device: Device) -> Bool
     func validateEndpoint(device: Device, address: String) async throws -> HealthInfo
     func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt
@@ -222,6 +223,9 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         let (data, resp): (Data, URLResponse)
         do { (data, resp) = try await session.data(for: req) } catch { throw ConnectorError.unreachable }
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
+        if ConnectionRecovery.isUnavailableTunnel(http, data: data) {
+            throw ConnectorError.server(http.statusCode, "tunnel_unavailable", "原地址的 Cloudflare 隧道不可用")
+        }
         if http.statusCode == 401 { throw ConnectorError.unauthorized }
         guard (200..<300).contains(http.statusCode) else {
             let failure = try? JSONDecoder().decode(ConnectorFailureBody.self, from: data)
@@ -365,6 +369,9 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         var request = URLRequest(url: url.appendingPathComponent("health"))
         request.timeoutInterval = 4
         let (data, response) = try await session.data(for: request, delegate: EndpointRedirectPolicy())
+        if let http = response as? HTTPURLResponse, ConnectionRecovery.isUnavailableTunnel(http, data: data) {
+            throw ConnectorError.server(http.statusCode, "tunnel_unavailable", "原地址的 Cloudflare 隧道不可用")
+        }
         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ConnectorError.unreachable }
         let health = try JSONDecoder.yz.decode(HealthInfo.self, from: data)
         guard health.connectorId == device.id else { throw ConnectorError.network("地址对应另一台连接器，已保留原连接。") }
@@ -504,6 +511,9 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         }
     }
 
+    public func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo {
+        try await perform(device, "/uploads/\(id)/info", as: UploadedAttachmentInfo.self)
+    }
     public func attachment(device: Device, id: String) async throws -> Data {
         let (data, resp) = try await data(device, "/uploads/\(id)")
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
@@ -853,6 +863,7 @@ public extension ConnectorClient {
     }
     func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt? { nil }
     func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool { false }
+    func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo { throw ConnectorError.unreachable }
     func runs(device: Device, sessionId: String) async throws -> [TaskRun] { [] }
     func run(device: Device, sessionId: String, id: String) async throws -> TaskRun {
         guard let value = try await runs(device: device, sessionId: sessionId).first(where: { $0.id == id }) else { throw ConnectorError.server(404, "run_not_found", "执行记录已过期或不存在") }

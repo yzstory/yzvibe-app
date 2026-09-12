@@ -234,3 +234,28 @@ test('execution list excludes output, individual details and legacy API retain i
   assert.equal(legacy[0].tools[0].output, 'RESULT');
   assert.equal((await call(`/sessions/${s.id}/runs/missing`)).status, 404);
 });
+
+
+test('phone documents retain bytes and metadata across restart and are accepted as attachments', async t => {
+  const { connector, device, base, call, s } = await fixture(t);
+  const name = '设计需求.pdf', mime = 'application/pdf', bytes = Buffer.from('%PDF-1.7\n中文文件\0');
+  const response = await fetch(base + '/uploads', { method: 'POST', headers: {
+    authorization: `Bearer ${device.token}`, 'content-type': mime, 'x-filename': encodeURIComponent(name)
+  }, body: bytes });
+  assert.equal(response.status, 201);
+  const { id } = await response.json();
+  assert.deepEqual(await (await call(`/uploads/${id}/info`)).json(), { name, mime, size: bytes.length });
+  assert.deepEqual(Buffer.from(await (await call(`/uploads/${id}`)).arrayBuffer()), bytes);
+  assert.equal((await fetch(base + `/uploads/${id}/info`)).status, 401);
+  const recovered = new Store(connector.store.home).upload(id);
+  assert.equal(recovered.name, name); assert.equal(recovered.mime, mime);
+  assert.deepEqual(fs.readFileSync(recovered.path), bytes);
+  const sent = await call(`/sessions/${s.id}/deliveries`, { clientMessageId: 'document-send', text: '', attachments: [id], mode: 'auto' });
+  assert.equal(sent.status, 202);
+  await waitFor(() => connector.store.receipt(s.id, 'document-send')?.state === 'sent');
+  assert.deepEqual(connector.store.messagesOf(s.id).find(m => m.clientMessageId === 'document-send').attachments, [id]);
+  fs.utimesSync(recovered.path, 0, 0);
+  runCleanup(connector.store);
+  assert.equal(connector.store.upload(id), null);
+  assert.equal(fs.existsSync(path.join(connector.store.home, 'upload-info', `${id}.json`)), false);
+});

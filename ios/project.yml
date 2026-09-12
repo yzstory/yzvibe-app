@@ -29,7 +29,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "13"
+        CFBundleVersion: "14"
         # 仅使用 Apple 系统提供的加密（URLSession HTTPS/WSS、Keychain）。
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -39,7 +39,7 @@ targets:
         # 锁屏 / 灵动岛上的会话状态
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
-        NSCameraUsageDescription: 用于扫描电脑终端里的配对二维码
+        NSCameraUsageDescription: 用于拍摄并发送照片，以及扫描电脑配对二维码
         NSFaceIDUsageDescription: 用于确认高风险审批
         NSLocalNetworkUsageDescription: 用于在局域网内连接你的电脑
         # 连接器用 dns-sd 广播 _yzvibe._tcp；隧道地址变了就靠它在同一 Wi-Fi 下找回来
@@ -70,7 +70,7 @@ targets:
       properties:
         CFBundleDisplayName: YzVibe 实时活动
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "13"
+        CFBundleVersion: "14"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

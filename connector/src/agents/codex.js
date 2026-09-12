@@ -37,11 +37,12 @@ export class CodexAgent {
   #spawn(text, attachments) {
     const { session, store } = this;
     const opts = { mode: session.mode, model: session.model, effort: session.effort };
-    const prompt = (opts.mode === 'plan' ? CODEX_PLAN_PREFIX : '') + (text?.trim() ? text : (attachments.length ? '请看附带的图片。' : text));
+    let prompt = (opts.mode === 'plan' ? CODEX_PLAN_PREFIX : '') + (text?.trim() ? text : (attachments.length ? '请看附带的图片。' : text));
     const args = session.agentSessionId ? ['exec', 'resume', ...codexOptionArgs(opts)] : ['exec', ...codexOptionArgs(opts)];
     for (const a of attachments) {
       const up = store.upload(a);
       if (up && up.mime.startsWith('image/')) args.push('-i', up.path);
+      else if (up) prompt += `\n用户附带文件（请根据需要读取）：${JSON.stringify({ name: up.name, path: up.path })}`;
     }
     // --image is variadic on new exec: terminate options before positional args.
     // Pipe the prompt so images cannot swallow it and long messages avoid argv limits.

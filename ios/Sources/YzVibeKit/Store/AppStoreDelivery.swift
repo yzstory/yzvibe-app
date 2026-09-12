@@ -6,7 +6,7 @@ extension AppStore {
     /// This is synchronous so a second tap cannot stage the same composer contents twice.
     func stageDraft(in sessionId: String, mode: SendMode) -> String? {
         let draft = chatDrafts[sessionId] ?? ChatDraft()
-        guard let id = stageMessage(draft.text, in: sessionId, images: draft.images.map { OutgoingImage(data: $0.data) }, mode: mode) else { return nil }
+        guard let id = stageMessage(draft.text, in: sessionId, images: draft.images.map { OutgoingImage(data: $0.data) } + draft.files.map { OutgoingImage(data: $0.data, mime: $0.mime, filename: $0.name) }, mode: mode) else { return nil }
         chatDrafts[sessionId] = ChatDraft()
         return id
     }
@@ -17,7 +17,7 @@ extension AppStore {
         guard !text.isEmpty || !images.isEmpty || !attachments.isEmpty else { return nil }
         guard outbox.count < 100, images.count + attachments.count <= 6,
               images.reduce(0, { $0 + $1.data.count }) <= 20 * 1024 * 1024 else {
-            toast = "待发送箱已满或图片过大，请处理已有内容后再发送。"; return nil
+            toast = "待发送箱已满或附件超过 20 MB，请处理已有内容后再发送。"; return nil
         }
         let item = OutgoingMessage(deviceId: session.deviceId, sessionId: sessionId, text: text, images: images, attachments: attachments, mode: mode.rawValue)
         do { try saveOutbox(outbox + [item]); return item.id }
@@ -56,7 +56,7 @@ extension AppStore {
                 guard let current = outbox.first(where: { $0.id == id }) else { return .failed }
                 if current.images[index].uploadId != nil { continue }
                 let image = current.images[index]
-                let upload = try await client.upload(device: device, data: image.data, mime: "image/jpeg", filename: "photo.jpg")
+                let upload = try await client.upload(device: device, data: image.data, mime: image.mime ?? "image/jpeg", filename: image.filename ?? "photo.jpg")
                 try updateOutgoing(id) { $0.images[index].uploadId = upload }
                 if let image = UIImage(data: image.data) { cacheAttachment(image, id: upload) }
             }
@@ -125,15 +125,18 @@ extension AppStore {
 
     func restoreOutgoing(_ id: String) {
         guard let item = outbox.first(where: { $0.id == id }), item.state == .failed, !sendingIDs.contains(id) else { return }
-        guard (chatDrafts[item.sessionId]?.text ?? "").isEmpty, (chatDrafts[item.sessionId]?.images ?? []).isEmpty else {
+        guard (chatDrafts[item.sessionId]?.text ?? "").isEmpty, (chatDrafts[item.sessionId]?.images ?? []).isEmpty, (chatDrafts[item.sessionId]?.files ?? []).isEmpty else {
             toast = "输入框已有内容，请先处理当前草稿。"; return
         }
         do {
             // Recreate the composer only for requests known not to have been dispatched.
             try saveOutbox(outbox.filter { $0.id != id })
             chatDrafts[item.sessionId] = ChatDraft(text: item.text, images: item.images.compactMap { image in
-                guard let decoded = UIImage(data: image.data) else { return nil }
+                guard image.mime == nil || image.mime!.hasPrefix("image/"), let decoded = UIImage(data: image.data) else { return nil }
                 return PendingImage(data: image.data, image: decoded)
+            }, files: item.images.compactMap { file in
+                guard let mime = file.mime, !mime.hasPrefix("image/") else { return nil }
+                return PendingFile(name: file.filename ?? "文件", mime: mime, data: file.data)
             })
         } catch { toast = error.localizedDescription }
     }

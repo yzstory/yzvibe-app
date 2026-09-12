@@ -139,7 +139,7 @@ struct OutgoingMessageCard: View {
                     Text(title).font(.yzFootnoteStrong).foregroundStyle(p.amber)
                 }
                 if !item.text.isEmpty { Text(item.text).lineLimit(6).textSelection(.enabled) }
-                if !item.images.isEmpty { Label("\(item.images.count) 张图片已保留", systemImage: "photo.on.rectangle").font(.footnote) }
+                if !item.images.isEmpty { Label("\(item.images.count) 个附件已保留", systemImage: "paperclip").font(.footnote) }
                 if let issue = item.issue { Text(issue).font(.footnote).foregroundStyle(p.labelSecondary) }
                 if !item.busy {
                     HStack(spacing: 20) {

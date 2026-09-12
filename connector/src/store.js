@@ -541,20 +541,27 @@ export class Store extends EventEmitter {
   // ---------- 上传 ----------
   /** 取上传记录；内存里没有（连接器重启过）就按 id 前缀在 uploads 目录找回。 */
   upload(id) {
-    if (this.uploads.has(id)) return this.uploads.get(id);
+    if (this.uploads.has(id)) {
+      const cached = this.uploads.get(id);
+      if (fs.existsSync(cached.path)) return cached;
+      this.uploads.delete(id);
+    }
     if (!/^[\w-]+$/.test(id)) return null;
     const dir = path.join(this.home, 'uploads');
     let names; try { names = fs.readdirSync(dir); } catch { return null; }
     const n = names.find((x) => x.startsWith(`${id}-`)); if (!n) return null;
-    const u = { path: path.join(dir, n), mime: mimeOf(n), name: n.slice(id.length + 1) };
+    const metadata = readJSON(path.join(this.home, 'upload-info', `${id}.json`), null);
+    const u = { path: path.join(dir, n), mime: metadata?.mime ?? mimeOf(n), name: metadata?.name ?? n.slice(id.length + 1) };
     this.uploads.set(id, u);
     return u;
   }
   addUpload(name, mime, buffer) {
     const id = randomUUID();
-    const file = path.join(this.home, 'uploads', `${id}-${name.replace(/[^\w.\-]/g, '_')}`);
+    const file = path.join(this.home, 'uploads', `${id}-${path.basename(name).replace(/[\\/\x00-\x1f]/g, '_').slice(0, 120)}`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, buffer);
+    try { writeJSON(path.join(this.home, 'upload-info', `${id}.json`), { name, mime }); }
+    catch (error) { fs.unlinkSync(file); throw error; }
     this.uploads.set(id, { path: file, mime, name });
     return id;
   }

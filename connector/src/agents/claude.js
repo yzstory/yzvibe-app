@@ -204,7 +204,9 @@ export class ClaudeAgent {
     const content = text?.trim() ? [{ type: 'text', text }] : [];   // 空文本块会被 API 拒绝，只发图时省略
     for (const a of attachments) {
       const up = this.store.upload(a);
-      if (up && up.mime.startsWith('image/')) content.push({ type: 'image', source: { type: 'base64', media_type: up.mime, data: fs.readFileSync(up.path).toString('base64') } });
+      if (!up) throw new Error('附件已失效，请重新选择');
+      if (!up.mime.startsWith('image/')) content.push({ type: 'text', text: `用户附带文件（请根据需要读取）：${JSON.stringify({ name: up.name, path: up.path })}` });
+      else content.push({ type: 'image', source: { type: 'base64', media_type: up.mime, data: fs.readFileSync(up.path).toString('base64') } });
     }
     this.store.setStatus(this.session.id, 'running');
     this.proc.stdin.write(JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n');

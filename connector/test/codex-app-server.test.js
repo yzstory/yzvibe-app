@@ -185,3 +185,16 @@ test('stdio JSON-RPC handles split UTF-8, out of order replies and pending reque
   assert.deepEqual(await Promise.all([a, b]), ['first', 'second']); assert.equal(events[0].params.text, '你好');
   const pending = rpc.request('unknown', {}); rpc.close(); await assert.rejects(pending, /停止/);
 });
+
+
+test('documents use a readable local path rather than localImage or inline binary input', async t => {
+  const f = fixture(t);
+  const file = f.store.addUpload('需求.pdf', 'application/pdf', Buffer.from('%PDF-1.7'));
+  const image = f.store.addUpload('photo.jpg', 'image/jpeg', Buffer.from('image'));
+  await f.agent.send('查看附件', [file, image]);
+  const input = f.rpc.calls.find(c => c.method === 'turn/start').params.input;
+  assert.equal(input.filter(i => i.type === 'localImage').length, 1);
+  const document = input.find(i => i.type === 'text' && i.text.includes('需求.pdf'));
+  assert.ok(document); assert.ok(document.text.includes(f.store.upload(file).path));
+  assert.equal(document.text.includes('%PDF'), false);
+});

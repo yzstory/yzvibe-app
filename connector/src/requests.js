@@ -37,12 +37,12 @@ export async function readJSON(req) {
 export function messageInput(body, store, { requireID = false } = {}) {
   const { text = '', attachments = [], mode = 'auto', clientMessageId } = body;
   if (typeof text !== 'string' || text.length > 64_000) throw badRequest('消息须为不超过 64,000 字符的文字');
-  if (!Array.isArray(attachments) || attachments.length > 6 || attachments.some(id => typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id))) throw badRequest('最多附带 6 张有效图片');
+  if (!Array.isArray(attachments) || attachments.length > 6 || attachments.some(id => typeof id !== 'string' || !/^[\w-]{1,100}$/.test(id))) throw badRequest('最多附带 6 个有效附件');
   if (!['auto', 'queue', 'now'].includes(mode)) throw badRequest('发送模式不合法');
   if (requireID && (typeof clientMessageId !== 'string' || !/^[\w-]{8,100}$/.test(clientMessageId))) throw badRequest('缺少有效的消息 ID');
   if (clientMessageId != null && (typeof clientMessageId !== 'string' || !/^[\w-]{8,100}$/.test(clientMessageId))) throw badRequest('消息 ID 不合法');
   if (!text.trim() && !attachments.length) throw badRequest('消息不能为空');
   // Already accepted requests must remain queryable after an upload expires.
-  if (store && attachments.some(id => !store.upload(id)?.mime?.startsWith('image/'))) throw badRequest('附带图片已失效，请重新选择', 422, 'attachment_missing');
+  if (store && attachments.some(id => !store.upload(id))) throw badRequest('附件已失效，请重新选择', 422, 'attachment_missing');
   return { text, attachments, mode, clientMessageId };
 }

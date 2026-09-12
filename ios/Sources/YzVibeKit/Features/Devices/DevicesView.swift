@@ -26,6 +26,7 @@ struct DevicesView: View {
                                     store.selectedDeviceId = device.id
                                     onOpenSessions()
                                 } label: { DeviceCard(device: device) }
+                                ConnectionRecoveryBanner(deviceId: device.id)
                                 HStack(spacing: 12) {
                                 Button { diagnosingDevice = device } label: {
                                     Label("诊断", systemImage: "stethoscope").font(.yzFootnoteStrong).foregroundStyle(p.brand).frame(minHeight: 44)
@@ -112,6 +113,7 @@ struct DevicesView: View {
 }
 
 struct DeviceCard: View {
+    @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     let device: Device
 
@@ -136,7 +138,7 @@ struct DeviceCard: View {
                 }
                 HStack(spacing: 8) {
                     Chip.mode(device.mode)
-                    if device.online { Chip("在线", tone: .sage) } else { Chip("离线 · \(RelativeTime.string(from: device.lastSeen))", tone: .fill) }
+                    if device.online { Chip("在线", tone: .sage) } else { Chip((store.recoveryStates[device.id] ?? .reconnecting).title, tone: .fill) }
                     ForEach(device.agents.sorted { $0.key.rawValue < $1.key.rawValue }, id: \.key) { kind, n in
                         Chip.agent(kind, suffix: "\(n)")
                     }

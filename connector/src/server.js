@@ -473,6 +473,10 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const id = store.addUpload(decodeURIComponent(req.headers['x-filename'] ?? 'upload.bin'), req.headers['content-type'] ?? 'application/octet-stream', buf);
         return json(res, 201, { id, url: `/uploads/${id}` });
       }
+      if ((m = p.match(/^\/uploads\/([^/]+)\/info$/)) && req.method === 'GET') {
+        const u = store.upload(m[1]); if (!u) return json(res, 404, { error: '附件不存在' });
+        return json(res, 200, { name: u.name, mime: u.mime, size: fs.statSync(u.path).size });
+      }
       if ((m = p.match(/^\/uploads\/([^/]+)$/)) && req.method === 'GET') {
         const u = store.upload(m[1]); if (!u) return json(res, 404, { error: 'not found' });
         res.writeHead(200, { 'content-type': u.mime }); return fs.createReadStream(u.path).pipe(res);

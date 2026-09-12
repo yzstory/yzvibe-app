@@ -12,6 +12,8 @@ struct OutgoingImage: Codable, Identifiable, Sendable {
     var id = UUID()
     var data: Data
     var uploadId: String?
+    var mime: String?
+    var filename: String?
 }
 
 struct OutgoingMessage: Codable, Identifiable, Sendable {

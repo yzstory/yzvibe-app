@@ -6,6 +6,7 @@ struct CommandPaletteView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    var skillsOnly = false
     let sessionId: String
     /// 选中一条：app 命令交给 ChatView 执行，其余的插进输入框。
     let onPick: (SlashCommand) -> Void
@@ -31,16 +32,19 @@ struct CommandPaletteView: View {
                             .font(.yzFootnote).foregroundStyle(p.labelSecondary)
                     }
                 }
-                section("手机端", filter(catalog?.app ?? []), tone: .brand)
-                section("\(agent.displayName) 命令", filter(catalog?.agentCommands ?? []), tone: .fill)
-                section("Skill", filter(catalog?.skills ?? []), tone: .fill)
-                section("自定义提示词", filter(catalog?.prompts ?? []), tone: .claude)
+                if skillsOnly {
+                    section("技能", filter(catalog?.skills ?? []), tone: .fill)
+                    section("自定义提示词", filter(catalog?.prompts ?? []), tone: .claude)
+                } else {
+                    section("手机端", filter(catalog?.app ?? []), tone: .brand)
+                    section("\(agent.displayName) 命令", filter(catalog?.agentCommands ?? []), tone: .fill)
+                }
             }
             .listStyle(.insetGrouped)
             .paperBackground()
-            .navigationTitle("命令与 Skill")
+            .navigationTitle(skillsOnly ? "技能" : "斜杠命令")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, prompt: "搜索命令或 skill")
+            .searchable(text: $query, prompt: skillsOnly ? "搜索技能" : "搜索命令")
             .overlay {
                 if loading && catalog == nil {
                     ProgressView()
@@ -55,7 +59,7 @@ struct CommandPaletteView: View {
 
     private var isEmpty: Bool {
         guard let c = catalog else { return false }
-        return filter(c.app).isEmpty && filter(c.agentCommands).isEmpty && filter(c.skills).isEmpty && filter(c.prompts).isEmpty
+        return skillsOnly ? (filter(c.skills).isEmpty && filter(c.prompts).isEmpty) : (filter(c.app).isEmpty && filter(c.agentCommands).isEmpty)
     }
 
     @ViewBuilder

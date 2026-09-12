@@ -28,6 +28,35 @@ struct DeliveryRegressionTests {
         #expect(recovered.first?.images.first?.data == Data([1, 2, 3]))
     }
 
+    @Test func filesSurviveOutboxReloadAndRestoreToComposer() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("outbox.json")
+        let (store, _) = fixture(url: url)
+        let data = Data("%PDF-1.7 中文文件".utf8)
+        store.chatDrafts["delivery-session"] = ChatDraft(text: "read", files: [PendingFile(name: "需求.pdf", mime: "application/pdf", data: data)])
+        let id = try #require(store.stageDraft(in: "delivery-session", mode: .auto))
+        let saved = try #require(OutboxDisk(url: url).load().first)
+        #expect(saved.images.first?.data == data)
+        #expect(saved.images.first?.filename == "需求.pdf")
+        #expect(saved.images.first?.mime == "application/pdf")
+        #expect(store.chatDrafts["delivery-session"]?.files.isEmpty == true)
+        let (reloaded, _) = fixture(url: url)
+        reloaded.outbox[0].state = .failed
+        reloaded.restoreOutgoing(id)
+        #expect(reloaded.chatDrafts["delivery-session"]?.files.first?.data == data)
+        #expect(reloaded.chatDrafts["delivery-session"]?.files.first?.name == "需求.pdf")
+        #expect(reloaded.chatDrafts["delivery-session"]?.images.isEmpty == true)
+        #expect(reloaded.outbox.isEmpty)
+    }
+
+    @Test func legacyImageOutboxRemainsDecodable() throws {
+        let json = Data("{\"id\":\"00000000-0000-0000-0000-000000000001\",\"data\":\"AQID\"}".utf8)
+        let image = try JSONDecoder().decode(OutgoingImage.self, from: json)
+        #expect(image.data == Data([1, 2, 3]))
+        #expect(image.mime == nil && image.filename == nil)
+    }
+
     @Test func failedDiskWriteLeavesComposerUntouched() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data([1]).write(to: root)

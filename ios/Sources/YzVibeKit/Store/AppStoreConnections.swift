@@ -22,3 +22,24 @@ extension AppStore {
         if !isDemo { await refresh(updated) }
     }
 }
+
+@MainActor
+extension AppStore {
+    func probeConnection(_ device: Device, force: Bool = false) async {
+        guard !isDemo, probingConnections.insert(device.id).inserted else { return }
+        defer { probingConnections.remove(device.id) }
+        if !force, let last = connectionProbeTimes[device.id], Date().timeIntervalSince(last) < 10 { return }
+        let started = Date(); connectionProbeTimes[device.id] = started
+        guard let address = device.baseURL?.absoluteString else { return }
+        do {
+            _ = try await client.validateEndpoint(device: device, address: address)
+            guard self.device(device.id)?.baseURL?.absoluteString == address else { return }
+            recoveryStates[device.id] = .reconnecting
+            client.reconnect(device: device)
+        } catch {
+            guard let current = self.device(device.id), !current.online, current.baseURL?.absoluteString == address,
+                  current.lastSeen <= started else { return }
+            recoveryStates[device.id] = ConnectionRecovery.classify(error)
+        }
+    }
+}

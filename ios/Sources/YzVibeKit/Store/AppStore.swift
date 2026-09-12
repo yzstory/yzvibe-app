@@ -29,6 +29,9 @@ public final class AppStore {
     var outbox: [OutgoingMessage] = []
     var taskRuns: [String: [TaskRun]] = [:]
     var runErrors: [String: String] = [:]
+    var recoveryStates: [String: ConnectionRecovery] = [:]
+    var probingConnections: Set<String> = []
+    var connectionProbeTimes: [String: Date] = [:]
     var connectionErrors: [String: String] = [:]
     var switchingDevices: Set<String> = []
     @ObservationIgnored var outboxDisk: OutboxDisk?
@@ -720,7 +723,7 @@ public final class AppStore {
                 loadedMessages.insert(sid); loadingMessages.remove(sid); messageLoadErrors[sid] = nil
             }
             setDevice(device.id) { $0.online = true; $0.lastSeen = .now; $0.sessionCount = fresh.filter { $0.status != .closed }.count }
-            connectionErrors[device.id] = nil; lastSyncAt = .now
+            connectionErrors[device.id] = nil; recoveryStates[device.id] = nil; lastSyncAt = .now
             syncLiveActivity("")
             Task { [weak self] in
                 guard let self else { return }
@@ -797,6 +800,7 @@ public final class AppStore {
         case .disconnected(let error):
             setDevice(device.id) { $0.online = false }
             connectionErrors[device.id] = error?.localizedDescription ?? "实时连接已断开，正在重连"
+            Task { await probeConnection(device) }
         }
     }
 }

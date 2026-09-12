@@ -57,6 +57,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 `/files`（目录列表）仍然只在工作目录内。手机端只读取内容，不执行文件。
 | POST | /uploads | 二进制 body + `Content-Type` + `X-Filename` → `{ id, url }`；发送消息时把 id 放进 attachments |
 | GET | /uploads/:id | 取回上传内容 |
+| GET | /uploads/:id/info | 附件名称、MIME 与字节数 `{ name, mime, size }`，同样需要配对认证 |
 
 ## WebSocket `/ws`
 鉴权：`Authorization: Bearer <deviceToken>`。服务端保留 `?token=` 兼容旧客户端，iOS 新版本的 HTTP / WebSocket 仅发送 Authorization 请求头，避免凭据进入 URL。
@@ -223,12 +224,12 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 
 ### 持久化投递
 
-- `POST /sessions/:id/deliveries`：`{ clientMessageId, text, attachments: [], mode: "auto"|"queue"|"now" }`。ID 为 8–100 个字母、数字、下划线或连字符；文字最多 64,000 个 UTF-16 code units，图片最多 6 张。新请求先验证全部附件，再将接收记录和队列原子落盘，返回 202。
+- `POST /sessions/:id/deliveries`：`{ clientMessageId, text, attachments: [], mode: "auto"|"queue"|"now" }`。ID 为 8–100 个字母、数字、下划线或连字符；文字最多 64,000 个 UTF-16 code units，图片与文件合计最多 6 个。新请求先验证全部附件，再将接收记录和队列原子落盘，返回 202。
 - `GET /sessions/:id/deliveries/:clientMessageId`：读取 `{ id, itemId, state, createdAt }`。`state` 为 `queued`、`dispatching`、`sent`、`uncertain` 或 `cancelled`；`sent` 表示已交给 Agent，不表示任务完成。
 - 同 ID、同内容复用记录；同 ID、不同内容返回 409 `message_conflict`。只有 404 `delivery_missing` 表示可以首次投递；404 `session_missing` 或旧服务器未知接口不表示未接收。
-- 422 `attachment_missing` 表示图片失效，可重新上传后重试。其它错误形如 `{ error, code }`。
+- 422 `attachment_missing` 表示附件失效，可重新上传后重试。其它错误形如 `{ error, code }`。
 - Agent 派发前持久化 `dispatching`，成功后持久化 `sent`；重启或派发结果不确定时变为 `uncertain` 并暂停队列，禁止自动重放。取消 uncertain 队列项不会删除该 ID 的 uncertain 接收记录。
-- 手机先保存文字/图片及 ID 再清空输入；重试先查记录。任何图片失败都保留整条消息；恢复输入仅用于已知未投递成功的条目。
+- 手机先保存文字、图片/文件及 ID 再清空输入；重试先查记录。任何附件失败都保留整条消息；恢复输入仅用于已知未投递成功的条目。
 
 ### 有序恢复
 
@@ -245,3 +246,7 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 - `GET /diagnostics`：鉴权后读取版本、Agent 可运行/版本/登录状态、推送配置/此设备注册状态及队列数量。只做版本和登录状态查询，不调用付费模型；不返回账户、密钥、路径或会话内容。
 - 手机对候选地址的 `/health` 不发送凭据，核对 `connectorId`；导出包排除地址、设备名和原始错误文本。
 - 手动选择地址时，直接访问所选地址，禁用重定向与自动故障转移；身份一致后带设备 Token 请求 `/rules`，两项验证通过才持久化地址并重连 HTTP / WS。凭据与会话仍绑定原连接器 ID。所选地址之后不可达时仍允许自动故障转移；在线状态下收到地址推送只更新候选，不覆盖当前选择。真机禁选回环地址。
+
+### 手机文件附件
+
+照片、拍摄内容统一预处理为 JPEG；系统文件选择器读取的文档保留原始字节与文件名。手机每条消息最多 6 个附件、合计 20 MB。文档发送沿用上传 ID 与可靠待发送箱；连接器将文档的本地路径作为文本输入提供给 Agent，图片仍使用原生图片输入。上传元数据持久化到 `upload-info/`，随过期附件一起清理；聊天里可通过元数据接口区分缩略图和文件预览。

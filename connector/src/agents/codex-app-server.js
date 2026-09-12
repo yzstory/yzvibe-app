@@ -65,11 +65,12 @@ export class CodexAgent {
       const input = [];
       for (const id of attachments) {
         const upload = this.store.upload(id);
-        if (!upload?.mime?.startsWith('image/')) throw new Error('附带的图片已失效，请重新选择');
-        input.push({ type: 'localImage', path: upload.path });
+        if (!upload) throw new Error('附件已失效，请重新选择');
+        if (upload.mime.startsWith('image/')) input.push({ type: 'localImage', path: upload.path });
+        else input.push({ type: 'text', text: `用户附带文件（请根据需要读取）：${JSON.stringify({ name: upload.name, path: upload.path })}` });
       }
       input.unshift({ type: 'text', text: (this.session.mode === 'plan' ? CODEX_PLAN_PREFIX : '')
-        + (text?.trim() ? text : attachments.length ? '请看附带的图片。' : '') });
+        + (text?.trim() ? text : attachments.length ? '请查看附带的附件。' : '') });
       const opts = appServerOptions(this.session);
       const result = await rpc.request('turn/start', { threadId: this.session.agentSessionId, input,
         cwd: expandHome(this.session.cwd), approvalPolicy: opts.approvalPolicy, approvalsReviewer: 'user',
