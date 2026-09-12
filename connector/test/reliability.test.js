@@ -100,3 +100,29 @@ test('恢复队列接口：需主动继续；停止/Agent 错误会暂停后续�
   assert.equal(c.store.session(s.id).queuePaused, true);
   c.store.setStatus(s.id, 'error'); assert.equal(c.store.session(s.id).queuePaused, true);
 });
+
+test('立即发送复用队列消息，保留附件和其它消息，拒绝重复发送', async (t) => {
+  const home = temp(t);
+  const c = await createConnector({ port: 0, home, defaultAgent: 'mock', importTerminal: false, log: () => {} });
+  t.after(() => c.close()); const port = await c.listen();
+  const d = c.store.addDevice('test'), headers = { authorization: `Bearer ${d.token}` };
+  const s = c.store.createSession({ agent: 'mock', cwd: home, title: 'queue' });
+  const first = c.store.enqueue(s.id, { text: 'later' });
+  const selected = c.store.enqueue(s.id, { text: 'send first' });
+  c.store.pauseQueue(s.id);
+  const url = `http://127.0.0.1:${port}/sessions/${s.id}/queue/${selected.id}/send-now`;
+  assert.equal((await fetch(url, { method: 'POST', headers })).status, 200);
+  assert.equal(c.store.messagesOf(s.id).filter(m => m.role === 'user' && m.text === 'send first').length, 1);
+  assert.ok(s.queue.some(q => q.id === first.id));
+  assert.ok([404, 409].includes((await fetch(url, { method: 'POST', headers })).status));
+  const deadline = Date.now() + 8000;
+  while (s.queue.some(q => q.id === selected.id) && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  assert.ok(!s.queue.some(q => q.id === selected.id));
+  const other = c.store.createSession({ agent: 'mock', cwd: home, title: 'attachments' });
+  const q = c.store.enqueue(other.id, { text: 'attachment', attachments: ['image-id'] });
+  c.store.prioritizeQueued(other.id, q.id);
+  assert.equal(other.queue[0].id, q.id);
+  assert.deepEqual(other.queue[0].attachments, ['image-id']);
+  c.store.markQueued(other.id, q.id, 'uncertain');
+  assert.throws(() => c.store.prioritizeQueued(other.id, q.id), e => e.status === 409);
+});

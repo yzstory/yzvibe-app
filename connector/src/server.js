@@ -375,6 +375,17 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         return json(res, 200, sessionCommands(s.agent, s.cwd, { session: s, ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) }));
       }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/queue\/([^/]+)\/send-now$/)) && req.method === 'POST') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
+        store.prioritizeQueued(s.id, m[2]);
+        const agent = agents.get(s.id);
+        if (busy(s) && agent) agent.stop();
+        else {
+          if (s.status !== 'idle') store.setStatus(s.id, 'idle');
+          void drainQueue(s.id);
+        }
+        return json(res, 200, store.publicSession(s));
+      }
       if ((m = p.match(/^\/sessions\/([^/]+)\/queue\/resume$/)) && req.method === 'POST') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         store.resumeQueue(s.id);

@@ -43,6 +43,7 @@ public protocol ConnectorClient: Sendable {
     /// 恢复所有被删除/隐藏的会话，返回恢复条数。
     func restoreHiddenSessions(device: Device) async throws -> Int
     /// 撤掉一条还没发出去的排队消息。
+    func sendQueuedNow(device: Device, sessionId: String, itemId: String) async throws -> Session
     func resumeQueue(device: Device, sessionId: String) async throws -> Session
     func cancelQueued(device: Device, sessionId: String, itemId: String) async throws
     /// 工作目录的改动；scope = "session" 时只看这次会话改了什么。
@@ -291,6 +292,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     public func restoreHiddenSessions(device: Device) async throws -> Int {
         struct Resp: Decodable { var restored: Int? }
         return try await perform(device, "/sessions/hidden", method: "DELETE", as: Resp.self).restored ?? 0
+    }
+
+    public func sendQueuedNow(device: Device, sessionId: String, itemId: String) async throws -> Session {
+        try await perform(device, "/sessions/\(sessionId)/queue/\(itemId)/send-now", method: "POST", as: Session.self)
     }
 
     public func resumeQueue(device: Device, sessionId: String) async throws -> Session {
@@ -697,6 +702,7 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func sendQueuedNow(device: Device, sessionId: String, itemId: String) async throws -> Session { throw ConnectorError.unreachable }
     func resumeQueue(device: Device, sessionId: String) async throws -> Session { throw ConnectorError.unreachable }
     func deleteSession(device: Device, sessionId: String) async throws {}
     func restoreHiddenSessions(device: Device) async throws -> Int { 0 }

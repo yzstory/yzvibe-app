@@ -189,6 +189,17 @@ export class Store extends EventEmitter {
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
     return item;
   }
+  prioritizeQueued(sessionId, itemId) {
+    const s = this.session(sessionId);
+    const item = s?.queue?.find(q => q.id === itemId);
+    if (!item) throw Object.assign(new Error('排队消息已发送或已移除'), { status: 404 });
+    if (item.deliveryState !== 'queued' || s.queue.some(q => q.deliveryState !== 'queued'))
+      throw Object.assign(new Error('队列正在发送或结果待确认，请稍后重试'), { status: 409 });
+    s.queue = [item, ...s.queue.filter(q => q.id !== itemId)];
+    s.queuePaused = false;
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+  }
   dequeue(sessionId) {
     const s = this.session(sessionId); if (!s?.queue?.length) return null;
     const item = s.queue.shift();

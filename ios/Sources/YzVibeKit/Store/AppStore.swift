@@ -498,6 +498,14 @@ public final class AppStore {
     }
 
     /// 撤掉一条还没发出去的排队消息。
+    func sendQueuedNow(_ itemId: String, in sessionId: String) async {
+        guard let s = session(sessionId), let device = device(s.deviceId) else { return }
+        do {
+            _ = try await client.sendQueuedNow(device: device, sessionId: sessionId, itemId: itemId)
+            await refresh(device)
+        } catch { toast = error.localizedDescription }
+    }
+
     public func resumeQueue(in sessionId: String) async {
         guard let s = session(sessionId), let device = device(s.deviceId) else { return }
         do {

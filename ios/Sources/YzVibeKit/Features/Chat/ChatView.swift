@@ -176,7 +176,7 @@ struct ChatView: View {
                 }
             }
             ForEach(queued) { item in
-                QueuedBubble(item: item) { Task { await store.cancelQueued(item.id, in: sessionId) } }
+                QueuedBubble(item: item, onSendNow: { await store.sendQueuedNow(item.id, in: sessionId) }, onCancel: { Task { await store.cancelQueued(item.id, in: sessionId) } })
                     .id("queued-" + item.id)
             }
         }
@@ -499,6 +499,8 @@ extension InputBar where Accessory == EmptyView {
 struct QueuedBubble: View {
     @Environment(\.palette) private var p
     let item: QueuedMessage
+    let onSendNow: () async -> Void
+    @State private var sendingNow = false
     let onCancel: () -> Void
 
     var body: some View {
@@ -515,6 +517,18 @@ struct QueuedBubble: View {
                             .font(.yzCaption).fontWeight(.semibold)
                     }
                     .foregroundStyle(p.labelTertiary)
+                    if item.deliveryState == "queued" {
+                        Button {
+                            sendingNow = true
+                            Task { await onSendNow(); sendingNow = false }
+                        } label: {
+                            Label(sendingNow ? "正在发送…" : "立即发送", systemImage: "arrow.up")
+                                .font(.yzFootnoteStrong).frame(minHeight: 44)
+                        }
+                        .tint(p.brand).disabled(sendingNow)
+                        Text("中断当前轮并优先执行这条消息")
+                            .font(.yzCaption).foregroundStyle(p.labelTertiary)
+                    }
                 }
                 Button(action: onCancel) {
                     Image(systemName: "xmark.circle.fill").font(.system(.headline))
