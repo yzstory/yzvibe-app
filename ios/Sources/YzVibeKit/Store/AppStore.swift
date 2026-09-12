@@ -26,6 +26,15 @@ public final class AppStore {
     public var settings = Settings() { didSet { settings.save() } }
     public var toast: String?
     var chatDrafts: [String: ChatDraft] = [:]
+    var outbox: [OutgoingMessage] = []
+    var taskRuns: [String: [TaskRun]] = [:]
+    var runErrors: [String: String] = [:]
+    var connectionErrors: [String: String] = [:]
+    @ObservationIgnored var outboxDisk: OutboxDisk?
+    @ObservationIgnored var outboxLoadFailed = false
+    @ObservationIgnored var sendingIDs: Set<String> = []
+    @ObservationIgnored private var streamDevices: Set<String> = []
+    @ObservationIgnored private var snapshotTimeouts: [String: Task<Void, Never>] = [:]
     public private(set) var isDemo: Bool
 
     public let client: any ConnectorClient
@@ -42,17 +51,22 @@ public final class AppStore {
     /// 局域网发现（测试里换成假的）。
     public var lanDiscovery: @Sendable (TimeInterval) async -> [DiscoveredConnector] = { await LANDiscovery.shared.discover(timeout: $0) }
 
-    public init(client: any ConnectorClient = MockConnectorClient(), seedMock: Bool = true) {
+    public init(client: any ConnectorClient = MockConnectorClient(), seedMock: Bool = true, outboxURL: URL? = nil) {
         self.client = client
         self.isDemo = seedMock
         self.settings = Settings.load()
+        if let outboxURL {
+            outboxDisk = OutboxDisk(url: outboxURL)
+            do { outbox = try outboxDisk?.load() ?? [] }
+            catch { outboxLoadFailed = true; toast = "待发送箱暂时无法读取，原记录已保留。" }
+        }
         if seedMock { loadDemo() }
     }
 
     /// 真实连接器 + 本地持久化的设备。
     public static func live() -> AppStore {
         let client = HTTPConnectorClient(tokenProvider: { TokenStore.shared.token(for: $0.id) })
-        let store = AppStore(client: client, seedMock: false)
+        let store = AppStore(client: client, seedMock: false, outboxURL: OutboxDisk.live.url)
         // 隧道换地址后客户端会自己探到能用的那个，这里把它记下来，下次直接用
         client.onEndpointResolved = { [weak store] deviceId, base in
             Task { @MainActor in store?.adoptEndpoint(deviceId, base: base) }
@@ -153,6 +167,7 @@ public final class AppStore {
 
     /// 拉取会话 + 待审批，并刷新在线状态与计数。
     public func refresh(_ device: Device) async {
+        if streamDevices.contains(device.id) { await syncDevice(device); return }
         guard loadingDevices.insert(device.id).inserted else { return }
         defer { loadingDevices.remove(device.id) }
         do {
@@ -204,6 +219,17 @@ public final class AppStore {
             pushStatus[device.id] = snap.push
             rules[device.id] = snap.rules
             hiddenSessionCount[device.id] = snap.hiddenSessions
+            if snap.streamSync {
+                streamDevices.insert(device.id)
+                if let health = try? await client.health(device: device), !health.endpoints.isEmpty {
+                    setDevice(device.id) { $0.endpoints = health.endpoints }
+                }
+                setDevice(device.id) { $0.online = true; $0.lastSeen = .now }
+                _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && loadedMessages.contains($0.id) }.map(\.id))
+                if let token = PushCenter.shared.token { await registerPush(token: token, environment: PushCenter.shared.environment) }
+                connectionErrors[device.id] = nil
+                return // Session/message state is applied on the ordered WS snapshot channel.
+            }
 
             if let health = try? await client.health(device: device), !health.endpoints.isEmpty {
                 if let i = devices.firstIndex(where: { $0.id == device.id }) {
@@ -232,6 +258,7 @@ public final class AppStore {
             if pushToken == nil, let t = PushCenter.shared.token { await registerPush(token: t, environment: PushCenter.shared.environment) }
         } catch {
             setDevice(device.id) { $0.online = false }
+            connectionErrors[device.id] = error.localizedDescription
         }
     }
 
@@ -356,32 +383,61 @@ public final class AppStore {
 
     // MARK: 会话与消息
 
+    private func requestMessageSnapshot(_ sessionId: String, device: Device) async throws {
+        loadedMessages.insert(sessionId)
+        snapshotTimeouts[sessionId]?.cancel()
+        snapshotTimeouts[sessionId] = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            guard let self, loadingMessages.contains(sessionId) else { return }
+            loadingMessages.remove(sessionId); loadedMessages.remove(sessionId)
+            messageLoadErrors[sessionId] = "会话同步超时，请重新加载。"
+            snapshotTimeouts[sessionId] = nil
+        }
+        do { _ = try await client.requestSnapshot(device: device, sessionIds: [sessionId]) }
+        catch { snapshotTimeouts[sessionId]?.cancel(); snapshotTimeouts[sessionId] = nil; throw error }
+    }
+
     public func loadMessages(_ sessionId: String) async {
         guard !loadedMessages.contains(sessionId), let s = session(sessionId), let device = device(s.deviceId), loadingMessages.insert(sessionId).inserted else { return }
         messageLoadErrors[sessionId] = nil
-        defer { loadingMessages.remove(sessionId) }
+        var awaitingSnapshot = false
+        defer { if !awaitingSnapshot { loadingMessages.remove(sessionId) } }
         do {
+            if streamDevices.contains(device.id) {
+                try await requestMessageSnapshot(sessionId, device: device)
+                awaitingSnapshot = true
+                return
+            }
             var list = try await client.messages(device: device, sessionId: sessionId, after: nil)
+            if streamDevices.contains(device.id) {
+                try await requestMessageSnapshot(sessionId, device: device)
+                awaitingSnapshot = true
+                return
+            }
             for i in list.indices { list[i].sessionId = sessionId }
             messages[sessionId] = list
             syncCursor[sessionId] = list.last?.id
             loadedMessages.insert(sessionId)
-        } catch { if !(error is CancellationError) { messageLoadErrors[sessionId] = error.localizedDescription } }
+        } catch { loadedMessages.remove(sessionId); if !(error is CancellationError) { messageLoadErrors[sessionId] = error.localizedDescription } }
     }
 
     public func createSession(_ req: NewSessionRequest) async throws -> Session {
         guard let device = selectedDevice else { throw ConnectorError.badURL }
-        var s = try await client.createSession(device: device, request: req)
+        var creation = req
+        creation.firstMessage = nil
+        var s = try await client.createSession(device: device, request: creation)
         s.deviceId = device.id
         if !sessions.contains(where: { $0.id == s.id }) { sessions.insert(s, at: 0) }
-        var initial = messages[s.id] ?? []
-        if let first = req.firstMessage, !first.isEmpty,
-           !initial.contains(where: { $0.role == .user && $0.text == first }) {
-            initial.insert(Message(sessionId: s.id, role: .user, text: first, isLocal: true), at: 0)
-        }
+        let initial = messages[s.id] ?? []
         messages[s.id] = initial
         loadedMessages.insert(s.id)
         settings.remember(SessionOptions(mode: req.mode, model: req.model, effort: req.effort), for: req.agent)
+        if let first = req.firstMessage, !first.isEmpty {
+            guard let id = stageMessage(first, in: s.id, images: [], mode: .auto) else {
+                throw ConnectorError.network(toast ?? "未能保存首条消息，请重试")
+            }
+            _ = await transmit(id)
+        }
         return s
     }
 
@@ -423,6 +479,11 @@ public final class AppStore {
     }
 
     private func forgetLocally(_ id: String) {
+        snapshotTimeouts[id]?.cancel(); snapshotTimeouts[id] = nil
+        loadingMessages.remove(id); messageLoadErrors[id] = nil
+        taskRuns[id] = nil; runErrors[id] = nil
+        do { try saveOutbox(outbox.filter { $0.sessionId != id }) }
+        catch { toast = "会话已删除，但本地待发送记录未能清理。" }
         chatDrafts[id] = nil
         sessions.removeAll { $0.id == id }
         messages[id] = nil
@@ -487,27 +548,9 @@ public final class AppStore {
 
     /// Agent 正忙时默认排队（`mode = .auto`），`.now` 会插到队首并打断当前这一轮。
     @discardableResult
-    public func send(_ text: String, in sessionId: String, attachments: [String] = [], mode: SendMode = .auto) async -> Bool {
-        guard let s = session(sessionId), let device = device(s.deviceId) else { return false }
-        let willQueue = s.queuePaused || !s.queue.isEmpty || (mode != .now && (s.status == .running || s.status == .waitingApproval))
-        if !willQueue {
-            messages[sessionId, default: []].append(Message(sessionId: sessionId, role: .user, text: text, attachments: attachments, isLocal: true))
-            setStatus(.running, for: sessionId)
-        }
-        if let i = sessions.firstIndex(where: { $0.id == sessionId }), sessions[i].title == "新会话" || sessions[i].title.isEmpty, !text.isEmpty {
-            sessions[i].title = String(text.prefix(40))
-        }
-        do {
-            let r = try await client.sendMessage(device: device, sessionId: sessionId, text: text, attachments: attachments, mode: mode)
-            if r.queued, let item = r.item, let i = sessions.firstIndex(where: { $0.id == sessionId }),
-               !sessions[i].queue.contains(where: { $0.id == item.id }) {
-                sessions[i].queue.append(item)
-            }
-            return r.queued
-        } catch {
-            toast = error.localizedDescription
-            return false
-        }
+    public func send(_ text: String, in sessionId: String, attachments: [String] = [], mode: SendMode = .auto) async -> SendOutcome {
+        guard let id = stageMessage(text, in: sessionId, images: [], attachments: attachments, mode: mode) else { return .failed }
+        return await transmit(id)
     }
 
     /// 撤掉一条还没发出去的排队消息。
@@ -648,6 +691,32 @@ public final class AppStore {
 
     func handle(_ ev: ConnectorEvent, device: Device) {
         switch ev {
+        case .connected:
+            streamDevices.insert(device.id)
+            Task { [weak self] in
+                guard let self else { return }
+                do { _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && loadedMessages.contains($0.id) }.map(\.id)) }
+                catch { connectionErrors[device.id] = error.localizedDescription }
+            }
+        case .snapshot(let snapshot):
+            let fresh = snapshot.sessions.map { var s = $0; s.deviceId = device.id; return s }
+            sessions.removeAll { $0.deviceId == device.id }
+            sessions.append(contentsOf: fresh)
+            approvals.removeAll { $0.deviceId == device.id }
+            approvals.append(contentsOf: snapshot.approvals.map { var a = $0; a.deviceId = device.id; return a })
+            for (sid, list) in snapshot.messages {
+                snapshotTimeouts[sid]?.cancel(); snapshotTimeouts[sid] = nil
+                messages[sid] = list
+                loadedMessages.insert(sid); loadingMessages.remove(sid); messageLoadErrors[sid] = nil
+            }
+            setDevice(device.id) { $0.online = true; $0.lastSeen = .now; $0.sessionCount = fresh.filter { $0.status != .closed }.count }
+            connectionErrors[device.id] = nil; lastSyncAt = .now
+            syncLiveActivity("")
+            Task { [weak self] in
+                guard let self else { return }
+                await reconcileOutbox(device)
+                for sid in snapshot.messages.keys { await loadRuns(sid) }
+            }
         case .sessionCreated(var s):
             s.deviceId = device.id
             if let i = sessions.firstIndex(where: { $0.id == s.id }) { sessions[i] = s } else { sessions.insert(s, at: 0) }
@@ -664,12 +733,15 @@ public final class AppStore {
             setStatus(st, for: sid)
             setDevice(device.id) { $0.online = true }
             syncLiveActivity(sid)
+            if st == .idle || st == .error || st == .closed { Task { await loadRuns(sid) } }
         case .messageUpdated(let message):
             if let i = messages[message.sessionId]?.firstIndex(where: { $0.id == message.id }) {
                 messages[message.sessionId]?[i] = message
             } else if message.role == .user,
                       let i = messages[message.sessionId]?.firstIndex(where: {
-                          $0.isLocal && $0.role == .user && $0.text == message.text && $0.attachments == message.attachments
+                          $0.isLocal && $0.role == .user && (message.clientMessageId != nil
+                              ? $0.clientMessageId == message.clientMessageId
+                              : $0.text == message.text && $0.attachments == message.attachments)
                       }) {
                 // 用服务端消息确认本地气泡；排队消息没有本地气泡，走下面的追加分支。
                 messages[message.sessionId]?[i] = message
@@ -691,9 +763,7 @@ public final class AppStore {
             var list = messages[sid, default: []]
             if let i = list.lastIndex(where: { messageId != nil ? $0.id == messageId : $0.role == .assistant }) {
                 if let j = list[i].toolCalls.firstIndex(where: { $0.id == call.id }) {
-                    list[i].toolCalls[j].state = call.state
-                    if !call.name.isEmpty { list[i].toolCalls[j].name = call.name }
-                    if !call.detail.isEmpty { list[i].toolCalls[j].detail = call.detail }
+                    list[i].toolCalls[j] = call
                 } else { list[i].toolCalls.append(call) }
             } else {
                 list.append(Message(id: messageId ?? UUID().uuidString, sessionId: sid, role: .assistant, text: "", toolCalls: [call]))
@@ -716,8 +786,9 @@ public final class AppStore {
                 if let s = sessions.firstIndex(where: { $0.id == approvals[i].sessionId }) { sessions[s].pendingApprovals = max(0, sessions[s].pendingApprovals - 1) }
             }
             Notifier.clear(id: "approval-\(aid)")
-        case .disconnected:
+        case .disconnected(let error):
             setDevice(device.id) { $0.online = false }
+            connectionErrors[device.id] = error?.localizedDescription ?? "实时连接已断开，正在重连"
         }
     }
 }

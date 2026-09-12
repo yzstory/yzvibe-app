@@ -23,7 +23,7 @@ flowchart LR
         Store["Store · 会话 / 消息 / 审批 / 设备"]
         Rules["审批规则"]
         Claude["Claude 驱动 · stream-json"]
-        Codex["Codex 驱动 · exec --json / resume"]
+        Codex["Codex App Server · thread / turn"]
         Bridge["MCP approve 桥"]
         Files["文件浏览 / 下载 / 图片上传"]
         Disk[("~/.yzvibe/ 与工作目录")]
@@ -62,7 +62,7 @@ flowchart LR
 | 连接器入口     | 进程管理、访问方式、配对展示                 | [CLI](../connector/bin/yzvibe.js)、[daemon.js](../connector/src/daemon.js)、[tunnel.js](../connector/src/tunnel.js) |
 | API 与事件   | 路由、设备鉴权、Agent 调度、WS 广播         | [server.js](../connector/src/server.js)                                                                           |
 | 状态与持久化    | 会话、消息、审批、设备和规则                 | [store.js](../connector/src/store.js)、[rules.js](../connector/src/rules.js)                                       |
-| Agent 适配  | CLI 子进程生命周期与事件翻译               | [claude.js](../connector/src/agents/claude.js)、[codex.js](../connector/src/agents/codex.js)                       |
+| Agent 适配  | CLI 子进程生命周期与事件翻译               | [claude.js](../connector/src/agents/claude.js)、[codex-app-server.js](../connector/src/agents/codex-app-server.js)                       |
 | 权限桥       | 将 Claude MCP 权限请求转成等待手机决定的请求   | [mcp-approve.js](../connector/src/mcp-approve.js)                                                                 |
 | 文件与历史     | 文件边界、图片上传、终端历史扫描与翻译            | [files.js](../connector/src/files.js)、[transcripts.js](../connector/src/transcripts.js)                           |
 | 通知与维护     | APNs、空闲进程回收、过期资源清理             | [push.js](../connector/src/push.js)、[cleanup.js](../connector/src/cleanup.js)                                     |
@@ -97,12 +97,12 @@ sequenceDiagram
     Server-->>Phone: 消息与工具卡更新（WebSocket）
 ```
 
-Codex 驱动每轮运行 `codex exec --json`，后续通过 `resume` 续聊；当前实现没有手机审批回调。Normal 使用工作目录可写沙箱，Plan 使用只读沙箱。Mock 驱动用于不依赖模型服务的开发演示。
+Codex 生产驱动通过 App Server 的 thread / turn RPC 续聊并处理手机审批。Normal 使用工作目录可写沙箱和 on-request 审批，Plan 使用只读沙箱。旧 exec 驱动保留在源码中，不是当前服务端入口。Mock 驱动用于不依赖模型服务的开发演示。
 
 ## 状态、恢复与边界
 
 - **控制与事件**：REST 处理操作和状态查询，WebSocket 推送事件；App 恢复前台后重连并同步消息。APNs 提供通知入口，完整内容仍通过连接器读取。
-- **会话生命周期**：Claude 多轮复用进程，空闲回收后使用会话 ID 恢复；Codex 每轮启动进程。连接器能发现并导入本机终端历史。
+- **会话生命周期**：Claude 多轮复用进程，空闲回收后使用会话 ID 恢复；Codex 通过 App Server 管理 thread 与 turn。连接器能发现并导入本机终端历史。
 - **数据位置**：连接器状态保存在 `~/.yzvibe/`，工作文件保留在项目目录；客户端凭据进入 Keychain。连接器数据目录可通过 `YZVIBE_HOME` 指定。
 - **网络边界**：局域网使用 HTTP / WS；HTTPS 隧道在外部入口提供 TLS。Tailscale 是另一种网络可达方式，不是独立的 YzVibe 服务。模型服务与 Apple APNs 均位于用户电脑之外。
 - **通知内容**：推送可包含审批或回复摘要，不能将“本地优先”理解成没有外部数据传输。
@@ -111,3 +111,7 @@ Codex 驱动每轮运行 `codex exec --json`，后续通过 `resume` 续聊；�
 Live Activity 已通过 WidgetKit 扩展和 `SessionActivity.swift` 接入，连接器接收活动 Token 后通过 APNs 更新状态。消息队列、Git 改动视图、命令 / Skill 面板和候选地址切换也已加入主链路。Android 与小程序仍为规划。
 
 本图展示组件关系，不表示所有异常路径均已验证。当前检查发现的问题见 [优化与拓展检查报告](REVIEW.md)。
+
+## 可靠投递与交付记录
+
+Connector 0.1.1 新增 `requests.js` 接收限额与字段验证、`diagnostics.js` 脱敏诊断；Store 将投递接收记录和队列原子保存，并用追加日志恢复流式文本。iOS `AppStoreDelivery.swift` 管理磁盘待发送箱、接收对账和交付记录，WS 快照与增量共用有序通道。详见 [协议补充](../shared/protocol.md#connector-011可靠投递恢复与诊断) 和 [build 11](RELEASE-0.1.0-11.md)。

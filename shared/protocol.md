@@ -175,12 +175,12 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 | 选项 | Claude Code | Codex CLI |
 |---|---|---|
 | Plan | `--permission-mode plan`（仍带 `--permission-prompt-tool`；`ExitPlanMode` 会作为一条低风险审批发到手机，批准后会话自动切回 Normal） | `-c sandbox_mode="read-only"` + 提示词前缀「只规划不改文件」（Codex 非交互没有原生 plan） |
-| Normal | `--permission-prompt-tool mcp__yzvibe__approve`（敏感操作发手机审批） | `-c sandbox_mode="workspace-write" -c approval_policy="never"`：沙箱内自动执行，沙箱外操作被拒绝，**不会产生审批** |
+| Normal | `--permission-prompt-tool mcp__yzvibe__approve`（敏感操作发手机审批） | App Server `sandbox=workspace-write`、`approvalPolicy=on-request`：额外权限请求通过手机审批 |
 | Trust | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
 | model | `--model <alias 或完整 id>`；预置 fable / opus / sonnet / haiku，支持自定义 | `-m <slug>`；列表来自 `codex debug models`（10 分钟缓存），支持自定义 |
 | effort | `--effort low|medium|high|xhigh|max` | `-c model_reasoning_effort="…"`；档位随模型（目录里带 `efforts`） |
 
-生效时机：Codex 每轮是独立进程，下一轮即生效；Claude 是常驻进程，连接器在会话空闲时于下一轮用 `--resume <session>` 重启进程带上新参数（运行中时等本轮结束）。
+生效时机：Codex 通过 App Server 的下一次 turn 请求应用选项；Claude 是常驻进程，连接器在会话空闲时于下一轮用 `--resume <session>` 重启进程带上新参数（运行中时等本轮结束）。
 `GET /agents` 返回的每个 Agent：`modes[plan|normal|trust] = { flag, description }`、`efforts: string[]`、`models: [{ id, label, description?, efforts?, defaultEffort? }]`、`customModel: boolean`。手机端在连接器不可达或版本较旧时使用内置回退表。
 
 ## 用量与额度
@@ -202,7 +202,7 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 - Claude Code：`~/.claude/projects/<cwd 编码>/<sessionId>.jsonl`（`CLAUDE_CONFIG_DIR` 可改）。标题取 `ai-title`，没有则取第一条用户消息；`cwd` / `gitBranch` / `entrypoint` 来自记录头。`entrypoint = cli` → `source: terminal`，其他（SDK / 其他工具的 headless 调用）→ `sdk`。
 - Codex：`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`（`CODEX_HOME` 可改）。标题取第一条 `user_message`，`cwd` 来自 `session_meta`。
 - 列表阶段只读文件头（最近 45 天、每种 Agent 最多 80 个文件，按 mtime 缓存）；id 形如 `claude:<sessionId>` / `codex:<threadId>`。
-- 手机第一次访问某个终端会话（取消息、发消息、改选项）时连接器**接管**它：以同一 id 入库、把 transcript 翻译成消息历史（最多 300 条，工具调用变成工具卡），之后发消息走 `--resume <sessionId>` / `codex exec resume <threadId>`，与手机自建会话无异。接管后列表里不再重复。
+- 手机第一次访问某个终端会话（取消息、发消息、改选项）时连接器**接管**它：以同一 id 入库、把 transcript 翻译成消息历史（最多 300 条，工具调用变成工具卡），之后发消息走 `--resume <sessionId>` / App Server `thread/resume`，与手机自建会话无异。接管后列表里不再重复。
 - 已被本连接器创建的会话（agentSessionId 已知）不会被当成终端会话重复列出。`createConnector({ importTerminal: false })` 可关闭。
 - 在手机上删掉一个终端会话只是把它的 id 记进隐藏表（`~/.yzvibe/hidden.json`），transcript 文件本身不动；扫描时按这张表过滤，所以不会被重新扫回来。想找回来用 `DELETE /sessions/hidden`。
 - Codex 额度：`GET /quota?agent=codex` 从最近的 rollout 里的 `token_count.rate_limits` 取（5 小时 / 本周窗口），带 `warning` 说明不是实时值。
@@ -216,3 +216,31 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 - iOS 恢复前台时对已打开会话读取完整消息快照，更新原有消息与工具结果；原 `after` 查询仍可供只需增量追加的调用方使用。
 - HTTP 读取请求可在验证 connectorId 后切换一次候选地址；写请求失败不会自动重放。
 - 工作区 diff 中已暂存与未暂存改动以分节文本展示；会话范围包含基线 commit 以来的已提交修改。
+
+## Connector 0.1.1：可靠投递、恢复与诊断
+
+`/health` 增加 `protocolVersion: 2`，`/sync` 增加 `streamSync: true`。JSON 与入站 WS 最大 256 KiB，上传最大 20 MiB，在接收过程中校验；超限 HTTP 413，超限 WS 关闭码 1009。
+
+### 持久化投递
+
+- `POST /sessions/:id/deliveries`：`{ clientMessageId, text, attachments: [], mode: "auto"|"queue"|"now" }`。ID 为 8–100 个字母、数字、下划线或连字符；文字最多 64,000 个 UTF-16 code units，图片最多 6 张。新请求先验证全部附件，再将接收记录和队列原子落盘，返回 202。
+- `GET /sessions/:id/deliveries/:clientMessageId`：读取 `{ id, itemId, state, createdAt }`。`state` 为 `queued`、`dispatching`、`sent`、`uncertain` 或 `cancelled`；`sent` 表示已交给 Agent，不表示任务完成。
+- 同 ID、同内容复用记录；同 ID、不同内容返回 409 `message_conflict`。只有 404 `delivery_missing` 表示可以首次投递；404 `session_missing` 或旧服务器未知接口不表示未接收。
+- 422 `attachment_missing` 表示图片失效，可重新上传后重试。其它错误形如 `{ error, code }`。
+- Agent 派发前持久化 `dispatching`，成功后持久化 `sent`；重启或派发结果不确定时变为 `uncertain` 并暂停队列，禁止自动重放。取消 uncertain 队列项不会删除该 ID 的 uncertain 接收记录。
+- 手机先保存文字/图片及 ID 再清空输入；重试先查记录。任何图片失败都保留整条消息；恢复输入仅用于已知未投递成功的条目。
+
+### 有序恢复
+
+- WS 建连后服务端发送 `{ type: "connected", protocolVersion: 2 }`。
+- 手机每次建连和重连发送 `{ type: "sync.request", sessionIds: [...] }`，每批最多 100 个已打开会话 ID。
+- 服务端同步捕获并在同一 WS 发送 `{ type: "sync.snapshot", sessions: [...], approvals: [...], messages: { "sessionId": [...] } }`；终端会话会先接管再读取历史。所有后续事件位于快照之后。
+- 手机收到快照后原子替换该设备会话/审批和指定历史，再应用实时事件。新连接器的 REST `/sync` 仅补充能力、规则与推送元数据，避免旧 REST 结果覆盖新事件。
+- 流式正文用版本化追加日志先持久化再广播；消息快照落盘后截断日志。重启恢复正文，将未完成消息与任务标记为中断。
+
+### 交付与诊断
+
+- `GET /sessions/:id/runs`：最近 50 轮，倒序。每轮含 `id, sessionId, status, startedAt, endedAt, summary, tools, files, artifacts`。状态为 `running/completed/failed/interrupted`。`summary` 是助手摘要；`tools` 是真实工具记录，并不自动推断测试通过。
+- `tool.call` 补全 `output, outputKind, truncated, exitCode, files`，iOS 事件解码与已有工具更新均保留这些字段。
+- `GET /diagnostics`：鉴权后读取版本、Agent 可运行/版本/登录状态、推送配置/此设备注册状态及队列数量。只做版本和登录状态查询，不调用付费模型；不返回账户、密钥、路径或会话内容。
+- 手机对候选地址的 `/health` 不发送凭据，核对 `connectorId`；导出包排除地址、设备名和原始错误文本。

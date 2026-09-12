@@ -24,8 +24,10 @@ import { startCleanupLoop } from './cleanup.js';
 import { collectEndpoints, advertiseBonjour } from './endpoints.js';
 import { workingDiff, headCommit } from './git.js';
 import { sessionCommands } from './commands.js';
+import { readBody, readJSON, messageInput, badRequest, JSON_LIMIT, UPLOAD_LIMIT } from './requests.js';
+import { diagnostics } from './diagnostics.js';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.1.1';
 
 export const DEFAULT_PORT = 19876;
 
@@ -207,8 +209,6 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
 
   // ---------- HTTP ----------
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); };
-  const readBody = (req) => new Promise((resolve, reject) => { const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => resolve(Buffer.concat(chunks))); req.on('error', reject); });
-  const readJSON = async (req) => { const b = await readBody(req); try { return b.length ? JSON.parse(b) : {}; } catch { throw Object.assign(new Error('JSON 不合法'), { status: 400 }); } };
   const bearer = (req, url) => (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '') || url.searchParams.get('token') || '';
   const authed = (req, url) => store.deviceByToken(bearer(req, url));
 
@@ -217,7 +217,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const p = url.pathname;
     try {
       // 公开
-      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime(), endpoints: api.endpoints() });
+      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, protocolVersion: 2, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime(), endpoints: api.endpoints() });
       // 手机浏览器打开的落地页 / 配置：/pair?token= 与 /pair.json?token=（一次性配对码本身就是凭据，不消费它）
       if (req.method === 'GET' && (p === '/pair' || p === '/pair.json')) {
         const given = url.searchParams.get('token') ?? '';
@@ -234,6 +234,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       if (req.method === 'POST' && p === '/pair') {
         const { token, phoneName } = await readJSON(req);
+        if (typeof token !== 'string' || token.length > 200 || (phoneName != null && (typeof phoneName !== 'string' || phoneName.length > 100))) throw badRequest('配对参数不合法');
         if (!pairing.consume(token)) return json(res, 401, { error: '配对码无效或已过期，请在电脑上运行 yzvibe qr 重新出示' });
         const d = store.addDevice(phoneName ?? '手机');
         log(`[yzvibe] 手机已配对：${d.name} (${d.id.slice(0, 8)})`);
@@ -286,6 +287,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (!authDevice) return json(res, 401, { error: 'unauthorized' });
 
       let m;
+      if (req.method === 'GET' && p === '/diagnostics') return json(res, 200, await diagnostics({ version: VERSION, store, pusher, device: authDevice }));
       if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
       // 手机注册 / 注销 APNs token
       if (p === '/devices/push') {
@@ -312,6 +314,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (req.method === 'GET' && p === '/sync') {
         return json(res, 200, {
           serverTime: new Date().toISOString(),
+          streamSync: true,
           sessions: allSessions(),
           approvals: store.listApprovals('pending'),
           agents: await agentCapabilities(),
@@ -330,6 +333,9 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (req.method === 'GET' && p === '/sessions') return json(res, 200, allSessions());
       if (req.method === 'POST' && p === '/sessions') {
         const body = await readJSON(req);
+        if (body.agent != null && !['claude', 'codex', 'mock'].includes(body.agent)) throw badRequest('不支持的 Agent');
+        if (body.cwd != null && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) throw badRequest('工作目录不合法');
+        if (body.firstMessage != null && (typeof body.firstMessage !== 'string' || body.firstMessage.length > 64_000)) throw badRequest('首句消息过长或格式不合法');
         const agent = body.agent ?? defaultAgent;
         const cwd = body.cwd || os.homedir();
         try { resolveInside(cwd, ''); if (!fs.existsSync(resolveInside(cwd, '').base)) throw new Error(); } catch { return json(res, 400, { error: `工作目录不存在：${cwd}` }); }
@@ -374,10 +380,33 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           return json(res, 200, list.slice(i + 1));
         }
         if (req.method === 'POST') {
-          const { text, attachments = [], mode = 'auto' } = await readJSON(req);
+          const { text, attachments, mode } = messageInput(await readJSON(req), store);
           const r = await handleSend(s, text, attachments, mode);
           return json(res, 202, { ok: true, ...r });
         }
+      }
+      // Versioned delivery route: an old connector returns 404 instead of silently ignoring idempotency.
+      if ((m = p.match(/^\/sessions\/([^/]+)\/deliveries(?:\/([\w-]+))?$/))) {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: '会话不存在', code: 'session_missing' });
+        if (req.method === 'GET' && m[2]) {
+          const receipt = store.receipt(s.id, m[2]);
+          return json(res, receipt ? 200 : 404, receipt ? publicReceipt(receipt) : { error: '尚未接收', code: 'delivery_missing' });
+        }
+        if (req.method === 'POST' && !m[2]) {
+          const input = messageInput(await readJSON(req), null, { requireID: true });
+          const existing = store.receipt(s.id, input.clientMessageId);
+          if (!existing) messageInput(input, store, { requireID: true });
+          const receipt = store.acceptMessage(s.id, input);
+          if (!existing) {
+            if (input.mode === 'now' && busy(s) && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop(); }
+            if (!busy(s) && !s.queuePaused) { if (s.status === 'error') store.setStatus(s.id, 'idle'); setImmediate(() => void drainQueue(s.id)); }
+          }
+          return json(res, 202, publicReceipt(receipt));
+        }
+      }
+      if ((m = p.match(/^\/sessions\/([^/]+)\/runs$/)) && req.method === 'GET') {
+        const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: '会话不存在' });
+        return json(res, 200, store.runsOf(s.id).slice(-50).reverse());
       }
       // 这个目录现在有哪些改动。scope=session 时跟会话开始时的 commit 比
       if ((m = p.match(/^\/sessions\/([^/]+)\/diff$/)) && req.method === 'GET') {
@@ -394,7 +423,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         store.prioritizeQueued(s.id, m[2]);
         const agent = agents.get(s.id);
-        if (busy(s) && agent) agent.stop();
+        if (busy(s) && agent) { store.requestStop(s.id); agent.stop(); }
         else {
           if (s.status !== 'idle') store.setStatus(s.id, 'idle');
           void drainQueue(s.id);
@@ -414,7 +443,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       if ((m = p.match(/^\/sessions\/([^/]+)\/stop$/)) && req.method === 'POST') {
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
-        store.pauseQueue(s.id); agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
+        store.pauseQueue(s.id); store.requestStop(s.id); agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
       if ((m = p.match(/^\/approvals\/([^/]+)$/)) && req.method === 'POST') {
@@ -435,8 +464,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       // 上传（二进制 body + X-Filename）
       if (req.method === 'POST' && p === '/uploads') {
-        const buf = await readBody(req);
-        if (buf.length > 20 * 1024 * 1024) return json(res, 413, { error: '文件过大' });
+        const buf = await readBody(req, UPLOAD_LIMIT);
         const id = store.addUpload(decodeURIComponent(req.headers['x-filename'] ?? 'upload.bin'), req.headers['content-type'] ?? 'application/octet-stream', buf);
         return json(res, 201, { id, url: `/uploads/${id}` });
       }
@@ -446,7 +474,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       }
       json(res, 404, { error: 'not found' });
     } catch (e) {
-      json(res, e.status ?? 500, { error: e.message });
+      if (e.status === 413) { res.setHeader('connection', 'close'); res.once('finish', () => req.destroy()); }
+      json(res, e.status ?? 500, { error: e.message, code: e.code ?? 'request_failed' });
     }
   });
 
@@ -465,23 +494,24 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
 
   /** 会话是不是正忙（忙的时候再发消息默认排队，而不是丢掉或打断）。 */
   const busy = (s) => s.status === 'running' || s.status === 'waiting_approval';
+  const publicReceipt = ({ fingerprint, ...receipt }) => receipt;
 
   /**
    * @param mode 'auto'（默认，忙就排队）| 'queue'（强制排队）| 'now'（插到队首并打断当前轮）
    * @returns { queued: boolean, item? }
    */
-  async function handleSend(s, text, attachments = [], mode = 'auto') {
+  async function handleSend(s, text, attachments = [], mode = 'auto', clientMessageId = null) {
     if (!text?.trim() && !attachments.length) return { queued: false };
     if (s.status === 'closed') store.setStatus(s.id, 'idle');
 
     if ((busy(s) || s.queuePaused || s.queue?.length || mode === 'queue') && mode !== 'never') {
       const front = mode === 'now';
       const item = store.enqueue(s.id, { text: text ?? '', attachments }, { front });
-      if (front && !s.queuePaused) agents.get(s.id)?.stop();     // 打断当前轮，结束后 drainQueue 会立刻把它发出去
+      if (front && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop(); }
       if (!busy(s) && !s.queuePaused) void drainQueue(s.id);
       return { queued: true, item };
     }
-    store.addMessage(s.id, { role: 'user', text: text ?? '', attachments });
+    store.addMessage(s.id, { role: 'user', text: text ?? '', attachments, ...(clientMessageId ? { clientMessageId } : {}) });
     await agentFor(s).send(text ?? '', attachments);
     return { queued: false };
   }
@@ -497,8 +527,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     draining.add(s.id);
     store.markQueued(s.id, item.id, 'dispatching');
     try {
-      await handleSend(s, item.text, item.attachments, 'never');
-      store.cancelQueued(s.id, item.id);
+      await handleSend(s, item.text, item.attachments, 'never', item.clientMessageId);
+      store.completeQueued(s.id, item.id);
     } catch (e) {
       store.markQueued(s.id, item.id, 'uncertain');
       store.pauseQueue(s.id);
@@ -516,7 +546,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   });
 
   // ---------- WebSocket ----------
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: JSON_LIMIT });
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const wsDevice = authed(req, url);
@@ -524,15 +554,25 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.deviceId = wsDevice.id;
       sockets.add(ws);
+      ws.on('error', () => {}); // Invalid/oversized frames close this socket, not the connector.
+      ws.send(JSON.stringify({ type: 'connected', protocolVersion: 2 }));
       ws.on('close', () => sockets.delete(ws));
       ws.on('message', async (raw) => {
         let msg; try { msg = JSON.parse(raw); } catch { return; }
-        const s = msg.sessionId ? resolveSession(msg.sessionId) : null;
+        if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
         try {
+          const s = typeof msg.sessionId === 'string' ? resolveSession(msg.sessionId) : null;
           switch (msg.type) {
-            case 'message.send': if (s) await handleSend(s, msg.text, msg.attachments ?? [], msg.mode ?? 'auto'); break;
+            case 'sync.request': {
+              if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length > 100 || msg.sessionIds.some(id => typeof id !== 'string' || id.length > 100)) throw badRequest('同步会话列表不合法');
+              // Capture synchronously and send on the same ordered channel as live events.
+              const messages = Object.fromEntries(msg.sessionIds.filter(id => resolveSession(id)).map(id => [id, store.messagesOf(id)]));
+              ws.send(JSON.stringify({ type: 'sync.snapshot', sessions: allSessions(), approvals: store.listApprovals(), messages }));
+              break;
+            }
+            case 'message.send': if (s) { const input = messageInput(msg, store); await handleSend(s, input.text, input.attachments, input.mode); } break;
             case 'message.cancel': if (s && msg.itemId) store.cancelQueued(s.id, msg.itemId); break;
-            case 'session.stop': if (s) { store.pauseQueue(s.id); agents.get(s.id)?.stop(); } break;
+            case 'session.stop': if (s) { store.pauseQueue(s.id); store.requestStop(s.id); agents.get(s.id)?.stop(); } break;
             case 'session.resume': if (s && s.status === 'closed') store.setStatus(s.id, 'idle'); break;
             case 'session.configure': if (s) configureSession(s, msg); break;
             case 'approval.respond': store.resolveApproval(msg.approvalId, msg.decision, 'phone', msg.remember ?? null, msg.answers ?? null); break;

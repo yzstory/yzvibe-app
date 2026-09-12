@@ -193,6 +193,8 @@ export class CodexAgent {
     }
     const failed = interrupted || ['failed', 'declined'].includes(item.status) || (item.exitCode != null && item.exitCode !== 0);
     this.store.upsertToolCall(this.session.id, { id, name, detail: detail ?? '',
+      ...(item.type === 'commandExecution' && item.exitCode != null ? { exitCode: item.exitCode } : {}),
+      ...(item.type === 'fileChange' ? { files: item.changes.map(c => c.path) } : {}),
       state: !done ? 'running' : failed ? 'error' : 'done', ...(done && output ? { output, outputKind } : {}) }, `${a.prefix}-tools`);
     if (done && !failed && item.type === 'imageGeneration' && (item.savedPath || item.result)) {
       let target = item.savedPath;
@@ -202,6 +204,8 @@ export class CodexAgent {
       }
       this.store.appendDelta(this.session.id, `${id}-image`, `![生成的图片](<${target}>)`);
       this.store.finishMessage(this.session.id, `${id}-image`);
+      const run = this.store.activeRun(this.session.id);
+      if (run) { run.artifacts.push(target); this.store.setUsage(this.session.id, this.session.usage); }
     }
   }
 

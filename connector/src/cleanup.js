@@ -25,6 +25,7 @@ export function pruneSessions(sessions, home, { maxAgeDays = 45, now = Date.now(
   const stale = sessions.filter((s) => s.status === 'closed' && now - new Date(s.updatedAt || s.createdAt || 0).getTime() > maxAgeDays * DAY);
   for (const s of stale) {
     try { fs.unlinkSync(path.join(home, 'messages', `${s.id}.json`)); } catch {}
+    try { fs.unlinkSync(path.join(home, 'messages', `${s.id}.jsonl`)); } catch {}
   }
   return stale.map((s) => s.id);
 }
@@ -36,7 +37,7 @@ export function pruneOrphanMessages(sessions, home) {
   let names; try { names = fs.readdirSync(dir); } catch { return 0; }
   let removed = 0;
   for (const n of names) {
-    const id = n.replace(/\.json$/, '');
+    const id = n.replace(/\.jsonl?$/, '');
     if (alive.has(id)) continue;
     try { fs.unlinkSync(path.join(dir, n)); removed += 1; } catch {}
   }

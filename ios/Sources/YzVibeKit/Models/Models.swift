@@ -363,6 +363,8 @@ public struct ToolCall: Codable, Hashable, Sendable {
     public var output: String?
     public var outputKind: OutputKind
     public var truncated: Bool
+    public var exitCode: Int?
+    public var files: [String] = []
 
     public init(id: String = UUID().uuidString, name: String, detail: String, state: State,
                 output: String? = nil, outputKind: OutputKind = .text, truncated: Bool = false) {
@@ -370,7 +372,7 @@ public struct ToolCall: Codable, Hashable, Sendable {
         self.output = output; self.outputKind = outputKind; self.truncated = truncated
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, detail, state, output, outputKind, truncated }
+    enum CodingKeys: String, CodingKey { case id, name, detail, state, output, outputKind, truncated, exitCode, files }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -380,6 +382,8 @@ public struct ToolCall: Codable, Hashable, Sendable {
         output = try c.decodeIfPresent(String.self, forKey: .output)
         outputKind = OutputKind(rawValue: try c.decodeIfPresent(String.self, forKey: .outputKind) ?? "") ?? .text
         truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
+        exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
+        files = try c.decodeIfPresent([String].self, forKey: .files) ?? []
     }
 }
 
@@ -395,6 +399,7 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
     public var streaming: Bool
     /// 本地乐观追加、还没被连接器确认的消息（不参与编码）。断线重连补数据时用它去重。
     public var isLocal: Bool = false
+    public var clientMessageId: String?
 
     public init(id: String = UUID().uuidString, sessionId: String, role: MessageRole, text: String, attachments: [String] = [],
                 toolCalls: [ToolCall] = [], approvalId: String? = nil, createdAt: Date = .now, streaming: Bool = false, isLocal: Bool = false) {
@@ -402,7 +407,7 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
         self.toolCalls = toolCalls; self.approvalId = approvalId; self.createdAt = createdAt; self.streaming = streaming; self.isLocal = isLocal
     }
 
-    enum CodingKeys: String, CodingKey { case id, sessionId, role, text, attachments, toolCalls, approvalId, createdAt, streaming }
+    enum CodingKeys: String, CodingKey { case id, sessionId, role, text, attachments, toolCalls, approvalId, createdAt, streaming, clientMessageId }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -414,6 +419,7 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
         approvalId = try c.decodeIfPresent(String.self, forKey: .approvalId)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? .now
         streaming = try c.decodeIfPresent(Bool.self, forKey: .streaming) ?? false
+        clientMessageId = try c.decodeIfPresent(String.self, forKey: .clientMessageId)
     }
 }
 
@@ -792,6 +798,7 @@ public struct PushStatus: Codable, Hashable, Sendable {
 
 /// GET /sync：App 回到前台时一次拿全，避免逐个接口往返。
 public struct SyncSnapshot: Codable, Sendable {
+    public var streamSync: Bool = false
     public var serverTime: Date
     public var sessions: [Session]
     public var approvals: [Approval]
@@ -801,7 +808,7 @@ public struct SyncSnapshot: Codable, Sendable {
     /// 手机上删掉过、连接器不再列出的会话条数（可以在「我」里一键恢复）。
     public var hiddenSessions: Int = 0
 
-    enum CodingKeys: String, CodingKey { case serverTime, sessions, approvals, agents, rules, push, hiddenSessions }
+    enum CodingKeys: String, CodingKey { case serverTime, sessions, approvals, agents, rules, push, hiddenSessions, streamSync }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         serverTime = try c.decodeIfPresent(Date.self, forKey: .serverTime) ?? .now
@@ -811,6 +818,7 @@ public struct SyncSnapshot: Codable, Sendable {
         rules = try c.decodeIfPresent([ApprovalRule].self, forKey: .rules) ?? []
         push = try c.decodeIfPresent(PushStatus.self, forKey: .push) ?? PushStatus()
         hiddenSessions = try c.decodeIfPresent(Int.self, forKey: .hiddenSessions) ?? 0
+        streamSync = try c.decodeIfPresent(Bool.self, forKey: .streamSync) ?? false
     }
     public init(serverTime: Date = .now, sessions: [Session] = [], approvals: [Approval] = [], agents: [String: AgentCapabilities] = [:], rules: [ApprovalRule] = [], push: PushStatus = PushStatus(), hiddenSessions: Int = 0) {
         self.serverTime = serverTime; self.sessions = sessions; self.approvals = approvals; self.agents = agents; self.rules = rules; self.push = push; self.hiddenSessions = hiddenSessions

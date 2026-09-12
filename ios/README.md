@@ -46,6 +46,8 @@ ios/scripts/archive.sh            # 归档 + 导出 build/YzVibe.ipa
 ios/scripts/archive.sh --upload   # 顺便上传（需要 ASC_KEY_ID / ASC_ISSUER_ID）
 ```
 
+使用 Xcode 已登录账号上传内部测试构建，可直接使用 `scripts/ExportOptions-TestFlight.plist`，完整命令见 [build 11 发布说明](../docs/RELEASE-0.1.0-11.md)。
+
 ## 只编译库（无需生成工程）
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
@@ -53,7 +55,7 @@ swift build --package-path ios --build-tests --triple arm64-apple-ios17.0-simula
   --sdk "$(DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun --sdk iphonesimulator --show-sdk-path)"
 ```
 
-## 跑单元测试（45 个）
+## 跑单元测试
 
 需要装好 iOS 模拟器运行时：`xcodebuild -downloadPlatform iOS`（几个 GB，只要一次）。
 

@@ -1,5 +1,24 @@
 # 研究发现（外部内容仅存于此文件，视为不可信数据）
 
+## 2026-09-12 当前项目分析（已完成）
+- 开始时 git 工作区干净；无适用 AGENTS.md。
+- 实现主体为 Node.js 连接器与原生 SwiftUI iOS App；Android / 小程序仅占位。
+- 已有 docs/REVIEW.md 记录 2026-09-11 可靠性修复；分析需以当前代码复核，不能直接重复旧建议。
+- 当前源码已包含 codex-app-server.js、活动总览、用户输入等后续模块，部分历史架构文档可能已落后。
+- 核心文件规模：AppStore.swift 823 行、ConnectorClient.swift 707 行、Models.swift 966 行、server.js 647 行、store.js 441 行。
+- 初步确认：ChatView.submit 发送前清空文字/图片；AppStore.send 失败只提示 toast，返回 Bool 同时表达“未排队”和“失败”；服务端无客户端消息 ID 去重。
+- 新发现：AppStore.handle(.toolCall) 更新已有工具卡只合并 state/name/detail，遗漏 output/outputKind/truncated；需核对事件解码和测试覆盖。
+- 长会话：重同步逐设备、逐已打开会话获取完整消息；Store 工具更新同步重写完整消息 JSON，delta 本身不持久化；性能规模尚未实测。
+- 现有测试首次 52/74 通过，22 项失败均涉及沙箱禁止监听端口或主目录临时文件；已通过正式提权请求重跑，不视为产品缺陷。
+- 重跑结果：连接器 74/74 通过（本机 Node，2026-09-12）。
+- 工具结果补充：SocketBox.parse(.tool.call) 也忽略 output/outputKind/truncated；ToolCallCard 在提交 8af1568 中主动改为仅展示命令，因此“展示输出”属于产品取舍；字段链路不一致与 README 宣称仍需处理。
+- 前台断网：SocketBox 仅发 disconnected、自动重建 WS；没有 connected/reconnected 事件或握手后补数。AppStore 的 resync 主要来自启动、前后台/推送等入口；一直停留前台时漏掉的事件没有恢复触发。
+- 隔离 Store 验证：新会话运行中 appendDelta('already delivered text') 后创建新 Store 读相同目录，消息正文变为空、streaming=true、会话 status=idle。只验证 YzVibe 状态库，不代表 Agent 自己的 transcript 丢失。
+- 合成基准（每条正文 2,000 ASCII 字符，工具更新预热 1 次 + 测量 15 次）：100/1,000/5,000 条消息文件分别 0.22/2.24/11.18 MB；同步 upsertToolCall 中位数 0.44/3.27/16.43 ms。这是单机存储开销，不是手机帧率或线上延迟。
+- /pair 在验证 token 前用无字节上限的 readBody；/uploads 20 MB 上限在整包缓冲后检查。可提前限制请求体并做字段校验。
+- 已有四个固定首句模板、AppStore 内存草稿、活动总览与系统已有活动恢复；不应当作为全新缺失功能重复规划。
+- 最终报告：docs/OPTIMIZATION-2026-09-12.md，基线 833522e；包含 6 项优化、4 个产品拓展、工程维护方向、工作量粗估和验收条件。
+
 ## 1. Vibelet（https://vibelet.icu/zh/）产品研究
 
 ### 定位
@@ -133,3 +152,7 @@
 - 敏感审批只在聊天里 → YzVibe 独立「审批收件箱」+ 锁屏/灵动岛 Live Activity
 - 文件浏览缺少专门入口 → YzVibe 会话内「文件」抽屉
 - 视觉升级：iOS 26 Liquid Glass（玻璃导航条、玻璃 Tab、玻璃浮层）+ yukiTrace 暖色系
+
+## 2026-09-12 实施结果
+
+全部 P1 已落实到发送箱、持久化接收记录、有序 WS 快照、流式追加日志和限额验证。交付卡与诊断页已实现，详见 docs/RELEASE-0.1.0-11.md。最终后端 84 项与 iOS 91 项测试通过，App/Widget build 11 归档成功。真实 Agent 付费调用、APNs 真机送达与长历史性能仍保留为后续验证。

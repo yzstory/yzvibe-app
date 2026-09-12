@@ -725,7 +725,7 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
         // 忙的时候：进队列，不往消息流里塞乐观消息
         client.nextQueued = QueuedMessage(id: "q1", text: "排队一号")
         let queued = await store.send("排队一号", in: "s1")
-        XCTAssertTrue(queued)
+        XCTAssertEqual(queued, .queued)
         XCTAssertEqual(store.session("s1")?.queue.map(\.text), ["排队一号"])
         XCTAssertNil(store.messages["s1"]?.first(where: { $0.text == "排队一号" }))
         XCTAssertEqual(client.lastMode, .auto)
@@ -738,7 +738,7 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
         // 立即发送：插队 + 打断，本地立刻显示
         client.nextQueued = nil
         let now = await store.send("马上发", in: "s1", mode: .now)
-        XCTAssertFalse(now)
+        XCTAssertEqual(now, .sent)
         XCTAssertEqual(client.lastMode, .now)
         XCTAssertEqual(store.messages["s1"]?.last?.text, "马上发")
     }
@@ -746,6 +746,17 @@ final class QueueEndpointsAndCommandsTests: XCTestCase {
 
 /// 队列测试用的假连接器。
 final class QueueStubClient: ConnectorClient, @unchecked Sendable {
+    var deliveryHandler: ((String, String, [String]) async throws -> DeliveryReceipt)?
+    var receiptHandler: ((String) async throws -> DeliveryReceipt?)?
+    var uploadHandler: ((Data) async throws -> String)?
+    var snapshotRequests: [[String]] = []
+    func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt {
+        if let deliveryHandler { return try await deliveryHandler(clientMessageId, text, attachments) }
+        let response = try await sendMessage(device: device, sessionId: sessionId, text: text, attachments: attachments, mode: mode)
+        return DeliveryReceipt(id: clientMessageId, itemId: response.item?.id, state: response.queued ? "queued" : "sent")
+    }
+    func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt? { try await receiptHandler?(id) }
+    func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool { snapshotRequests.append(sessionIds); return false }
     var messagesHandler: (@Sendable () async throws -> [Message])?
     var nextQueued: QueuedMessage?
     var lastMode: SendMode?
@@ -794,7 +805,7 @@ final class QueueStubClient: ConnectorClient, @unchecked Sendable {
     func attachment(device: Device, id: String) async throws -> Data { Data() }
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] { [] }
     func preview(device: Device, sessionId: String, path: String) async throws -> String { "" }
-    func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { "u1" }
+    func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String { try await uploadHandler?(data) ?? "u1" }
     func listDirectories(device: Device, path: String?) async throws -> DirectoryListing { DirectoryListing(path: "/", parent: nil, home: "/", entries: []) }
     func makeDirectory(device: Device, parent: String, name: String) async throws -> String { parent }
     func sync(device: Device) async throws -> SyncSnapshot { SyncSnapshot() }

@@ -7,6 +7,7 @@ struct DevicesView: View {
     @State private var showScanner = false
     @State private var showManual = false
     @State private var editingDevice: Device?
+    @State private var diagnosingDevice: Device?
     var onOpenSessions: () -> Void
 
     var body: some View {
@@ -25,10 +26,15 @@ struct DevicesView: View {
                                     store.selectedDeviceId = device.id
                                     onOpenSessions()
                                 } label: { DeviceCard(device: device) }
+                                HStack(spacing: 12) {
+                                Button { diagnosingDevice = device } label: {
+                                    Label("诊断", systemImage: "stethoscope").font(.yzFootnoteStrong).foregroundStyle(p.brand).frame(minHeight: 44)
+                                }
                                 Button { editingDevice = device } label: {
                                     Label("配置", systemImage: "slider.horizontal.3")
                                         .font(.yzFootnoteStrong).foregroundStyle(p.brand)
                                         .padding(.horizontal, 12).frame(minHeight: 44)
+                                }
                                 }
                             }
                             .buttonStyle(.plain)
@@ -85,6 +91,7 @@ struct DevicesView: View {
             .fullScreenCover(isPresented: $showScanner) { PairScannerView() }
             .sheet(isPresented: $showManual) { ManualEndpointView().presentationDetents([.medium, .large]) }
             .sheet(item: $editingDevice) { DeviceConfigurationView(device: $0) }
+            .sheet(item: $diagnosingDevice) { device in NavigationStack { ConnectionDiagnosticsView(device: device) } }
         }
     }
 

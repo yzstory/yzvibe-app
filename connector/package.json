@@ -1,6 +1,6 @@
 {
   "name": "yzvibe",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "YzVibe 桌面连接器：把本机的 Claude Code / Codex 会话暴露给手机 App（REST + WebSocket + 扫码配对 + 远程审批推送）",
   "type": "module",
   "bin": {

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mimeOf } from './files.js';
 import { suggestionsFor } from './rules.js';
@@ -18,8 +18,11 @@ function readJSON(file, fallback) {
 function writeJSON(file, data) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${randomUUID()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try { fs.writeFileSync(fd, JSON.stringify(data, null, 2)); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   fs.renameSync(tmp, file);
+  const dir = fs.openSync(path.dirname(file), 'r');
+  try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
 }
 /** 工具输出可能是几百 KB 的编译日志，手机上只要看得懂就够了。 */
 export function clampOutput(text, max = MAX_TOOL_OUTPUT) {
@@ -37,17 +40,27 @@ export class Store extends EventEmitter {
     fs.mkdirSync(path.join(home, 'messages'), { recursive: true });
     this.connector = readJSON(path.join(home, 'connector.json'), null) ?? this.#initConnector();
     this.devices = readJSON(path.join(home, 'devices.json'), []);          // [{ id, name, token, push?, createdAt }]
-    this.sessions = readJSON(path.join(home, 'sessions.json'), []).map((s) => ({
+    const previous = readJSON(path.join(home, 'sessions.json'), []);
+    this.sessions = previous.map((s) => ({
       mode: 'normal', model: null, effort: null, usage: null, source: 'phone', branch: null, ...s,
-      status: s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0,
+      status: ['running', 'waiting_approval'].includes(s.status) ? 'error' : s.status === 'closed' ? 'closed' : 'idle', pendingApprovals: 0,
       queue: (s.queue ?? []).map((q) => ({ ...q, deliveryState: q.deliveryState === 'dispatching' ? 'uncertain' : (q.deliveryState ?? 'queued') })),
       queuePaused: Boolean(s.queue?.length),
+      receipts: Object.fromEntries(Object.entries(s.receipts ?? {}).map(([id, r]) => [id, { ...r, state: r.state === 'dispatching' ? 'uncertain' : r.state }])),
     }));
     this.hidden = new Set(readJSON(path.join(home, 'hidden.json'), []));    // 手机上删掉的会话 id（终端会话也不再扫回来）
     this.messages = new Map();                                              // sessionId → Message[]
     this.approvals = [];                                                    // 仅内存：重启后未决审批视为过期
     this.uploads = new Map();                                               // id → { path, mime, name }
     this.rules = null;                                                      // server 注入 Rules 实例
+    for (const old of previous.filter(s => ['running', 'waiting_approval'].includes(s.status))) {
+      const list = this.messagesOf(old.id);
+      for (const m of list) { m.streaming = false; for (const t of m.toolCalls ?? []) if (t.state === 'running') t.state = 'error'; }
+      const s = this.session(old.id);
+      for (const run of s.runs ?? []) if (run.status === 'running') { run.status = 'interrupted'; run.endedAt = new Date().toISOString(); }
+      s.activeRunId = null;
+      this.addMessage(old.id, { role: 'system', text: '连接器在任务结束前重启。已恢复保存的内容，执行结果待确认；请检查交付记录后再继续。' });
+    }
   }
 
   #initConnector() {
@@ -125,7 +138,7 @@ export class Store extends EventEmitter {
     return s;
   }
   publicSession(s) {
-    const { agentSessionId, file, ...rest } = s;
+    const { agentSessionId, file, receipts, runs, activeRunId, ...rest } = s;
     if (s.agent === 'codex' && s.usage?.turn && s.usage.source !== 'app-server') {
       const context = readCodexContext(agentSessionId) ?? { contextTokens: null, contextWindow: null };
       // 也覆盖旧版持久化的错误上下文值；累计 token 用量保持原样。
@@ -136,6 +149,16 @@ export class Store extends EventEmitter {
   listSessions() { return this.sessions.map((s) => this.publicSession(s)); }
   setStatus(id, status) {
     const s = this.session(id); if (!s) return;
+    if (status === 'running' && !['running', 'waiting_approval'].includes(s.status)) {
+      const run = { id: randomUUID(), sessionId: id, status: 'running', startedAt: new Date().toISOString(), endedAt: null,
+        startMessageId: this.messagesOf(id).at(-1)?.id ?? null, messageIds: [], tools: [], files: [], artifacts: [], summary: '' };
+      s.runs = [...(s.runs ?? []), run]; s.activeRunId = run.id;
+    }
+    if (['idle', 'error', 'closed'].includes(status) && s.activeRunId) {
+      const run = s.runs?.find(r => r.id === s.activeRunId);
+      if (run) { run.status = s.stopRequested ? 'interrupted' : status === 'error' ? 'failed' : status === 'closed' ? 'interrupted' : 'completed'; run.endedAt = new Date().toISOString(); }
+      s.activeRunId = null; s.stopRequested = false;
+    }
     if (status === 'running' && !['running', 'waiting_approval'].includes(s.status)) s.runStartedAt = new Date().toISOString();
     s.status = status; s.updatedAt = new Date().toISOString();
     this.#saveSessions();
@@ -172,7 +195,11 @@ export class Store extends EventEmitter {
   }
   closeSession(id) {
     this.rules?.removeForSession(id);
-    const s = this.session(id); if (s) s.queue = [];
+    const s = this.session(id);
+    if (s) {
+      for (const q of s.queue ?? []) if (q.clientMessageId && s.receipts?.[q.clientMessageId]) s.receipts[q.clientMessageId].state = q.deliveryState === 'queued' ? 'cancelled' : 'uncertain';
+      s.queue = [];
+    }
     this.setStatus(id, 'closed');
   }
 
@@ -225,11 +252,15 @@ export class Store extends EventEmitter {
     const s = this.session(sessionId), item = s?.queue?.find((q) => q.id === itemId);
     if (!item) return;
     item.deliveryState = deliveryState;
+    if (item.clientMessageId) s.receipts[item.clientMessageId].state = deliveryState;
     this.#saveSessions();
     this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
   }
   cancelQueued(sessionId, itemId) {
     const s = this.session(sessionId); if (!s?.queue?.length) return false;
+    const item = s.queue.find(q => q.id === itemId);
+    if (item?.deliveryState === 'dispatching') throw Object.assign(new Error('消息正在派发，请等待确认'), { status: 409 });
+    if (item?.clientMessageId) s.receipts[item.clientMessageId].state = item.deliveryState === 'uncertain' ? 'uncertain' : 'cancelled';
     const before = s.queue.length;
     s.queue = s.queue.filter((x) => x.id !== itemId);
     if (s.queue.length === before) return false;
@@ -245,6 +276,7 @@ export class Store extends EventEmitter {
     this.sessions = this.sessions.filter((s) => s.id !== id);
     this.messages.delete(id);
     try { fs.rmSync(path.join(this.home, 'messages', `${id}.json`)); } catch {}
+    try { fs.rmSync(path.join(this.home, 'messages', `${id}.jsonl`)); } catch {}
     this.hidden.add(id);
     this.#saveHidden();
     this.#saveSessions();
@@ -271,17 +303,80 @@ export class Store extends EventEmitter {
   }
   #saveSessions() { writeJSON(path.join(this.home, 'sessions.json'), this.sessions); }
 
+  runsOf(id) { return this.session(id)?.runs ?? []; }
+  activeRun(id) { const s = this.session(id); return s?.runs?.find(r => r.id === s.activeRunId); }
+  requestStop(id) { const s = this.session(id); if (s) { s.stopRequested = true; this.#saveSessions(); } }
+
+  receipt(sessionId, id) { return this.session(sessionId)?.receipts?.[id] ?? null; }
+  acceptMessage(sessionId, { clientMessageId, text, attachments, mode }) {
+    const s = this.session(sessionId);
+    const fingerprint = createHash('sha256').update(JSON.stringify({ text, attachments, mode })).digest('hex');
+    const existing = this.receipt(sessionId, clientMessageId);
+    if (existing) {
+      if (existing.fingerprint !== fingerprint) throw Object.assign(new Error('该消息 ID 已用于另一条内容'), { status: 409, code: 'message_conflict' });
+      return existing;
+    }
+    const item = { id: randomUUID(), clientMessageId, text, attachments, createdAt: new Date().toISOString(), deliveryState: 'queued' };
+    const receipt = { id: clientMessageId, fingerprint, itemId: item.id, state: 'queued', createdAt: item.createdAt };
+    const previous = { receipts: s.receipts, queue: s.queue, status: s.status };
+    s.receipts = { ...s.receipts, [clientMessageId]: receipt };
+    s.queue = mode === 'now' ? [item, ...(s.queue ?? [])] : [...(s.queue ?? []), item];
+    if (s.status === 'closed') s.status = 'idle';
+    // Queue and deduplication record are committed in the same atomic file replacement.
+    try { this.#saveSessions(); }
+    catch (error) {
+      // Never acknowledge an in-memory receipt whose disk commit failed. If rename
+      // succeeded before directory fsync failed, reconcile against the committed file.
+      const persisted = readJSON(path.join(this.home, 'sessions.json'), []).find(x => x.id === sessionId);
+      Object.assign(s, persisted ? { receipts: persisted.receipts, queue: persisted.queue, status: persisted.status } : previous);
+      throw error;
+    }
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+    return receipt;
+  }
+  completeQueued(sessionId, itemId) {
+    const s = this.session(sessionId), item = s?.queue?.find(q => q.id === itemId);
+    if (!item) return;
+    if (item.clientMessageId) s.receipts[item.clientMessageId].state = 'sent';
+    s.queue = s.queue.filter(q => q.id !== itemId);
+    this.#saveSessions();
+    this.emit('event', { type: 'session.updated', session: this.publicSession(s) });
+  }
+
   // ---------- 消息 ----------
   messagesOf(sessionId) {
-    if (!this.messages.has(sessionId)) this.messages.set(sessionId, readJSON(path.join(this.home, 'messages', `${sessionId}.json`), []));
+    if (!this.messages.has(sessionId)) {
+      const list = readJSON(path.join(this.home, 'messages', `${sessionId}.json`), []);
+      let journal = ''; try { journal = fs.readFileSync(path.join(this.home, 'messages', `${sessionId}.jsonl`), 'utf8'); } catch {}
+      for (const line of journal.split('\n')) {
+        if (!line) continue;
+        let e; try { e = JSON.parse(line); } catch { continue; } // incomplete final write
+        let m = list.find(m => m.id === e.id);
+        if (!m) { m = { id: e.id, sessionId, role: 'assistant', text: '', attachments: [], toolCalls: [], streaming: true, createdAt: e.createdAt }; list.push(m); }
+        // Offset replay is idempotent if a crash happened after snapshot rename, before journal truncation.
+        if (e.revision != null && e.revision <= (m.journalRevision ?? 0)) continue;
+        if (m.text.length >= e.offset && m.text.length < e.offset + e.text.length) m.text += e.text.slice(m.text.length - e.offset);
+        if (e.revision != null) m.journalRevision = e.revision;
+      }
+      this.messages.set(sessionId, list);
+    }
     return this.messages.get(sessionId);
   }
-  #saveMessages(sessionId) { writeJSON(path.join(this.home, 'messages', `${sessionId}.json`), this.messagesOf(sessionId)); }
+  #saveMessages(sessionId) {
+    writeJSON(path.join(this.home, 'messages', `${sessionId}.json`), this.messagesOf(sessionId));
+    fs.writeFileSync(path.join(this.home, 'messages', `${sessionId}.jsonl`), '', { mode: 0o600 });
+  }
   addMessage(sessionId, partial) {
+    if (partial.clientMessageId) {
+      const existing = this.messagesOf(sessionId).find(m => m.clientMessageId === partial.clientMessageId);
+      if (existing) return existing;
+    }
     const m = { id: randomUUID(), sessionId, role: 'assistant', text: '', attachments: [], toolCalls: [], approvalId: null, createdAt: new Date().toISOString(), streaming: false, ...partial };
     this.messagesOf(sessionId).push(m);
     this.#saveMessages(sessionId);
     const s = this.session(sessionId);
+    const run = this.activeRun(sessionId);
+    if (run && !run.messageIds.includes(m.id)) run.messageIds.push(m.id);
     if (s) {
       s.updatedAt = m.createdAt;
       if (m.role === 'user' && (!s.title || s.title === '新会话') && m.text.trim()) {
@@ -302,6 +397,11 @@ export class Store extends EventEmitter {
     const list = this.messagesOf(sessionId);
     let m = list.find((x) => x.id === messageId);
     if (!m) m = this.addMessage(sessionId, { id: messageId, role: 'assistant', streaming: true });
+    const fd = fs.openSync(path.join(this.home, 'messages', `${sessionId}.jsonl`), 'a', 0o600);
+    const revision = (m.journalRevision ?? 0) + 1;
+    try { fs.writeSync(fd, JSON.stringify({ id: m.id, offset: m.text.length, text, revision, createdAt: m.createdAt }) + '\n'); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    m.journalRevision = revision;
     m.text += text;
     this.emit('event', { type: 'message.delta', sessionId, messageId, role: 'assistant', text });
     return m;
@@ -309,6 +409,8 @@ export class Store extends EventEmitter {
   finishMessage(sessionId, messageId, fullText) {
     const m = this.messagesOf(sessionId).find((x) => x.id === messageId);
     if (m) { if (typeof fullText === 'string') m.text = fullText; m.streaming = false; this.#saveMessages(sessionId); }
+    const run = this.activeRun(sessionId);
+    if (run && m?.text) { run.summary = m.text.slice(0, 1200); this.#saveSessions(); }
     this.emit('event', { type: 'message.done', sessionId, messageId });
   }
   replaceMessageText(sessionId, messageId, text) {
@@ -342,8 +444,15 @@ export class Store extends EventEmitter {
     }
     this.#saveMessages(sessionId);
     const t = m.toolCalls[i >= 0 ? i : m.toolCalls.length - 1];
+    const run = this.activeRun(sessionId);
+    if (run) {
+      const index = run.tools.findIndex(x => x.id === t.id);
+      if (index < 0) run.tools.push({ ...t }); else run.tools[index] = { ...t };
+      run.files = [...new Set(run.tools.flatMap(x => x.files ?? []))];
+      this.#saveSessions();
+    }
     this.emit('event', { type: 'tool.call', sessionId, messageId: m.id, toolId: t.id, name: t.name, input: { detail: t.detail }, state: t.state,
-                         output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated) });
+                         output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated), exitCode: t.exitCode ?? null, files: t.files ?? [] });
   }
 
   // ---------- 审批 ----------

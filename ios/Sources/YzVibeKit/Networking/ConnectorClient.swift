@@ -3,6 +3,12 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt
+    func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt?
+    func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool
+    func runs(device: Device, sessionId: String) async throws -> [TaskRun]
+    func diagnostics(device: Device) async throws -> ConnectorDiagnostics
+    func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck
     func health(device: Device) async throws -> HealthInfo
     func pair(_ payload: PairingPayload) async throws -> Device
     func sessions(device: Device) async throws -> [Session]
@@ -85,6 +91,8 @@ public struct HealthInfo: Codable, Sendable {
 }
 
 public enum ConnectorEvent: Sendable {
+    case connected
+    case snapshot(EventSnapshot)
     case sessionCreated(Session)
     case sessionUpdated(Session)
     case sessionRemoved(sessionId: String)
@@ -100,11 +108,13 @@ public enum ConnectorEvent: Sendable {
 
 public enum ConnectorError: LocalizedError, Sendable {
     case badURL, unauthorized, network(String), decoding, unreachable
+    case server(Int, String, String)
     public var errorDescription: String? {
         switch self {
         case .badURL: "连接地址不合法"
         case .unauthorized: "Token 无效或已过期，请重新扫码"
         case .network(let m): "网络错误：\(m)"
+        case .server(_, _, let message): message
         case .decoding: "无法解析连接器返回的数据"
         case .unreachable: "暂时无法连接电脑。请检查电脑与网络；同一 Wi-Fi 下可在设备页选择“在局域网里找”，无需重新配对。"
         }
@@ -186,7 +196,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         do { (data, resp) = try await session.data(for: req) } catch { throw ConnectorError.unreachable }
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
         if http.statusCode == 401 { throw ConnectorError.unauthorized }
-        guard (200..<300).contains(http.statusCode) else { throw ConnectorError.network("HTTP \(http.statusCode)") }
+        guard (200..<300).contains(http.statusCode) else {
+            let failure = try? JSONDecoder().decode(ConnectorFailureBody.self, from: data)
+            throw ConnectorError.server(http.statusCode, failure?.code ?? "http_error", failure?.error ?? "HTTP \(http.statusCode)")
+        }
         do { return try JSONDecoder.yz.decode(T.self, from: data) } catch { throw ConnectorError.decoding }
     }
 
@@ -224,7 +237,7 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 
     public func stop(device: Device, sessionId: String) async throws {
-        try await socket(for: device).send(["type": "session.stop", "sessionId": sessionId])
+        _ = try await perform(device, "/sessions/\(sessionId)/stop", method: "POST", as: OK.self)
     }
 
     public func respond(device: Device, approvalId: String, decision: ApprovalDecision, remember: ApprovalSuggestion? = nil, answers: [String: String]? = nil) async throws {
@@ -279,6 +292,44 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         let r = try await perform(device, "/sessions/\(sessionId)/messages", method: "POST",
                                   body: Body(text: text, attachments: attachments, mode: mode.rawValue), as: Resp.self)
         return (r.queued ?? false, r.item)
+    }
+
+    public func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt {
+        struct Body: Encodable { var clientMessageId: String; var text: String; var attachments: [String]; var mode: String }
+        return try await perform(device, "/sessions/\(sessionId)/deliveries", method: "POST",
+                                 body: Body(clientMessageId: clientMessageId, text: text, attachments: attachments, mode: mode.rawValue), as: DeliveryReceipt.self)
+    }
+    public func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt? {
+        do { return try await perform(device, "/sessions/\(sessionId)/deliveries/\(id)", as: DeliveryReceipt.self) }
+        catch ConnectorError.server(404, "delivery_missing", _) { return nil }
+    }
+    public func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool {
+        let starts = sessionIds.isEmpty ? [0] : Array(stride(from: 0, to: sessionIds.count, by: 100))
+        for start in starts {
+            try await socket(for: device).send(["type": "sync.request", "sessionIds": Array(sessionIds.dropFirst(start).prefix(100))])
+        }
+        return true
+    }
+    public func runs(device: Device, sessionId: String) async throws -> [TaskRun] {
+        try await perform(device, "/sessions/\(sessionId)/runs", as: [TaskRun].self)
+    }
+    public func diagnostics(device: Device) async throws -> ConnectorDiagnostics {
+        try await perform(device, "/diagnostics", as: ConnectorDiagnostics.self)
+    }
+    public func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck {
+        let started = Date()
+        func result(_ status: String, _ version: String? = nil) -> EndpointCheck {
+            EndpointCheck(id: index, status: status, latencyMs: Int(Date().timeIntervalSince(started) * 1000), version: version)
+        }
+        guard let url = URL(string: address), ["http", "https"].contains(url.scheme ?? ""), url.user == nil, url.password == nil else { return result("invalid_address") }
+        var probe = URLRequest(url: url.appendingPathComponent("health")); probe.timeoutInterval = 4
+        do {
+            let (data, response) = try await session.data(for: probe)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return result("http_error") }
+            let health = try JSONDecoder.yz.decode(HealthInfo.self, from: data)
+            let safeVersion = health.version.count < 40 && health.version.allSatisfy { $0.isNumber || ".-".contains($0) } ? health.version : nil
+            return result(health.connectorId == device.id ? "reachable" : "identity_mismatch", safeVersion)
+        } catch { return result("unreachable") }
     }
 
     public func deleteSession(device: Device, sessionId: String) async throws {
@@ -423,12 +474,14 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 final class ConnectorEventChannel: @unchecked Sendable {
     private let lock = NSLock()
     private var subscribers: [UUID: AsyncStream<ConnectorEvent>.Continuation] = [:]
+    private var connected = false
 
     func stream() -> AsyncStream<ConnectorEvent> {
         let id = UUID()
         return AsyncStream { continuation in
             lock.lock()
             subscribers[id] = continuation
+            if connected { continuation.yield(.connected) }
             lock.unlock()
             continuation.onTermination = { [weak self] _ in
                 guard let self else { return }
@@ -441,6 +494,8 @@ final class ConnectorEventChannel: @unchecked Sendable {
 
     func yield(_ event: ConnectorEvent) {
         lock.lock()
+        if case .connected = event { connected = true }
+        if case .disconnected = event { connected = false }
         let current = Array(subscribers.values)
         lock.unlock()
         for subscriber in current { subscriber.yield(event) }
@@ -516,6 +571,7 @@ final class ConnectorSocket: @unchecked Sendable {
         var req = URLRequest(url: url)
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let t = session.webSocketTask(with: req)
+        t.maximumMessageSize = 64 * 1024 * 1024
         task = t
         t.resume()
         receive()
@@ -576,7 +632,8 @@ final class ConnectorSocket: @unchecked Sendable {
 
     func send(_ dict: [String: Any]) async throws {
         let data = try JSONSerialization.data(withJSONObject: dict)
-        try await currentTask()?.send(.string(String(decoding: data, as: UTF8.self)))
+        guard let current = currentTask() else { throw ConnectorError.unreachable }
+        try await current.send(.string(String(decoding: data, as: UTF8.self)))
     }
 
     deinit {
@@ -588,6 +645,10 @@ final class ConnectorSocket: @unchecked Sendable {
     static func parse(_ data: Data) -> ConnectorEvent? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let type = obj["type"] as? String else { return nil }
         switch type {
+        case "connected": return .connected
+        case "sync.snapshot":
+            guard let snapshot = try? JSONDecoder.yz.decode(EventSnapshot.self, from: data) else { return nil }
+            return .snapshot(snapshot)
         case "session.created", "session.updated":
             guard let raw = obj["session"], let d = try? JSONSerialization.data(withJSONObject: raw), let s = try? JSONDecoder.yz.decode(Session.self, from: d) else { return nil }
             return type == "session.created" ? .sessionCreated(s) : .sessionUpdated(s)
@@ -612,7 +673,12 @@ final class ConnectorSocket: @unchecked Sendable {
             let state = ToolCall.State(rawValue: obj["state"] as? String ?? "running") ?? .running
             let inputDict = obj["input"] as? [String: Any] ?? [:]
             let input = (inputDict["detail"] as? String) ?? (inputDict.values.first { $0 is String } as? String) ?? ""
-            return .toolCall(sessionId: sid, call: ToolCall(id: obj["toolId"] as? String ?? UUID().uuidString, name: name, detail: input, state: state), messageId: obj["messageId"] as? String)
+            var call = ToolCall(id: obj["toolId"] as? String ?? UUID().uuidString, name: name, detail: input, state: state,
+                                output: obj["output"] as? String, outputKind: ToolCall.OutputKind(rawValue: obj["outputKind"] as? String ?? "") ?? .text,
+                                truncated: obj["truncated"] as? Bool ?? false)
+            call.exitCode = obj["exitCode"] as? Int
+            call.files = obj["files"] as? [String] ?? []
+            return .toolCall(sessionId: sid, call: call, messageId: obj["messageId"] as? String)
         case "approval.requested":
             guard let data = try? JSONSerialization.data(withJSONObject: obj),
                   let approval = try? JSONDecoder.yz.decode(Approval.self, from: data) else { return nil }
@@ -629,6 +695,7 @@ final class ConnectorSocket: @unchecked Sendable {
 // MARK: - 编解码
 
 struct OK: Decodable { var ok: Bool? }
+private struct ConnectorFailureBody: Decodable { var error: String?; var code: String? }
 
 struct RememberBody: Encodable {
     var match: String, value: String?, scope: String, ttlMinutes: Int?
@@ -700,6 +767,15 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt {
+        let result = try await sendMessage(device: device, sessionId: sessionId, text: text, attachments: attachments, mode: mode)
+        return DeliveryReceipt(id: clientMessageId, itemId: result.item?.id, state: result.queued ? "queued" : "sent")
+    }
+    func delivery(device: Device, sessionId: String, id: String) async throws -> DeliveryReceipt? { nil }
+    func requestSnapshot(device: Device, sessionIds: [String]) async throws -> Bool { false }
+    func runs(device: Device, sessionId: String) async throws -> [TaskRun] { [] }
+    func diagnostics(device: Device) async throws -> ConnectorDiagnostics { throw ConnectorError.network("请更新电脑连接器以查看诊断") }
+    func checkEndpoint(device: Device, address: String, index: Int) async -> EndpointCheck { EndpointCheck(id: index, status: "unavailable", latencyMs: 0) }
     func sendQueuedNow(device: Device, sessionId: String, itemId: String) async throws -> Session { throw ConnectorError.unreachable }
     func resumeQueue(device: Device, sessionId: String) async throws -> Session { throw ConnectorError.unreachable }
     func deleteSession(device: Device, sessionId: String) async throws {}

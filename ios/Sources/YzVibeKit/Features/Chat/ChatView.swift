@@ -26,6 +26,8 @@ struct ChatView: View {
     @State private var showCommands = false
     @State private var newSessionSeed: String?
     @State private var confirmDelete = false
+    @State private var selectedRun: TaskRun?
+    @State private var showDeliveries = false
 
     private var session: Session? { store.session(sessionId) }
     private var subtitle: String {
@@ -121,6 +123,7 @@ struct ChatView: View {
                     .accessibilityLabel("上下文用量")
                 // 其余动作收进菜单：工具栏平铺五个按钮在 iOS 上会挤掉标题
                 Menu {
+                    Button { showDeliveries = true } label: { Label("任务交付记录", systemImage: "checklist") }
                     Button { showDiff = true } label: { Label("改动", systemImage: "plusminus.circle") }
                     Button { showFiles = true } label: { Label("文件", systemImage: "folder") }
                     Button { showCommands = true } label: { Label("命令与 Skill", systemImage: "slash.circle") }
@@ -159,6 +162,8 @@ struct ChatView: View {
         }
         .sheet(item: $openFile) { ref in NavigationStack { FileViewerView(session: session, path: ref.path) } }
         .sheet(isPresented: $showUsage) { if let s = session { UsageSheet(sessionId: s.id).presentationDetents([.large]) } }
+        .sheet(item: $selectedRun) { run in NavigationStack { TaskDeliveryView(run: run, session: session) } }
+        .sheet(isPresented: $showDeliveries) { NavigationStack { TaskDeliveryHistoryView(sessionId: sessionId) } }
     }
 
     // 选项胶囊的绑定：本地乐观更新 + PATCH 到连接器（AppStore.patchSession）
@@ -184,6 +189,17 @@ struct ChatView: View {
             ForEach(messages) { m in
                 MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
             }
+            ForEach((store.taskRuns[sessionId] ?? []).filter { $0.status != "running" }.prefix(3)) { run in
+                TaskDeliveryCard(run: run) { selectedRun = run }
+            }
+            if let error = store.runErrors[sessionId] {
+                Button(error + " 点此重试") { Task { await store.loadRuns(sessionId) } }.font(.yzFootnote)
+            }
+            ForEach(store.outbox.filter { $0.sessionId == sessionId }) { item in
+                OutgoingMessageCard(item: item,
+                                    retry: { Task { await store.transmit(item.id) } },
+                                    restore: { store.restoreOutgoing(item.id) })
+            }
             // 正忙时发的消息排在这里，本轮结束会自动接上
             if session?.queuePaused == true, !queued.isEmpty {
                 VStack(spacing: 8) {
@@ -203,20 +219,8 @@ struct ChatView: View {
 
     /// 发出去（或排队）。图片在选择时已经缩过，这里逐张上传拿 id。
     private func submit(_ mode: SendMode) {
-        let t = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = pending
-        guard !t.isEmpty || !images.isEmpty else { return }
-        draft = ""; pending = []
-        Task {
-            var ids: [String] = []
-            for img in images {
-                if let id = await store.upload(img.data, mime: "image/jpeg", filename: "photo.jpg", for: sessionId) {
-                    store.cacheAttachment(img.image, id: id); ids.append(id)
-                }
-            }
-            let queued = await store.send(t, in: sessionId, attachments: ids, mode: mode)
-            if queued { store.toast = session?.queuePaused == true ? "已加入暂停的队列" : "已排队，本轮结束后自动发送" }
-        }
+        guard let id = store.stageDraft(in: sessionId, mode: mode) else { return }
+        Task { await store.transmit(id) }
     }
 
     /// 命令面板选中一条：手机端命令就地执行，其余的填进输入框（Codex 的 skill 只能当提示词插进去）。

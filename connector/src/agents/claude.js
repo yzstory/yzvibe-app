@@ -78,6 +78,7 @@ export class ClaudeStreamTranslator {
           const diff = diffFromToolInput(b.name, b.input ?? {});
           store.upsertToolCall(session.id, {
             id: b.id, name: b.name, detail: summarizeInput(b.name, b.input), state: 'running',
+            ...(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(b.name) ? { files: [b.input?.file_path ?? b.input?.notebook_path].filter(Boolean) } : {}),
             ...(diff ? { output: diff, outputKind: 'diff' } : {}),
           }, mid);
         }
