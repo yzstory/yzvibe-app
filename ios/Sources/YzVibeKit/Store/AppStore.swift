@@ -364,8 +364,11 @@ public final class AppStore {
         var s = try await client.createSession(device: device, request: req)
         s.deviceId = device.id
         if !sessions.contains(where: { $0.id == s.id }) { sessions.insert(s, at: 0) }
-        var initial: [Message] = []
-        if let first = req.firstMessage, !first.isEmpty { initial.append(Message(sessionId: s.id, role: .user, text: first)) }
+        var initial = messages[s.id] ?? []
+        if let first = req.firstMessage, !first.isEmpty,
+           !initial.contains(where: { $0.role == .user && $0.text == first }) {
+            initial.insert(Message(sessionId: s.id, role: .user, text: first, isLocal: true), at: 0)
+        }
         messages[s.id] = initial
         loadedMessages.insert(s.id)
         settings.remember(SessionOptions(mode: req.mode, model: req.model, effort: req.effort), for: req.agent)
@@ -649,6 +652,12 @@ public final class AppStore {
         case .messageUpdated(let message):
             if let i = messages[message.sessionId]?.firstIndex(where: { $0.id == message.id }) {
                 messages[message.sessionId]?[i] = message
+            } else if message.role == .user,
+                      let i = messages[message.sessionId]?.firstIndex(where: {
+                          $0.isLocal && $0.role == .user && $0.text == message.text && $0.attachments == message.attachments
+                      }) {
+                // 用服务端消息确认本地气泡；排队消息没有本地气泡，走下面的追加分支。
+                messages[message.sessionId]?[i] = message
             } else { messages[message.sessionId, default: []].append(message) }
         case .messageDelta(let sid, let mid, let text):
             var list = messages[sid, default: []]
@@ -679,7 +688,9 @@ public final class AppStore {
             a.deviceId = device.id
             guard !approvals.contains(where: { $0.id == a.id }) else { return }
             approvals.insert(a, at: 0)
-            messages[a.sessionId, default: []].append(Message(sessionId: a.sessionId, role: .system, text: "", approvalId: a.id))
+            if !messages[a.sessionId, default: []].contains(where: { $0.approvalId == a.id }) {
+                messages[a.sessionId, default: []].append(Message(sessionId: a.sessionId, role: .system, text: "", approvalId: a.id))
+            }
             setStatus(.waitingApproval, for: a.sessionId)
             if let i = sessions.firstIndex(where: { $0.id == a.sessionId }) { sessions[i].pendingApprovals += 1 }
             if settings.notifyOnApproval { Notifier.post(title: "需要你的批准 · \(a.risk.displayName)", body: a.summary, id: "approval-\(a.id)") }

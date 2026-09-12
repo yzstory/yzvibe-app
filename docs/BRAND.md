@@ -2,32 +2,32 @@
 
 ![YzVibe Logo](assets/yzvibe-logo.png)
 
-## 设计方向
+## 已选方向：E4 · 小柚子抱 V
 
-**手写 vibe · 远程指针。** 橙色小写连笔字承接参考图的流动感，粗笔画、上扬走势与底部收笔形成完整标识。右上角用鼠标指针替代飞机，呼应从手机操控桌面 AI 编程会话的产品用途。
+白色背景上的小柚子女孩，戴黄色柚子头套、露出奶油色大脸，双手抱着橙色手写大写 V。角色源于“小柚子”的家庭故事，表达聪明、松弛、俏皮的随身伙伴，呼应“随时随地继续 Vibe”。画面采用饱满近景，保留用户选中的 E4 构图。
 
-配色跟随新版「焦橙纸感」UI：焦橙 `#C75015` 与暖纸色 `#F9F6F2`。这些是生成提示词的目标色，位图会有轻微色彩变化；界面颜色以 [Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift) 为准。图标使用暖纸色满底，保留完整的手写词标。
+生成目标色为白色 `#FFFFFF`、焦橙 V `#C66B45`，以及原 B1 的柚黄与奶油色。位图包含自然色阶，界面控件色仍以 [Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift) 为准。
 
-旧版 V 图形和原提示词保存在 [design/brand/archive/v1](../design/brand/archive/v1/)，可随时回溯。
-
-## 交付资源
+## 当前资源
 
 | 资源 | 路径 | 用途 |
 | --- | --- | --- |
-| 生成原图 | [yzvibe-logo-original.png](../design/brand/yzvibe-logo-original.png) | 保留原始生成结果 |
-| 标准 Logo | [yzvibe-logo.png](assets/yzvibe-logo.png) | 1024 × 1024 RGB PNG，README 和品牌展示 |
-| iOS AppIcon | [AppIcon.png](../ios/App/YzVibe/Assets.xcassets/AppIcon.appiconset/AppIcon.png) | 与标准 Logo 相同的 1024 × 1024 图标 |
-| 生成提示词 | [logo-prompt.txt](../design/brand/logo-prompt.txt) | 完整设计约束，可用于后续迭代 |
-| 架构图 | [architecture.svg](assets/architecture.svg) | 可缩放、可直接嵌入 README 的矢量图 |
+| 已选 E4 | [E4-white-bg-orange-v.png](../design/logo-ip-candidates/E4-white-bg-orange-v.png) | 1254 × 1254 原始候选 |
+| 品牌原图 | [yzvibe-logo-original.png](../design/brand/yzvibe-logo-original.png) | 与 E4 相同的原图 |
+| 标准 Logo | [yzvibe-logo.png](assets/yzvibe-logo.png) | 1024 × 1024 无透明通道 PNG，README 与品牌展示 |
+| iOS AppIcon | [AppIcon.png](../ios/App/YzVibe/Assets.xcassets/AppIcon.appiconset/AppIcon.png) | 与标准 Logo 相同，桌面、系统通知使用 |
+| App / Widget 共用图 | [BrandLogo.png](../ios/Sources/YzVibeKit/Resources/BrandAssets.xcassets/BrandLogo.imageset/BrandLogo.png) | 256 × 256，App 内身份卡、灵动岛、锁屏实时活动 |
+| 原始提示词 | [logo-prompt.txt](../design/brand/logo-prompt.txt) | E4 的完整生成提示词，以 B1 原图为参考 |
 
-Logo 使用内置 `image_gen` 工具生成，随后使用系统 `sips` 等比缩放到 1024 × 1024。它是位图资源，不是矢量源文件；架构图为独立编写的 SVG，结构化说明见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+原图通过内置 image_gen 生成；接入时仅使用系统 sips 等比缩放，不重新生成、改色或改变构图。旧 Logo 保存在 [archive/v1](../design/brand/archive/v1/) 和 [archive/v2](../design/brand/archive/v2/)，仅供历史回溯，不用于当前产品。
 
 ## iOS 接入
 
-- 使用完整正方形、无透明通道的图像，未预先裁切外轮廓圆角。
-- `Assets.xcassets/AppIcon.appiconset/Contents.json` 指向统一的 1024 图标源。
-- [project.yml](../ios/project.yml) 已设置 `ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon`；资源目录包含在现有 App 源码路径中。
-- 在 `ios/` 运行 `xcodegen generate` 后，由 Xcode 资源编译器处理图标。
-- 当前提供默认外观；没有单独制作深色、着色或分层 Icon Composer 版本。
+- `AppIcon.appiconset` 提供 1024 正方形图标，未预先裁切外轮廓圆角，由 iOS 处理。
+- `YzVibeKit` 通过 Swift Package 资源目录提供 `BrandLogo`，App 与 Widget 均通过 `Bundle.module` 加载同一资源，使用原色渲染。
+- App“我”页身份卡、灵动岛展开 / 紧凑 / 最小形态、锁屏实时活动均展示 E4。运行进度、审批数量、状态文字继续显示。
+- 通知横幅与通知中心的头部图标由系统使用应用图标显示，见 [Apple 通知外观文档](https://developer.apple.com/documentation/usernotificationsui/customizing-the-appearance-of-notifications)。无需为 APNs 载荷添加图标。
+- 重新构建并安装新版 App 后生效；已经在显示的实时活动应结束后重新开启，以加载新版 Widget。
+- 当前提供默认全彩图标，未单独制作深色、着色或分层 Icon Composer 版本。
 
-展示时保持正方形比例和图形留白，不拉伸、不额外加外框。README 可以直接缩小使用标准 Logo；后续若制作单色印刷物或需要透明底，应单独制作对应资产。
+在 `ios/` 执行 `xcodegen generate` 后打开工程构建。所有展示保持正方形比例，不拉伸图像。

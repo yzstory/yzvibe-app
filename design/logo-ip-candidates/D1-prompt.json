@@ -1,0 +1,18 @@
+{
+  "label": "D1",
+  "description": "B1 柚子头套女孩 + C2 V 与窝坐动作，整体居中",
+  "provider": "OpenAI built-in image_gen",
+  "model": "not exposed",
+  "composition": "centered",
+  "dimensions": [
+    1254,
+    1254
+  ],
+  "references": [
+    "B1-pomelo-hood-girl.png",
+    "C2-v-cradled-pomelo.png"
+  ],
+  "savedPath": "/Users/yuki/devops/aigc/YzVibe/design/logo-ip-candidates/D1-pomelo-girl-v-centered.png",
+  "sourcePath": "/Users/yuki/.codex/generated_images/01a09417-e6ea-7581-813c-41fb96b2d45b/exec-94985fd4-b41d-4c41-939b-37e3a87ca9e8.png",
+  "prompt": "Create one complete full-bleed square image, approximately 1536 x 1536, combining the two supplied references with these precise changes.\nReference 1 (B1) supplies the character identity: the adorable little girl in a plump yellow pomelo hood, large cream oval face, two simple golden oval eyes, small happy smile, round mitten hands, and soft baby proportions. Retain that recognizably human cream face framed by thick yellow peel and gently domed pomelo hood. This is an imagined character.\nReference 2 (C2) supplies the large burnt-orange handwritten capital V and the relaxed pose: the little character nestles comfortably in the inner cradle of the V and rests both short mitten hands on its two rising strokes. Replace the plain fruit in reference 2 with the girl from reference 1. Preserve the thick soft handwritten V with rounded terminals and rounded bottom. Omit C2's external leaf because the girl's pomelo hood supplies her identity.\nCRITICAL COMPOSITION CHANGE: center the ENTIRE combined V-and-girl silhouette both horizontally and vertically on the square. Equal generous left and right outer margins, equal top and bottom margins, roughly 10-12% clear background around the group. Put the V bottom and girl's face on the canvas vertical centerline. Balance the visual mass of the two arms while retaining a casual hand-drawn V character. Do not copy either reference's off-center placement, tilt or cropping. Keep the girl upright, fully visible with her hood inside the V's upper span. Face upright and level. All silhouette fully inside frame, with breathing room on every side.\nBackground: solid uniform warm paper cream #F2E6D2. Palette: yellow-gold #F4CE62 pomelo hood and mitten hands, warm paper cream for girl's face matching background, burnt orange #B9592F V and simple eyes and mouth. Exactly three semantic color families, organized in large purposeful regions. Clear readable tiny face.\nStyle: extremely simple cute intelligent relaxed playful companion; compact rounded forms and a unified silhouette readable at 32 x 32. At most 4-7 large basic shapes. Add an extremely, extremely subtle, almost imperceptible sense of depth through a barely-there neo-skeuomorphic treatment.\nConstraints: one girl only and one uppercase handwritten V only, no other text, no watermark, no borders, no frames, no scenery, no extra objects, no details of hair or clothing, no sharp tips, no thin lines, no extra decorations, no realistic material, no glossy highlights, no deep shadows, no strong 3D rendering, no background texture or vignette. Show one single complete square image."
+}

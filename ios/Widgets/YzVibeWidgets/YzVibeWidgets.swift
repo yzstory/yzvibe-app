@@ -18,7 +18,10 @@ struct SessionLiveActivity: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    Label(context.attributes.agent, systemImage: "desktopcomputer")
+                    HStack(spacing: 6) {
+                        BrandLogo(size: 24)
+                        Text(context.attributes.agent)
+                    }
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
@@ -34,15 +37,18 @@ struct SessionLiveActivity: Widget {
                     }
                 }
             } compactLeading: {
-                Image(systemName: context.state.symbol).foregroundStyle(tint(context.state))
+                BrandLogo(size: 22)
             } compactTrailing: {
                 if context.state.needsApproval {
                     Text("\(max(1, context.state.pendingApprovals))").font(.caption2).bold().foregroundStyle(tint(context.state))
                 } else if context.state.isRunning {
                     ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: context.state.symbol).foregroundStyle(tint(context.state))
                 }
             } minimal: {
-                Image(systemName: context.state.symbol).foregroundStyle(tint(context.state))
+                BrandLogo(size: 22)
+                    .accessibilityValue(context.state.shortStatus)
             }
             .keylineTint(tint(context.state))
         }
@@ -80,11 +86,7 @@ private struct LockScreenView: View {
     let context: ActivityViewContext<SessionActivityAttributes>
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: context.state.symbol)
-                .font(.title3)
-                .foregroundStyle(context.state.needsApproval ? Color(red: 0.9, green: 0.45, blue: 0.38) : .white)
-                .frame(width: 34, height: 34)
-                .background(Circle().fill(.white.opacity(0.12)))
+            BrandLogo(size: 34)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(context.attributes.title).font(.headline).lineLimit(1)

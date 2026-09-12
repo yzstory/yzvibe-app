@@ -597,7 +597,7 @@ final class ConnectorSocket: @unchecked Sendable {
         case "session.status":
             guard let sid = obj["sessionId"] as? String, let st = SessionStatus(rawValue: obj["status"] as? String ?? "") else { return nil }
             return .sessionStatus(sessionId: sid, status: st)
-        case "message.updated":
+        case "message.added", "message.updated":
             guard let raw = obj["message"], let data = try? JSONSerialization.data(withJSONObject: raw),
                   let message = try? JSONDecoder.yz.decode(Message.self, from: data) else { return nil }
             return .messageUpdated(message)

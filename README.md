@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/yzvibe-logo.png" width="112" height="112" alt="YzVibe Logo：暖橙底色上的奶油白 V 形连接符号" />
+  <img src="docs/assets/yzvibe-logo.png" width="112" height="112" alt="YzVibe Logo：白底小柚子女孩抱着橙色 V" />
 </p>
 <h1 align="center">YzVibe</h1>
 <p align="center"><strong>离开电脑，继续 Vibe。</strong></p>

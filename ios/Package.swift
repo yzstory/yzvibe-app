@@ -12,6 +12,7 @@ let package = Package(
         .target(
             name: "YzVibeKit",
             path: "Sources/YzVibeKit",
+            resources: [.process("Resources")],
             swiftSettings: [.enableUpcomingFeature("StrictConcurrency")]
         ),
         .testTarget(

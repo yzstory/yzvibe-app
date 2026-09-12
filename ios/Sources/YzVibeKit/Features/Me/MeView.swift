@@ -7,6 +7,11 @@ struct MeView: View {
 
     private var pushReady: Bool { store.push?.ready == true && PushCenter.shared.token != nil }
     private var ruleCount: Int { store.rules(for: store.selectedDevice?.id).count }
+    private var appVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+        return "\(version) (\(build))"
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -96,7 +101,7 @@ struct MeView: View {
 
                 Section {
                     SettingRow(icon: "info", color: p.labelTertiary, title: "版本", inset: 0) {
-                        Text("0.1.0 (1)").font(.yzMono).foregroundStyle(p.labelSecondary)
+                        Text(appVersion).font(.yzMono).foregroundStyle(p.labelSecondary)
                     }
                     SettingRow(icon: "doc.text", color: p.labelTertiary, title: "隐私与本地优先",
                                subtitle: "数据留在你的电脑，手机不运行任何代码", inset: 0) { EmptyView() }
@@ -112,17 +117,10 @@ struct MeView: View {
         }
     }
 
-    /// 顶部身份卡：唯一一处品牌渐变，其余全交给系统列表。
+    /// 顶部身份卡使用统一的小柚子品牌图。
     private var header: some View {
         HStack(spacing: 14) {
-            Image(systemName: "iphone")
-                .font(.system(.title2, weight: .semibold))
-                .foregroundStyle(p.brandInk)
-                .frame(width: 48, height: 48)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(LinearGradient(colors: [p.brand, p.amber], startPoint: .topLeading, endPoint: .bottomTrailing))
-                )
+            BrandLogo(size: 48)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("这台 iPhone").font(.yzHeadline).foregroundStyle(p.label)

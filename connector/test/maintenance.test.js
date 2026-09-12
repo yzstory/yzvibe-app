@@ -167,6 +167,10 @@ test('消息队列：忙时排队、本轮结束自动接上、可取消、可�
   const msgs = await (await fetch(`${base}/sessions/${s.id}/messages`, { headers: H })).json();
   assert.ok(msgs.some((x) => x.role === 'user' && x.text === '排队一号'), '排队的消息应该被真的发出去');
   assert.ok(!msgs.some((x) => x.text === '排队二号'), '取消掉的不该被发出去');
+  const delivered = await waitFor(e => e.type === 'message.added' && e.message.text === '排队一号');
+  assert.equal(delivered.message.role, 'user');
+  assert.equal(delivered.message.id, msgs.find(x => x.text === '排队一号').id);
+  assert.ok(events.indexOf(delivered) < events.findIndex(e => e.type === 'session.updated' && e.session.id === s.id && e.session.queue?.length === 0 && events.indexOf(e) > events.indexOf(queued)), '先同步用户消息，再移除排队气泡');
 
   ws.close();
   await c.close();

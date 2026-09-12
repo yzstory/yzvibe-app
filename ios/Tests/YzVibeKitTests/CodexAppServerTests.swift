@@ -34,4 +34,16 @@ struct CodexAppServerTests {
         #expect(store.messages["s1"]?.count == 1)
         #expect(store.messages["s1"]?.first?.text == "最终回复")
     }
+
+    @Test func approvalEventDoesNotDuplicateItsSyncedMessage() {
+        let store = AppStore(), device = MockData.macStudio
+        store.messages["s1"] = []
+        let approval = Approval(id: "new-approval", sessionId: "s1", deviceId: device.id,
+                                kind: .shell, summary: "pwd", detail: "pwd", risk: .medium)
+        store.handle(.messageUpdated(Message(id: "server-message", sessionId: "s1", role: .system,
+                                             text: "", approvalId: approval.id)), device: device)
+        store.handle(.approvalRequested(approval), device: device)
+        #expect(store.messages["s1"]?.count == 1)
+        #expect(store.messages["s1"]?.first?.id == "server-message")
+    }
 }

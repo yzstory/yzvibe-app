@@ -289,7 +289,7 @@ export class Store extends EventEmitter {
       }
       this.#saveSessions();
     }
-    if (m.role === 'system') this.emit('event', { type: 'message.added', sessionId, message: m });
+    if (m.role === 'system' || m.role === 'user') this.emit('event', { type: 'message.added', sessionId, message: m });
     return m;
   }
   /** 拿到（必要时新建）某个 id 的助手消息，用来把同一轮的工具卡归到同一个气泡里。 */
