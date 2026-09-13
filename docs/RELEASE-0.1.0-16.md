@@ -14,3 +14,5 @@
 恢复桌面访问后，选择 build 16，Distribute App → TestFlight Internal Only → Distribute，核验上传完成回执。可复用本次归档，无需重新打包。
 
 真机语音识别、耳机切换与录音手势仍需内部测试验证。
+
+2026-09-13 后续核验：Xcode 界面已恢复，明确显示 `YzVibe 0.1.0 (16) uploaded`，Organizer 状态为 Uploaded to Apple，上传时间 09:15。此前上传阻塞已解除。

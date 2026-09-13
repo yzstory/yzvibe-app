@@ -111,6 +111,13 @@ struct ChatView: View {
                 }
             }
         }
+        .overlay {
+            if store.voiceInput.active && store.voiceInput.sessionId == sessionId {
+                VoiceRecordingPanel(voice: store.voiceInput)
+                    .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: store.voiceInput.active)
         .navigationTitle(session?.title ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -272,9 +279,6 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 10) {
-            if store.voiceInput.active && store.voiceInput.sessionId == sessionId {
-                VoiceRecordingPanel(voice: store.voiceInput).padding(.horizontal, 16)
-            }
             InputBar(text: Binding(get: { draft }, set: { draft = $0 }), pending: Binding(get: { pending }, set: { pending = $0 }), files: Binding(get: { pendingFiles }, set: { pendingFiles = $0 }),
                      placeholder: busy ? "会排在当前任务后面…" : "发消息给 \(session?.agent.displayName ?? "Agent")…",
                      sendHint: busy ? .queue : .send,
@@ -567,7 +571,6 @@ struct InputBar<Accessory: View>: View {
                     Button(action: onCommands) { Label("命令", systemImage: "slash.circle").font(.caption.weight(.semibold)).frame(minHeight: 44) }
                 }
                 if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles").font(.caption.weight(.semibold)).frame(minHeight: 44) } }
-                if let voice, let onVoice { VoiceInputButton(voice: voice, begin: onVoice).disabled(preparing > 0) }
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
@@ -592,8 +595,15 @@ struct InputBar<Accessory: View>: View {
                     if let onSendNow { Button("立即引导", action: onSendNow) }
                 }.font(.footnote.weight(.semibold)).padding(.horizontal, 10).disabled(preparing > 0)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                accessory().fixedSize(horizontal: true, vertical: false)
+            HStack(spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    accessory().fixedSize(horizontal: true, vertical: false)
+                }
+                .disabled(voice?.active == true)
+                if let voice, let onVoice {
+                    VoiceInputButton(voice: voice, begin: onVoice)
+                        .disabled(preparing > 0)
+                }
             }
         }
         .padding(10)

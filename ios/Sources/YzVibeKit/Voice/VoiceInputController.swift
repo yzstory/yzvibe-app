@@ -8,7 +8,7 @@ final class VoiceInputController {
     private(set) var sessionId: String?
     private(set) var level: Float = 0
     private(set) var seconds = 0
-    private(set) var locked = false
+    var cancelArmed = false
     private(set) var hasTranscript = false
     var issue: String?
     var active: Bool { phase != .idle }
@@ -30,7 +30,7 @@ final class VoiceInputController {
         let id = UUID(); generation = id
         self.sessionId = sessionId; self.read = read; self.write = write
         original = read(); lastWritten = original
-        issue = nil; seconds = 0; level = 0; locked = false; hasTranscript = false
+        issue = nil; seconds = 0; level = 0; cancelArmed = false; hasTranscript = false
         phase = .preparing
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -56,7 +56,6 @@ final class VoiceInputController {
             }
         }
     }
-    func lock() { if active { locked = true } }
     func finish() {
         guard active, phase != .finishing else { return }
         if phase == .preparing { complete(); return }
@@ -101,7 +100,7 @@ final class VoiceInputController {
     }
     private func complete(notifyEmpty: Bool = false) {
         if notifyEmpty && !hasTranscript && issue == nil { issue = "没有识别到文字，请靠近麦克风后重试。" }
-        generation = UUID(); phase = .idle; level = 0; locked = false
+        generation = UUID(); phase = .idle; level = 0; cancelArmed = false
         startTask?.cancel(); startTask = nil
         deadline?.cancel(); deadline = nil; timer?.cancel(); timer = nil
         provider.cancel(); read = nil; write = nil

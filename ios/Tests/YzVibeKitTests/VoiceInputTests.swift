@@ -70,11 +70,11 @@ struct VoiceInputTests {
         var text = ""
         voice.start(sessionId: "a", read: { text }, write: { text = $0 })
         await ready(voice)
-        voice.lock()
+        voice.cancelArmed = true
         stub.receive?(.transcript("待办", isFinal: false))
         stub.receive?(.interrupted)
         #expect(text == "待办")
-        #expect(!voice.active && !voice.locked && stub.starts == 1)
+        #expect(!voice.active && !voice.cancelArmed && stub.starts == 1)
         #expect(voice.issue != nil)
     }
     @Test func externalEditIsNeverOverwrittenOrRolledBack() async {
