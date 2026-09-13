@@ -623,7 +623,7 @@ struct InputBar<Accessory: View>: View {
                     if let onSendNow { Button("立即引导", action: onSendNow) }
                 }.font(.footnote.weight(.semibold)).padding(.horizontal, 10).disabled(preparing > 0)
             }
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     accessory().fixedSize(horizontal: true, vertical: false)
                 }

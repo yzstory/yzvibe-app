@@ -13,10 +13,17 @@ struct VoiceInputButton: View {
     @State private var holdTask: Task<Void, Never>?
 
     var body: some View {
-        Image(systemName: "mic.fill")
-            .font(.system(.callout, weight: .semibold))
-            .foregroundStyle(voice.cancelArmed ? p.danger : pressed ? p.brandInk : p.brand)
-            .frame(width: 44, height: 44)
+        HStack(spacing: 5) {
+            Image(systemName: "mic.fill")
+                .font(.system(.callout, weight: .semibold))
+                .foregroundStyle(voice.cancelArmed ? p.danger : pressed ? p.brandInk : p.brand)
+            Text("语音")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(pressed ? p.brandInk : p.label)
+        }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 76, minHeight: 44)
+            .fixedSize(horizontal: true, vertical: false)
             .background(pressed ? p.brand : p.fillSecondary.opacity(0.65), in: Capsule())
             .scaleEffect(pressed ? 1.03 : 1)
             .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.9), value: pressed)
