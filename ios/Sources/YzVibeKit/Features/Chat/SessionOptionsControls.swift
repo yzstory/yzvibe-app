@@ -116,24 +116,103 @@ struct EffortMenu: View {
     let model: String?
     @Binding var effort: String?
 
-    private var selection: Binding<String> { Binding(get: { effort ?? "" }, set: { effort = $0.isEmpty ? nil : $0 }) }
+    @State private var showing = false
+
     private var levels: [String] {
-        var list = caps.efforts(for: model)
+        var list = ["", "low", "medium", "high", "xhigh", "max", "ultra"]
+        for value in caps.efforts(for: model) where !value.isEmpty && !list.contains(value) { list.append(value) }
         if let e = effort, !e.isEmpty, !list.contains(e) { list.append(e) }
-        return list
+        return list.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
 
     var body: some View {
-        Menu {
-            Section("\(agent.displayName) · 思考强度") {
-                Picker("思考强度", selection: selection) {
-                    Text("默认").tag("")
-                    ForEach(levels, id: \.self) { Text("\(EffortLevel.displayName($0)) · \($0)").tag($0) }
-                }
-            }
-        } label: {
+        Button { showing = true } label: {
             OptionPill(icon: "speedometer", text: EffortLevel.displayName(effort))
         }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showing) {
+            EffortDial(levels: levels, effort: $effort)
+                .presentationDetents([.height(250)])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(32)
+        }
+    }
+}
+
+/// Preview locally while dragging; send only the settled choice to the connector.
+private struct EffortDial: View {
+    @Environment(\.palette) private var p
+    @Environment(\.dismiss) private var dismiss
+    let levels: [String]
+    @Binding var effort: String?
+    @State private var index = 0
+    @State private var feedback = 0
+    private var selected: String { levels[min(index, levels.count - 1)] }
+
+    private func select(_ next: Int) {
+        let clamped = min(max(next, 0), levels.count - 1)
+        guard index != clamped else { return }
+        index = clamped
+        feedback += 1
+    }
+    private func commit() {
+        let value: String? = selected.isEmpty ? nil : selected
+        if effort != value { effort = value }
+    }
+    var body: some View {
+        VStack(spacing: 20) {
+            HStack {
+                Text("思考力度").font(.headline)
+                Spacer()
+                Button("完成") { commit(); dismiss() }.font(.subheadline.weight(.semibold))
+            }
+            Text(EffortLevel.displayName(selected))
+                .font(.title2.weight(.bold)).foregroundStyle(p.label)
+            GeometryReader { geo in
+                let travel = max(1, geo.size.width - 56)
+                let step = travel / CGFloat(max(1, levels.count - 1))
+                ZStack(alignment: .leading) {
+                    Capsule().fill(p.fillSecondary)
+                    Capsule().fill(p.brand).frame(width: 56 + CGFloat(index) * step)
+                    HStack {
+                        ForEach(levels.indices, id: \.self) { i in
+                            if i > 0 { Spacer(minLength: 0) }
+                            Circle().fill(i <= index ? p.brandInk.opacity(0.25) : p.labelTertiary.opacity(0.4))
+                                .frame(width: 6, height: 6)
+                        }
+                    }.padding(.horizontal, 28)
+                    Circle().fill(.white).frame(width: 44, height: 44)
+                        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                        .offset(x: 6 + CGFloat(index) * step)
+                }
+                .contentShape(Capsule())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        select(Int(((value.location.x - 28) / step).rounded()))
+                    }
+                    .onEnded { _ in commit() })
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("思考力度")
+                .accessibilityValue(EffortLevel.displayName(selected))
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: select(index + 1)
+                    case .decrement: select(index - 1)
+                    @unknown default: return
+                    }
+                    commit()
+                }
+            }.frame(height: 56)
+            HStack {
+                Text(EffortLevel.displayName(levels.first))
+                Spacer()
+                Text(EffortLevel.displayName(levels.last))
+            }.font(.caption).foregroundStyle(p.labelSecondary)
+        }
+        .padding(24)
+        .tint(p.brand)
+        .onAppear { index = levels.firstIndex(of: effort ?? "") ?? 0 }
+        .sensoryFeedback(.selection, trigger: feedback)
     }
 }
 

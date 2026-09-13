@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 轻量 Markdown：围栏代码块（带语言标签与复制按钮）/ 标题 / 列表 / 段落。
 /// 段落内的行内代码若看着像文件路径，会变成可点链接，交给 `onOpenFile` 打开远程文件查看器。
@@ -11,12 +12,14 @@ struct MarkdownText: View {
     var onCopy: ((String) -> Void)?
     var sessionId: String? = nil
 
-    private enum Block { case code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String), table(MarkdownTable) }
+    private enum Block { case prose(NSAttributedString), code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String), table(MarkdownTable) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+            ForEach(Array(selectionBlocks.enumerated()), id: \.offset) { _, block in
                 switch block {
+                case .prose(let text):
+                    SelectableMessageText(text: text)
                 case .code(let code, let lang):
                     CodeBlock(code, dark: true, lines: nil, language: lang, copyable: true, onCopy: onCopy)
                 case .heading(let t, let level):
@@ -49,6 +52,51 @@ struct MarkdownText: View {
             onOpenFile?(path)
             return .handled
         })
+    }
+
+    // Keep adjacent paragraphs/headings/lists in one native selection surface.
+    private var selectionBlocks: [Block] {
+        var result: [Block] = []
+        var prose = NSMutableAttributedString(string: "")
+        func flush() {
+            if prose.length > 0 { result.append(.prose(NSAttributedString(attributedString: prose))); prose = NSMutableAttributedString(string: "") }
+        }
+        for block in blocks {
+            let line: NSAttributedString
+            switch block {
+            case .paragraph(let t): line = selectableInline(t)
+            case .heading(let t, let level): line = selectableInline(t, heading: level)
+            case .bullet(let t): line = selectableInline("• " + t)
+            case .numbered(let n, let t): line = selectableInline(n + ". " + t)
+            default: flush(); result.append(block); continue
+            }
+            if prose.length > 0 { prose.append(NSAttributedString(string: "\n")) }
+            prose.append(line)
+        }
+        flush()
+        return result
+    }
+
+    private func selectableInline(_ value: String, heading: Int? = nil) -> NSAttributedString {
+        var parsed = (try? AttributedString(markdown: value, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(value)
+        if onOpenFile != nil { parsed = Self.linkifyPaths(parsed, tint: p.brand) }
+        let result = NSMutableAttributedString(string: "")
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 4
+        style.paragraphSpacing = 8
+        for run in parsed.runs {
+            var font = UIFont.preferredFont(forTextStyle: heading == nil ? .callout : .headline)
+            var traits: UIFontDescriptor.SymbolicTraits = []
+            if heading != nil || run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true { traits.insert(.traitBold) }
+            if run.inlinePresentationIntent?.contains(.emphasized) == true { traits.insert(.traitItalic) }
+            if run.inlinePresentationIntent?.contains(.code) == true { font = .monospacedSystemFont(ofSize: font.pointSize, weight: .regular) }
+            if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) { font = UIFont(descriptor: descriptor, size: font.pointSize) }
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor(p.label), .paragraphStyle: style]
+            if let url = run.link { attributes[.link] = url; attributes[.foregroundColor] = UIColor(p.brand) }
+            if run.inlinePresentationIntent?.contains(.strikethrough) == true { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+            result.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
+        }
+        return result
     }
 
     @ScaledMetric(relativeTo: .callout) private var tableColumnWidth = 180.0

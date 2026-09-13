@@ -347,9 +347,9 @@ struct UserBubble: View {
             }
             }
             if !message.text.isEmpty {
-                Text(message.text)
-                    .font(.yzBody)
-                    .foregroundStyle(p.brandInk)
+                SelectableMessageText(text: NSAttributedString(string: message.text, attributes: [
+                    .font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor(p.brandInk)
+                ]))
                     .padding(.horizontal, 18).padding(.vertical, 14)
                     .background(
                         UnevenRoundedRectangle(topLeadingRadius: 26, bottomLeadingRadius: 26, bottomTrailingRadius: 10, topTrailingRadius: 26, style: .continuous)
@@ -458,13 +458,7 @@ struct AssistantBubble: View {
             guard message.role == .assistant, !message.streaming else { spokenText = ""; return }
             spokenText = ReplySpeechText.extract(message.text)
         }
-        .contextMenu {
-            Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
-            if !spokenText.isEmpty && !message.streaming && message.role == .assistant {
-                Button(reading ? "停止朗读" : "朗读正文", systemImage: "speaker.wave.2", action: toggleReading)
-                    .disabled(store.voiceInput.active)
-            }
-        }
+
     }
 }
 
@@ -557,10 +551,15 @@ struct InputBar<Accessory: View>: View {
                     Button { showPhotos = true } label: { Label("照片", systemImage: "photo.on.rectangle") }
                     Button { Task { await openCamera() } } label: { Label("拍摄", systemImage: "camera") }
                     Button { showFileImporter = true } label: { Label("文件", systemImage: "folder") }
+                    if onCommands != nil || onSkills != nil {
+                        Divider()
+                        if let onCommands { Button(action: onCommands) { Label("命令行", systemImage: "slash.circle") } }
+                        if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles") } }
+                    }
                 } label: {
-                    Image(systemName: "photo.on.rectangle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
+                    Image(systemName: "sparkles").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.brand)
                         .frame(width: 44, height: 44)
-                }.accessibilityLabel("添加附件")
+                }.accessibilityLabel("附件、命令行和技能")
                 .disabled(preparing > 0 || voice?.active == true)
                 .photosPicker(isPresented: $showPhotos, selection: $pickerItems, maxSelectionCount: max(1, 6 - attachmentCount), matching: .images)
                 .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -609,20 +608,6 @@ struct InputBar<Accessory: View>: View {
                             preparing = max(0, preparing - 1)
                         }
                     }
-                }
-                if let onCommands {
-                    Button(action: onCommands) {
-                        Image(systemName: "slash.circle")
-                            .font(.system(.subheadline, weight: .semibold))
-                            .frame(width: 44, height: 44)
-                    }.accessibilityLabel("命令")
-                }
-                if let onSkills {
-                    Button(action: onSkills) {
-                        Image(systemName: "sparkles")
-                            .font(.system(.subheadline, weight: .semibold))
-                            .frame(width: 44, height: 44)
-                    }.accessibilityLabel("技能")
                 }
                 Spacer(minLength: 0)
                 Button(action: onSend) {
