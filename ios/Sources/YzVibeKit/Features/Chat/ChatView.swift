@@ -172,9 +172,9 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
         .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
-        .onDisappear { store.voiceInput.suspend(sessionId: sessionId) }
-        .onChange(of: sessionId) { old, _ in store.voiceInput.suspend(sessionId: old) }
-        .onChange(of: scenePhase) { _, phase in if phase == .background { store.voiceInput.suspend(sessionId: sessionId) } }
+        .onDisappear { store.voiceInput.suspend(sessionId: sessionId); store.replySpeaker.stop(sessionId: sessionId) }
+        .onChange(of: sessionId) { old, _ in store.voiceInput.suspend(sessionId: old); store.replySpeaker.stop(sessionId: old) }
+        .onChange(of: scenePhase) { _, phase in if phase == .background { store.voiceInput.suspend(sessionId: sessionId); store.replySpeaker.stop(sessionId: sessionId) } }
         .alert("语音输入", isPresented: Binding(get: { store.voiceInput.issue != nil && store.voiceInput.sessionId == sessionId }, set: { if !$0 { store.voiceInput.issue = nil } })) {
             Button("好", role: .cancel) { store.voiceInput.issue = nil }
         } message: { Text(store.voiceInput.issue ?? "") }
@@ -268,6 +268,7 @@ struct ChatView: View {
     }
 
     private func beginVoice() {
+        store.replySpeaker.stop()
         hideKeyboard()
         let id = sessionId
         store.voiceInput.start(sessionId: id, read: { [weak store] in
@@ -404,6 +405,13 @@ struct AssistantBubble: View {
     @Environment(\.palette) private var p
     let message: Message
     var onOpenFile: ((String) -> Void)?
+    @State private var spokenText = ""
+    private var reading: Bool { store.replySpeaker.messageId == message.id && store.replySpeaker.sessionId == message.sessionId }
+    private func toggleReading() {
+        guard !store.voiceInput.active else { return }
+        store.replySpeaker.toggle(text: spokenText, messageId: message.id, sessionId: message.sessionId)
+        if let issue = store.replySpeaker.issue { store.toast = issue }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !message.text.isEmpty {
@@ -413,6 +421,16 @@ struct AssistantBubble: View {
             if !message.toolCalls.isEmpty {
                 ToolCallGroup(calls: message.toolCalls)
             }
+            if !spokenText.isEmpty && !message.streaming && message.role == .assistant {
+                Button(action: toggleReading) {
+                    Label(reading ? "停止朗读" : "朗读", systemImage: reading ? "stop.fill" : "speaker.wave.2")
+                        .font(.caption.weight(.medium)).frame(minHeight: 44)
+                        .foregroundStyle(reading ? p.brand : p.labelSecondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.voiceInput.active)
+                .accessibilityHint("只朗读正文，跳过代码、命令和工具日志")
+            }
             if message.streaming {
                 HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(p.labelTertiary).frame(width: 6, height: 6) } }
             }
@@ -421,7 +439,17 @@ struct AssistantBubble: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(18)
         .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(p.surfaceElevated))
-        .contextMenu { Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }
+        .task(id: message.streaming ? "" : message.text) {
+            guard message.role == .assistant, !message.streaming else { spokenText = ""; return }
+            spokenText = ReplySpeechText.extract(message.text)
+        }
+        .contextMenu {
+            Button("复制", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text }
+            if !spokenText.isEmpty && !message.streaming && message.role == .assistant {
+                Button(reading ? "停止朗读" : "朗读正文", systemImage: "speaker.wave.2", action: toggleReading)
+                    .disabled(store.voiceInput.active)
+            }
+        }
     }
 }
 

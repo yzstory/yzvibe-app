@@ -37,6 +37,7 @@ public final class AppStore {
     @ObservationIgnored var postCompletionNotification: (String, String, String) -> Void = { Notifier.post(title: $0, body: $1, id: $2) }
     public var toast: String?
     var chatDrafts: [String: ChatDraft] = [:]
+    let replySpeaker = ReplySpeaker()
     let voiceInput: VoiceInputController
     var outbox: [OutgoingMessage] = []
     var taskRuns: [String: [TaskRun]] = [:]
