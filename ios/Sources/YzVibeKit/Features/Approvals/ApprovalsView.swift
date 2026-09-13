@@ -126,12 +126,25 @@ struct ApprovalCardView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "checkmark.shield").font(.system(.caption, weight: .semibold))
                             Text("总是允许…").font(.yzFootnoteStrong)
+                            Image(systemName: "chevron.down").font(.caption)
                         }
-                        .foregroundStyle(p.labelSecondary)
-                        .padding(.horizontal, 12).frame(height: 34)
+                        .foregroundStyle(p.brandText)
+                        .padding(.horizontal, 12).frame(maxWidth: .infinity, minHeight: 44)
                         .background(Capsule().strokeBorder(p.border, lineWidth: 1))
                     }
                     .disabled(busy)
+                } else if approval.questions.isEmpty {
+                    Label("此请求不支持保存匹配规则，可允许本次或信任此会话。", systemImage: "info.circle")
+                        .font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                }
+                if approval.questions.isEmpty {
+                    Button { trust() } label: {
+                        Label("信任此会话 · Trust", systemImage: "bolt.shield")
+                            .font(.yzFootnoteStrong).frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.bordered).tint(p.brand).disabled(busy)
+                    Text("本会话后续操作自动允许，需要回答的问题仍会询问。可随时在会话模式中切回 Normal。")
+                        .font(.yzCaption).foregroundStyle(p.labelSecondary)
                 }
             }
         }
@@ -167,6 +180,17 @@ struct ApprovalCardView: View {
             }
             await store.respond(approval.id, d, remember: remember, answers: approval.questions.isEmpty ? nil : answers)
             busy = false
+        }
+    }
+
+    private func trust() {
+        busy = true
+        Task {
+            defer { busy = false }
+            if store.settings.faceIDForHighRisk {
+                guard await BiometricGate.confirm(reason: "信任此会话，允许当前及后续操作") else { return }
+            }
+            await store.trustSession(from: approval.id)
         }
     }
 }

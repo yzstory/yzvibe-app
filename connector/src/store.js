@@ -482,6 +482,10 @@ export class Store extends EventEmitter {
    */
   requestApproval({ sessionId, kind, summary, detail, risk, toolName, agent, signal, questions = null, allowRules = true }) {
     if (signal?.aborted) return Promise.resolve('deny');
+    if (!questions && this.session(sessionId)?.mode === 'trust') {
+      this.addMessage(sessionId, { role: 'system', text: `已按 Trust 模式允许：${summary}` });
+      return Promise.resolve('allow');
+    }
     const rule = allowRules && !questions && this.rules?.match({ sessionId, agent, toolName, summary });
     if (rule) {
       this.addMessage(sessionId, { role: 'system', text: `已按规则自动允许：${summary}`, ruleId: rule.id });
@@ -510,6 +514,18 @@ export class Store extends EventEmitter {
   publicApproval(a) { const { resolve, timer, cleanup, ...rest } = a; return { ...rest, approvalId: a.id }; }
   approval(id) { return this.approvals.find((a) => a.id === id) ?? null; }
   listApprovals(status) { return this.approvals.filter((a) => !status || a.status === status).map((a) => this.publicApproval(a)); }
+  /** One synchronous operation: validate the selected card before changing this session only. */
+  trustApproval(id) {
+    const a = this.approval(id), s = a && this.session(a.sessionId);
+    if (!s || a.status !== 'pending' || a.questions || new Date(a.expiresAt).getTime() <= Date.now()) return null;
+    const previous = { mode: s.mode, updatedAt: s.updatedAt };
+    try { this.configureSession(s.id, { mode: 'trust' }); }
+    catch (error) { Object.assign(s, previous); throw error; }
+    const pending = this.approvals.filter(item => item.sessionId === s.id && item.status === 'pending' && !item.questions);
+    for (const item of pending) this.resolveApproval(item.id, 'allow', 'trust');
+    this.addMessage(s.id, { role: 'system', text: '已信任此会话：当前及后续操作自动允许，需要回答的问题仍会询问。可在会话模式中切回 Normal。' });
+    return { session: this.publicSession(s), approvals: pending.map(item => this.publicApproval(item)) };
+  }
   /**
    * @param remember 可选 `{ match, value, scope, ttlMinutes }`：把这次的决定存成规则，以后同类请求自动放行。
    */
@@ -518,18 +534,19 @@ export class Store extends EventEmitter {
     if (!a || a.status !== 'pending' || !['allow', 'deny', 'allow_once'].includes(decision)) return false;
     if (a.questions && decision !== 'deny' && !a.questions.every(q =>
       typeof answers?.[q.id] === 'string' && answers[q.id].trim() && answers[q.id].length <= 10_000)) return false;
-    clearTimeout(a.timer);
-    a.cleanup?.();
-    a.status = by === 'timeout' ? 'expired' : decision === 'deny' ? 'denied' : 'allowed';
     let rule = null;
-    if (remember && !a.questions && a.suggestions?.length && decision !== 'deny' && this.rules) {
-      try {
-        rule = this.rules.add({ sessionId: a.sessionId, agent: a.agent, tool: remember.match === 'tool' ? a.toolName : (remember.tool ?? null),
+    if (remember && decision !== 'deny') {
+        if (a.questions || !a.suggestions?.length || !this.rules) {
+          throw Object.assign(new Error('此审批不支持保存规则'), { status: 400 });
+        }
+        rule = this.rules.add({ sessionId: a.sessionId, agent: a.agent, tool: a.toolName,
                                 match: remember.match ?? 'tool', value: remember.value ?? a.toolName, scope: remember.scope ?? 'session',
                                 ttlMinutes: remember.ttlMinutes ?? null, label: remember.label ?? null });
         this.addMessage(a.sessionId, { role: 'system', text: `已记住规则：${rule.label ?? describeRule(rule)}`, ruleId: rule.id });
-      } catch (e) { this.addMessage(a.sessionId, { role: 'system', text: `规则未保存：${e.message}` }); }
     }
+    clearTimeout(a.timer);
+    a.cleanup?.();
+    a.status = by === 'timeout' ? 'expired' : decision === 'deny' ? 'denied' : 'allowed';
     const s = this.session(a.sessionId); if (s) { s.pendingApprovals = Math.max(0, s.pendingApprovals - 1); }
     // 拒绝工具不代表 Agent 已结束本轮；只有 Agent 的结束事件才能推进队列。
     if (s && s.status === 'waiting_approval') this.setStatus(a.sessionId, s.pendingApprovals ? 'waiting_approval' : 'running');

@@ -27,7 +27,7 @@ import { sessionCommands } from './commands.js';
 import { readBody, readJSON, messageInput, badRequest, JSON_LIMIT, UPLOAD_LIMIT } from './requests.js';
 import { diagnostics } from './diagnostics.js';
 
-export const VERSION = '0.1.1';
+export const VERSION = '0.1.2';
 
 export const DEFAULT_PORT = 19876;
 
@@ -248,7 +248,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const c = classifyPermission(toolName, input);
         const decision = await store.requestApproval({ sessionId, toolName, agent: store.session(sessionId)?.agent ?? 'claude', ...c });
         // 计划被批准后 claude 进程内部已切到普通权限，这里只同步会话记录，不重启进程
-        if (toolName === 'ExitPlanMode' && decision !== 'deny') { store.configureSession(sessionId, { mode: 'normal' }); agents.get(sessionId)?.configure({ mode: 'normal' }); }
+        if (toolName === 'ExitPlanMode' && decision !== 'deny' && store.session(sessionId)?.mode !== 'trust') { store.configureSession(sessionId, { mode: 'normal' }); agents.get(sessionId)?.configure({ mode: 'normal' }); }
         return json(res, 200, { decision });
       }
       // 内部：本机 CLI（yzvibe status / qr）取当前配对码与统计；过期的配对码在这里自动换新
@@ -451,6 +451,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         store.pauseQueue(s.id); store.requestStop(s.id); agents.get(s.id)?.stop(); return json(res, 200, { ok: true });
       }
       if (req.method === 'GET' && p === '/approvals') return json(res, 200, store.listApprovals(url.searchParams.get('status') ?? undefined));
+      if ((m = p.match(/^\/approvals\/([^/]+)\/trust$/)) && req.method === 'POST') {
+        const result = store.trustApproval(m[1]);
+        if (!result) return json(res, 409, { error: '审批已处理或需要回答，未切换 Trust 模式' });
+        agents.get(result.session.id)?.configure({ mode: 'trust' });
+        return json(res, 200, result);
+      }
       if ((m = p.match(/^\/approvals\/([^/]+)$/)) && req.method === 'POST') {
         const { decision, remember, answers } = await readJSON(req);
         if (!['allow', 'deny', 'allow_once'].includes(decision)) return json(res, 400, { error: 'decision 不合法' });

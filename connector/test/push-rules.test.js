@@ -134,6 +134,10 @@ test('规则建议：命令前缀取到子命令，写文件给整会话放行�
   assert.equal(s[0].value, 'npm test');
   assert.ok(s.some((x) => x.match === 'tool' && x.ttlMinutes === 60));
   assert.ok(suggestionsFor({ toolName: 'Edit', kind: 'write', summary: '/a.ts' }).some((x) => x.ttlMinutes === null));
+  const compound = suggestionsFor({ toolName: 'Bash', kind: 'shell', summary: 'cd /repo && npm test' });
+  assert.equal(compound[0].match, 'exact');
+  assert.equal(compound[0].value, 'cd /repo && npm test');
+  assert.equal(compound.some(s => s.match === 'prefix'), false, 'Do not offer a prefix rule that can never match shell syntax');
 });
 
 test('规则命中：审批直接放行并在聊天里留痕', async () => {

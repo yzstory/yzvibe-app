@@ -84,6 +84,7 @@ test('phone allow/deny, multiple pending approvals and expired request ids are i
   f.request(10, 'item/fileChange/requestApproval', { reason: 'edit' });
   assert.equal(f.session.pendingApprovals, 2);
   let [file, shell] = f.store.approvals;
+  assert.ok(file.suggestions.length > 0, 'Codex file approvals must expose always-allow choices');
   f.store.resolveApproval(shell.id, 'allow'); await tick();
   assert.equal(f.session.status, 'waiting_approval');
   assert.deepEqual(f.rpc.replies[0], { id: 9, result: { decision: 'accept' } });
@@ -108,6 +109,22 @@ test('permissions grant only requested scope; user input requires real answers, 
   assert.equal(f.store.resolveApproval(a.id, 'allow'), false);
   assert.equal(f.store.resolveApproval(a.id, 'allow', 'phone', null, { color: 'orange' }), true); await tick();
   assert.deepEqual(f.rpc.replies[1].result, { answers: { color: { answers: ['orange'] } } });
+});
+
+test('Trust continues the active Codex request and applies native policy on the next turn', async t => {
+  const f = fixture(t); await f.agent.send('go');
+  f.request(101, 'item/commandExecution/requestApproval', { command: 'pwd' });
+  f.store.trustApproval(f.store.approvals[0].id); f.agent.configure({ mode: 'trust' }); await tick();
+  assert.deepEqual(f.rpc.replies[0], { id: 101, result: { decision: 'accept' } });
+  assert.equal(f.rpc.calls.filter(c => c.method === 'turn/interrupt').length, 0);
+  const permissions = { network: { enabled: true } };
+  f.request(102, 'item/permissions/requestApproval', { permissions }); await tick();
+  assert.deepEqual(f.rpc.replies[1].result, { permissions, scope: 'turn' });
+  f.finish(); await tick(); await f.agent.send('next');
+  const next = f.rpc.calls.filter(c => c.method === 'turn/start').at(-1).params;
+  assert.equal(next.approvalPolicy, 'never');
+  assert.deepEqual(next.sandboxPolicy, { type: 'dangerFullAccess' });
+  f.finish();
 });
 
 test('interrupt waits for completion before advancing queue; transport failure preserves pending work', async t => {

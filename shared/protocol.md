@@ -41,6 +41,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | POST | /sessions/:id/stop | 中断当前轮 |
 | GET | /approvals?status=pending | 审批列表（手机重启后用它恢复收件箱） |
 | POST | /approvals/:id | `{ decision, remember? }`（WS 之外的审批方式）；`remember` 见下 |
+| POST | /approvals/:id/trust | Connector 0.1.2：校验待审批卡后切换其会话到 Trust，并允许该会话所有待处理操作（保留提问）。返回 `{session, approvals}`；过期、已处理或提问卡返回 409，不改变模式 |
 | GET | /files?sessionId=&path= | 目录列表 `{ path, entries:[{name,path,kind,size,modifiedAt}] }`，path 相对会话 cwd，越界 403 |
 | GET | /files/stat?sessionId=&path= | 单个文件元信息 `{ name, path, displayPath, kind, size, modifiedAt, mime, textual, inCwd }`，文件查看器用 |
 | GET | /files/preview?sessionId=&path= | 文本/图片预览（≤ 2MB） |
@@ -92,6 +93,10 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 `decision` 只对这一次生效。要「以后别再问」必须同时给 `remember`，它会在连接器上存成一条规则
 （`~/.yzvibe/rules.json`），命中时聊天里会留一条「已按规则自动允许」的系统消息。
 `approval.requested` 事件里带 `suggestions`，是连接器算好的几个 `remember` 备选，手机直接渲染成按钮。
+
+Connector 0.1.2 为 Codex 文件修改提供规则选项。网络权限等没有可保存匹配规则的请求仍返回空选项，iOS 显示原因并提供 Trust 入口；提问必须填写回答。复杂 shell 命令提供完整命令匹配，避免生成永远不会命中的前缀规则。规则原子保存成功后才解决审批，写盘失败保持待审批，新增规则绑定原工具与 Agent。
+
+审批卡 Trust 通过独立的鉴权 POST 完成，不拆成模式切换与放行两个请求。信任仅作用于目标会话，连接器对当前轮后续权限请求按 Trust 放行，原生 Agent 的启动/轮次权限参数于下轮应用，不中断运行中的任务。已有的问题不会自动回答。切回 Normal 后，后续到达连接器的审批恢复询问；原生轮次权限参数仍在下轮更新。
 
 ## 数据模型（三端共用）
 ```ts

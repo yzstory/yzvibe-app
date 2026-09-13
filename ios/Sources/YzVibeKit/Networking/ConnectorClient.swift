@@ -3,6 +3,7 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult
     func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo
     func authenticationConfigured(device: Device) -> Bool
     func validateEndpoint(device: Device, address: String) async throws -> HealthInfo
@@ -276,6 +277,11 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         struct Body: Encodable { var decision: String; var remember: RememberBody?; var answers: [String: String]? }
         _ = try await perform(device, "/approvals/\(approvalId)", method: "POST",
                               body: Body(decision: decision.rawValue, remember: remember.map(RememberBody.init), answers: answers), as: OK.self)
+    }
+
+    public func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult {
+        do { return try await perform(device, "/approvals/\(approvalId)/trust", method: "POST", as: TrustedApprovalResult.self) }
+        catch ConnectorError.server(404, _, _) { throw ConnectorError.network("请更新电脑连接器后使用「信任此会话」。") }
     }
 
     public func sync(device: Device) async throws -> SyncSnapshot {
@@ -855,6 +861,9 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult {
+        throw ConnectorError.network("此连接器暂不支持从审批卡切换 Trust，请更新电脑连接器。")
+    }
     func authenticationConfigured(device: Device) -> Bool { false }
     func validateEndpoint(device: Device, address: String) async throws -> HealthInfo { throw ConnectorError.unreachable }
     func deliver(device: Device, sessionId: String, clientMessageId: String, text: String, attachments: [String], mode: SendMode) async throws -> DeliveryReceipt {

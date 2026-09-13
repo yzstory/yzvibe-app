@@ -478,6 +478,13 @@ final class ToolOutputAndRulesTests: XCTestCase {
 
 /// 断线重同步用的假连接器：只实现这几个测试要用到的方法。
 final class ResyncStubClient: ConnectorClient, @unchecked Sendable {
+    var trustResult: TrustedApprovalResult?
+    var trustRequests: [String] = []
+    func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult {
+        trustRequests.append(approvalId)
+        guard let trustResult else { throw ConnectorError.unreachable }
+        return trustResult
+    }
     var attachmentData = Data()
     var attachmentRequests = 0
     var newMessages: [Message] = []

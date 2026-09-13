@@ -36,7 +36,7 @@ struct RulesView: View {
                 ContentUnavailableView {
                     Label(loading ? "正在读取…" : "还没有规则", systemImage: "checkmark.shield")
                 } description: {
-                    Text("在审批卡上点「总是允许…」就会在这里出现。")
+                    Text("在支持规则的审批卡上点「总是允许…」并选择范围，即可在这里管理。Trust 模式在会话中切换，不会新增规则。")
                 }
             }
         }

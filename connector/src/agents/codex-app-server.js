@@ -242,7 +242,7 @@ export class CodexAgent {
       reply = decision => ({ decision: decision === 'deny' ? 'decline' : 'accept' });
     } else if (method === 'item/fileChange/requestApproval') {
       request = { kind: 'write', risk: 'medium', toolName: 'Edit', summary: item?.changes?.map(c => c.path).join(', ') || '文件修改',
-        detail: [p.reason, p.grantRoot && `请求目录：${p.grantRoot}`, ...(item?.changes ?? []).map(c => `${c.path}\n${c.diff ?? ''}`)].filter(Boolean).join('\n'), allowRules: false };
+        detail: [p.reason, p.grantRoot && `请求目录：${p.grantRoot}`, ...(item?.changes ?? []).map(c => `${c.path}\n${c.diff ?? ''}`)].filter(Boolean).join('\n'), allowRules: true };
       reply = decision => ({ decision: decision === 'deny' ? 'decline' : 'accept' });
     } else if (method === 'item/permissions/requestApproval') {
       request = { kind: 'other', risk: 'high', toolName: 'CodexPermissions', summary: p.reason ?? '请求额外访问权限', detail: JSON.stringify(p.permissions, null, 2), allowRules: false };

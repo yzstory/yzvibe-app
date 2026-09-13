@@ -34,7 +34,8 @@ export function suggestionsFor({ toolName, kind, summary }) {
   const out = [];
   if (kind === 'shell') {
     const prefix = commandPrefix(summary);
-    if (prefix) out.push({ label: `总是允许 ${prefix} 开头的命令`, match: 'prefix', value: prefix, scope: 'session', ttlMinutes: null });
+    if (prefix && matchesCommandPrefix(summary, prefix)) out.push({ label: `总是允许 ${prefix} 开头的命令`, match: 'prefix', value: prefix, scope: 'session', ttlMinutes: null });
+    else if (summary?.trim()) out.push({ label: '本会话总是允许这条完整命令', match: 'exact', value: summary, scope: 'session', ttlMinutes: null });
   }
   out.push({ label: `本会话 1 小时内不再询问 ${toolName}`, match: 'tool', value: toolName, scope: 'session', ttlMinutes: 60 });
   if (kind === 'write') out.push({ label: '本会话内所有文件改动都放行', match: 'tool', value: toolName, scope: 'session', ttlMinutes: null });
@@ -49,7 +50,14 @@ export class Rules {
     this.prune();
   }
 
-  save() { try { fs.mkdirSync(this.home, { recursive: true }); fs.writeFileSync(FILE(this.home), JSON.stringify(this.list, null, 2)); } catch {} }
+  save() {
+    fs.mkdirSync(this.home, { recursive: true });
+    const temp = FILE(this.home) + '.tmp';
+    try {
+      fs.writeFileSync(temp, JSON.stringify(this.list, null, 2), { mode: 0o600 });
+      fs.renameSync(temp, FILE(this.home));
+    } catch (error) { try { fs.unlinkSync(temp); } catch {} throw error; }
+  }
 
   /** 丢掉过期规则；返回是否有变化。 */
   prune(now = Date.now()) {
@@ -71,21 +79,27 @@ export class Rules {
     if (scope === 'session' && !sessionId) scope = 'global';
     const expiresAt = ttlMinutes ? new Date(Date.now() + ttlMinutes * 60_000).toISOString() : null;
     const same = this.list.find((r) => r.scope === scope && r.sessionId === (scope === 'session' ? sessionId : null) && r.match === match && r.value === (value ?? null) && r.tool === (tool ?? null));
-    if (same) { same.expiresAt = expiresAt; this.save(); return same; }
+    if (same) {
+      const previous = same.expiresAt;
+      same.expiresAt = expiresAt;
+      try { this.save(); } catch (error) { same.expiresAt = previous; throw error; }
+      return same;
+    }
     const rule = {
       id: randomUUID(), scope, sessionId: scope === 'session' ? sessionId : null, agent: agent ?? null,
       tool: tool ?? null, match, value: value ?? null, label, createdAt: new Date().toISOString(), expiresAt, hits: 0, lastHitAt: null,
     };
     this.list.unshift(rule);
-    this.save();
+    try { this.save(); } catch (error) { this.list = this.list.filter(item => item !== rule); throw error; }
     return rule;
   }
 
   remove(id) {
+    const previous = this.list;
     const before = this.list.length;
     this.list = this.list.filter((r) => r.id !== id);
     if (this.list.length === before) return false;
-    this.save();
+    try { this.save(); } catch (error) { this.list = previous; throw error; }
     return true;
   }
 
