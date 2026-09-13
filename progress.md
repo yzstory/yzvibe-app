@@ -164,3 +164,4 @@
 - 已完成整轮 final 通知、每手机通知开关持久化/同步、去重和离线同步提示；不改变聊天多段输出。
 - iOS 118 项通过（53 XCTest + 65 Swift Testing），包含工作区并行语音测试；日志 /tmp/yzvibe-notification-ios-tests-r3.log。
 - 连接器 103 项全量测试通过；日志 /tmp/yz-notification-node-final.log。
+- 通知修复 33dfb94 已 push；GitHub CI 34728876242 全部通过，工作区语音输入改动保留。尚未上传包含通知修复的 TestFlight 构建。
