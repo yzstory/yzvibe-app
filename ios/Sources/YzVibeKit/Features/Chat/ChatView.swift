@@ -7,6 +7,7 @@ struct ChatView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var followsLatest = true
     @State private var nearBottom = true
@@ -164,6 +165,12 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showFiles) { NavigationStack { FilesView(session: session) } }
         .sheet(isPresented: $showDiff) { NavigationStack { SessionDiffView(sessionId: sessionId) } }
+        .onDisappear { store.voiceInput.suspend(sessionId: sessionId) }
+        .onChange(of: sessionId) { old, _ in store.voiceInput.suspend(sessionId: old) }
+        .onChange(of: scenePhase) { _, phase in if phase == .background { store.voiceInput.suspend(sessionId: sessionId) } }
+        .alert("语音输入", isPresented: Binding(get: { store.voiceInput.issue != nil && store.voiceInput.sessionId == sessionId }, set: { if !$0 { store.voiceInput.issue = nil } })) {
+            Button("好", role: .cancel) { store.voiceInput.issue = nil }
+        } message: { Text(store.voiceInput.issue ?? "") }
         .sheet(isPresented: $showSkills) { CommandPaletteView(skillsOnly: true, sessionId: sessionId) { run($0) } }
         .sheet(isPresented: $showCommands) { CommandPaletteView(sessionId: sessionId) { run($0) } }
         .sheet(item: Binding(get: { newSessionSeed.map { FileRef(path: $0) } }, set: { if $0 == nil { newSessionSeed = nil } })) { seed in
@@ -221,6 +228,7 @@ struct ChatView: View {
 
     /// 发出去（或排队）。图片在选择时已经缩过，这里逐张上传拿 id。
     private func submit(_ mode: SendMode) {
+        guard !store.voiceInput.active else { return }
         guard let id = store.stageDraft(in: sessionId, mode: mode) else { return }
         Task { await store.transmit(id) }
     }
@@ -252,14 +260,28 @@ struct ChatView: View {
         }
     }
 
+    private func beginVoice() {
+        hideKeyboard()
+        let id = sessionId
+        store.voiceInput.start(sessionId: id, read: { [weak store] in
+            store?.chatDrafts[id]?.text ?? ""
+        }, write: { [weak store] text in
+            store?.chatDrafts[id, default: ChatDraft()].text = text
+        })
+    }
+
     private var composer: some View {
         VStack(spacing: 10) {
+            if store.voiceInput.active && store.voiceInput.sessionId == sessionId {
+                VoiceRecordingPanel(voice: store.voiceInput).padding(.horizontal, 16)
+            }
             InputBar(text: Binding(get: { draft }, set: { draft = $0 }), pending: Binding(get: { pending }, set: { pending = $0 }), files: Binding(get: { pendingFiles }, set: { pendingFiles = $0 }),
                      placeholder: busy ? "会排在当前任务后面…" : "发消息给 \(session?.agent.displayName ?? "Agent")…",
                      sendHint: busy ? .queue : .send,
                      onSend: { submit(.auto) },
                      onSendNow: busy ? { submit(.now) } : nil,
-                     onCommands: { showCommands = true }, onSkills: { showSkills = true }) {
+                     onCommands: { showCommands = true }, onSkills: { showSkills = true },
+                     voice: store.voiceInput, onVoice: beginVoice, voiceSessionId: sessionId) {
                 if let s = session { SessionOptionsRow(agent: s.agent, caps: store.capabilities(for: s), mode: modeBinding, model: modelBinding, effort: effortBinding) }
             }
             .padding(.horizontal, 16)
@@ -427,6 +449,9 @@ struct InputBar<Accessory: View>: View {
     var onSendNow: (() -> Void)? = nil
     var onCommands: (() -> Void)? = nil
     var onSkills: (() -> Void)? = nil
+    var voice: VoiceInputController? = nil
+    var onVoice: (() -> Void)? = nil
+    var voiceSessionId: String? = nil
     @ViewBuilder let accessory: () -> Accessory
     @FocusState private var focused: Bool
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -478,6 +503,7 @@ struct InputBar<Accessory: View>: View {
                 .lineLimit(1...5)
                 .font(.system(.callout))
                 .focused($focused)
+                .disabled(voice?.active == true)
                 .padding(.horizontal, 12).padding(.top, 8)
             HStack(spacing: 8) {
                 Menu {
@@ -488,7 +514,7 @@ struct InputBar<Accessory: View>: View {
                     Image(systemName: "photo.on.rectangle").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
                         .frame(width: 44, height: 44)
                 }.accessibilityLabel("添加附件")
-                .disabled(preparing > 0)
+                .disabled(preparing > 0 || voice?.active == true)
                 .photosPicker(isPresented: $showPhotos, selection: $pickerItems, maxSelectionCount: max(1, 6 - attachmentCount), matching: .images)
                 .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
                     switch result {
@@ -541,6 +567,7 @@ struct InputBar<Accessory: View>: View {
                     Button(action: onCommands) { Label("命令", systemImage: "slash.circle").font(.caption.weight(.semibold)).frame(minHeight: 44) }
                 }
                 if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles").font(.caption.weight(.semibold)).frame(minHeight: 44) } }
+                if let voice, let onVoice { VoiceInputButton(voice: voice, begin: onVoice).disabled(preparing > 0) }
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
@@ -548,15 +575,22 @@ struct InputBar<Accessory: View>: View {
                         .frame(width: 44, height: 44)
                         .background(Circle().fill(p.brand))
                 }
-                .disabled(empty || preparing > 0)
+                .disabled(empty || preparing > 0 || voice?.active == true)
                 .opacity(empty ? 0.45 : 1)
                 .accessibilityLabel(sendHint == .queue ? "排队发送" : "发送")
                 .contextMenu {
-                    if let onSendNow, preparing == 0 {
+                    if let onSendNow, preparing == 0, voice?.active != true {
                         Button { onSend() } label: { Label("排队发送", systemImage: "text.line.first.and.arrowtriangle.forward") }
                         Button(role: .destructive) { onSendNow() } label: { Label("立即发送（打断当前任务）", systemImage: "bolt.fill") }
                     }
                 }
+            }
+            if voice?.hasTranscript == true, voice?.sessionId == voiceSessionId, voice?.active == false, sendHint == .queue, !empty {
+                HStack {
+                    Button("排队发送", action: onSend)
+                    Spacer()
+                    if let onSendNow { Button("立即引导", action: onSendNow) }
+                }.font(.footnote.weight(.semibold)).padding(.horizontal, 10).disabled(preparing > 0)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 accessory().fixedSize(horizontal: true, vertical: false)

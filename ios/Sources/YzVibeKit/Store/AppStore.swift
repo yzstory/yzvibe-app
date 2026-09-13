@@ -37,6 +37,7 @@ public final class AppStore {
     @ObservationIgnored var postCompletionNotification: (String, String, String) -> Void = { Notifier.post(title: $0, body: $1, id: $2) }
     public var toast: String?
     var chatDrafts: [String: ChatDraft] = [:]
+    let voiceInput: VoiceInputController
     var outbox: [OutgoingMessage] = []
     var taskRuns: [String: [TaskRun]] = [:]
     var runErrors: [String: String] = [:]
@@ -67,6 +68,7 @@ public final class AppStore {
     public var lanDiscovery: @Sendable (TimeInterval) async -> [DiscoveredConnector] = { await LANDiscovery.shared.discover(timeout: $0) }
 
     public init(client: any ConnectorClient = MockConnectorClient(), seedMock: Bool = true, outboxURL: URL? = nil) {
+        self.voiceInput = VoiceInputController(provider: seedMock ? DemoSpeechRecognitionProvider() : AppleSpeechRecognitionProvider())
         self.client = client
         self.isDemo = seedMock
         self.settings = Settings.load()

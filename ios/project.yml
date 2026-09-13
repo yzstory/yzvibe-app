@@ -27,9 +27,9 @@ targets:
     info:
       path: App/YzVibe/Info.plist
       properties:
-        CFBundleDisplayName: YzVibe
+        CFBundleDisplayName: 柚子Vibe
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "14"
+        CFBundleVersion: "16"
         # 仅使用 Apple 系统提供的加密（URLSession HTTPS/WSS、Keychain）。
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -39,6 +39,8 @@ targets:
         # 锁屏 / 灵动岛上的会话状态
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
+        NSMicrophoneUsageDescription: 用于将你说的需求转写为会话草稿
+        NSSpeechRecognitionUsageDescription: 使用 Apple 端侧语音识别将录音转换为文字
         NSCameraUsageDescription: 用于拍摄并发送照片，以及扫描电脑配对二维码
         NSFaceIDUsageDescription: 用于确认高风险审批
         NSLocalNetworkUsageDescription: 用于在局域网内连接你的电脑
@@ -68,9 +70,9 @@ targets:
     info:
       path: Widgets/YzVibeWidgets/Info.plist
       properties:
-        CFBundleDisplayName: YzVibe 实时活动
+        CFBundleDisplayName: 柚子Vibe 实时活动
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "14"
+        CFBundleVersion: "16"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

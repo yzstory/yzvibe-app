@@ -26,3 +26,7 @@ design/canvas/yzvibe-app-design.html
 .yzvibe/
 *.log
 .env
+
+# 本机服务器运维资料（不提交连接信息）
+.claude/skills/test-server/
+html/dist/
