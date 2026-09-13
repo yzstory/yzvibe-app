@@ -421,15 +421,30 @@ struct AssistantBubble: View {
             if !message.toolCalls.isEmpty {
                 ToolCallGroup(calls: message.toolCalls)
             }
-            if !spokenText.isEmpty && !message.streaming && message.role == .assistant {
-                Button(action: toggleReading) {
-                    Label(reading ? "停止朗读" : "朗读", systemImage: reading ? "stop.fill" : "speaker.wave.2")
-                        .font(.caption.weight(.medium)).frame(minHeight: 44)
-                        .foregroundStyle(reading ? p.brand : p.labelSecondary)
+            if !message.text.isEmpty && !message.streaming && message.role == .assistant {
+                HStack(spacing: 4) {
+                    if !spokenText.isEmpty {
+                        Button(action: toggleReading) {
+                            Image(systemName: reading ? "stop.fill" : "speaker.wave.2")
+                                .foregroundStyle(reading ? p.brand : p.labelSecondary)
+                                .frame(width: 44, height: 44)
+                        }
+                        .disabled(store.voiceInput.active)
+                        .accessibilityLabel(reading ? "停止朗读" : "朗读")
+                        .accessibilityHint("只朗读正文，跳过代码、命令和工具日志")
+                    }
+                    Button {
+                        UIPasteboard.general.string = message.text
+                        store.toast = "已复制回复"
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(p.labelSecondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("复制回复")
                 }
+                .font(.system(.subheadline, weight: .medium))
                 .buttonStyle(.plain)
-                .disabled(store.voiceInput.active)
-                .accessibilityHint("只朗读正文，跳过代码、命令和工具日志")
             }
             if message.streaming {
                 HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(p.labelTertiary).frame(width: 6, height: 6) } }
@@ -596,9 +611,19 @@ struct InputBar<Accessory: View>: View {
                     }
                 }
                 if let onCommands {
-                    Button(action: onCommands) { Label("命令", systemImage: "slash.circle").font(.caption.weight(.semibold)).frame(minHeight: 44) }
+                    Button(action: onCommands) {
+                        Image(systemName: "slash.circle")
+                            .font(.system(.subheadline, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                    }.accessibilityLabel("命令")
                 }
-                if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles").font(.caption.weight(.semibold)).frame(minHeight: 44) } }
+                if let onSkills {
+                    Button(action: onSkills) {
+                        Image(systemName: "sparkles")
+                            .font(.system(.subheadline, weight: .semibold))
+                            .frame(width: 44, height: 44)
+                    }.accessibilityLabel("技能")
+                }
                 Spacer(minLength: 0)
                 Button(action: onSend) {
                     Image(systemName: sendHint == .queue ? "text.line.first.and.arrowtriangle.forward" : "arrow.up")
