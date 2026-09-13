@@ -27,7 +27,7 @@ import { sessionCommands } from './commands.js';
 import { readBody, readJSON, messageInput, badRequest, JSON_LIMIT, UPLOAD_LIMIT } from './requests.js';
 import { diagnostics } from './diagnostics.js';
 
-export const VERSION = '0.1.2';
+export const VERSION = '0.1.3';
 
 export const DEFAULT_PORT = 19876;
 
@@ -100,12 +100,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   // ---------- WS 广播 ----------
   store.on('event', (ev) => {
     const data = JSON.stringify(ev);
-    for (const ws of sockets) if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    for (const ws of sockets) if (ws.readyState === WebSocket.OPEN) {
+      const device = store.devices.find(d => d.id === ws.deviceId);
+      ws.send(ev.type === 'run.completed' ? JSON.stringify({ ...ev, remote: !!(pusher.ready && device?.push?.token) }) : data);
+    }
   });
 
   // ---------- 远程推送 ----------
   // App 被 iOS 挂起后 WebSocket 必然断开，只有 APNs 能叫醒它——这是「离开电脑也能审批」成立的前提。
-  const phoneOnline = () => [...sockets].some((w) => w.readyState === WebSocket.OPEN);
   const pendingCount = () => store.listApprovals('pending').length;
   const RISK_LABEL = { high: '高风险', medium: '中风险', low: '低风险' };
   let overviewTimer = null;
@@ -140,14 +142,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         pushLiveActivity(ev.sessionId ?? ev.session?.id).catch(() => {});
       } else if (ev.type === 'message.done') {
         pushLiveActivity(ev.sessionId).catch(() => {});
-        if (phoneOnline()) return;                       // 手机还连着，App 自己会显示
+      } else if (ev.type === 'run.completed') {
         const s = store.session(ev.sessionId); if (!s) return;
-        const text = (store.messagesOf(ev.sessionId).find((m) => m.id === ev.messageId)?.text ?? '').trim();
+        const text = ev.text;
         if (!text) return;
         pusher.send(store.devices, {
           title: `${s.agent === 'codex' ? 'Codex' : 'Claude'} 回复完成`, body: `${s.title}\n${text.slice(0, 150)}`,
-          level: 'active', threadId: ev.sessionId, collapseId: `reply-${ev.sessionId}`, badge: pendingCount(),
-          data: { kind: 'reply', sessionId: ev.sessionId, messageId: ev.messageId },
+          level: 'active', threadId: ev.sessionId, collapseId: `reply-${ev.runId}`, badge: pendingCount(),
+          data: { kind: 'reply', sessionId: ev.sessionId, messageId: ev.messageId, runId: ev.runId },
         }).catch(() => {});
       }
     } catch (e) { log(`[yzvibe] 推送出错：${e.message}`); }
@@ -289,6 +291,12 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       let m;
       if (req.method === 'GET' && p === '/diagnostics') return json(res, 200, await diagnostics({ version: VERSION, store, pusher, device: authDevice }));
       if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
+      if (req.method === 'PATCH' && p === '/devices/notifications') {
+        const { notifyOnApproval, notifyOnReply } = await readJSON(req);
+        if (typeof notifyOnApproval !== 'boolean' || typeof notifyOnReply !== 'boolean') return json(res, 400, { error: '通知开关必须为布尔值' });
+        store.setNotificationPreferences(authDevice.id, { notifyOnApproval, notifyOnReply });
+        return json(res, 200, { ok: true });
+      }
       // 手机注册 / 注销 APNs token
       if (p === '/devices/push') {
         if (req.method === 'POST') {

@@ -3,6 +3,7 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func updateNotifications(device: Device, preferences: NotificationPreferences) async throws
     func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult
     func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo
     func authenticationConfigured(device: Device) -> Bool
@@ -103,6 +104,7 @@ public enum ConnectorEvent: Sendable {
     case sessionRemoved(sessionId: String)
     case sessionStatus(sessionId: String, status: SessionStatus)
     case messageDelta(sessionId: String, messageId: String, text: String)
+    case runCompleted(RunCompletion)
     case messageDone(sessionId: String, messageId: String)
     case messageUpdated(Message)
     case toolCall(sessionId: String, call: ToolCall, messageId: String? = nil)
@@ -302,6 +304,10 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         struct Resp: Decodable { var ok: Bool; var push: PushStatus? }
         let body = Body(token: token, environment: environment, bundleId: Bundle.main.bundleIdentifier)
         return try await perform(device, "/devices/push", method: "POST", body: body, as: Resp.self).push ?? PushStatus()
+    }
+
+    public func updateNotifications(device: Device, preferences: NotificationPreferences) async throws {
+        _ = try await perform(device, "/devices/notifications", method: "PATCH", body: preferences, as: OK.self)
     }
 
     public func unregisterPush(device: Device) async throws {
@@ -752,6 +758,10 @@ final class ConnectorSocket: @unchecked Sendable {
         case "message.delta":
             guard let sid = obj["sessionId"] as? String, let mid = obj["messageId"] as? String else { return nil }
             return .messageDelta(sessionId: sid, messageId: mid, text: obj["text"] as? String ?? "")
+        case "run.completed":
+            guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                  let completion = try? JSONDecoder().decode(RunCompletion.self, from: data) else { return nil }
+            return .runCompleted(completion)
         case "message.done":
             guard let sid = obj["sessionId"] as? String, let mid = obj["messageId"] as? String else { return nil }
             return .messageDone(sessionId: sid, messageId: mid)
@@ -861,6 +871,9 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func updateNotifications(device: Device, preferences: NotificationPreferences) async throws {
+        throw ConnectorError.network("请升级连接器以同步通知设置")
+    }
     func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult {
         throw ConnectorError.network("此连接器暂不支持从审批卡切换 Trust，请更新电脑连接器。")
     }

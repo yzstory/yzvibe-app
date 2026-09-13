@@ -165,3 +165,9 @@
 
 ## 2026-09-13 审批入口
 规则已实现但 UI 依赖 suggestions 非空。Codex 文件改动、网络与权限审批设 allowRules=false，导致入口隐藏。信任需同步处理当前审批和同会话后续请求；原生 Agent 启动参数于下轮更新，不宜重启正在运行的任务。工作区已有语音输入与 build 15 变更，需保留并独立提交。
+
+## 2026-09-13 通知修复
+- 根因：服务端与 iOS 都将 message.done 当作回复完成；远程发送未读取 iPhone 的通知开关，且任意手机在线就全局抑制推送。
+- 改成真实 run 完成事件，Codex 保存 phase，成功结束再通知本轮 final；保留聊天全部增量/消息结束事件。APNs 与本地回退按手机分工。
+- PATCH /devices/notifications 认证后按手机持久化开关，App 串行同步并在重连时重试；离线同步失败展示说明。连接器版本 0.1.3。
+- 首次 iOS 回归因演示模式触发 UNUserNotificationCenter（无 App bundle）崩溃；演示模式跳过系统通知清理后 118 项通过。

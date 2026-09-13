@@ -126,13 +126,19 @@ export class CodexAgent {
     active.finished = true;
     this.active = null;
     clearTimeout(active.stopTimer); this.cancelRequests(active);
-    for (const id of active.streams) this.store.finishMessage(this.session.id, id);
+    for (const id of active.streams) {
+      const item = [...active.items.values()].find(item => `${active.prefix}-${item.id}` === id);
+      const message = this.store.messagesOf(this.session.id).find(m => m.id === id);
+      if (message && item) message.phase = item.type === 'plan' ? 'plan' : item.phase ?? null;
+      this.store.finishMessage(this.session.id, id);
+    }
     for (const item of active.items.values()) if (!active.completed.has(item.id)) this.tool(item, true, active, true);
     if (error) this.store.addMessage(this.session.id, { role: 'system', text: `Codex 出错：${error.message ?? error}` });
     if (status === 'failed') this.store.pauseQueue(this.session.id);
     // Release the loaded thread so the next send re-reads any work done in the desktop/terminal.
     // Close before idle can dispatch the next queued message.
     const rpc = this.rpc; this.rpc = null; rpc?.close();
+    if (status === 'interrupted') this.session.stopRequested = true;
     this.store.setStatus(this.session.id, status === 'failed' ? 'error' : 'idle');
   }
 
@@ -171,6 +177,8 @@ export class CodexAgent {
         const existing = this.store.messagesOf(this.session.id).find(m => m.id === id)?.text ?? '';
         if (!existing || item.text.startsWith(existing)) this.store.appendDelta(this.session.id, id, item.text.slice(existing.length));
         else this.store.replaceMessageText(this.session.id, id, item.text);
+        const message = this.store.messagesOf(this.session.id).find(m => m.id === id);
+        if (message) message.phase = item.type === 'plan' ? 'plan' : item.phase ?? null;
         this.store.finishMessage(this.session.id, id); a.streams.delete(id);
       }
     } else this.tool(item, done, a);

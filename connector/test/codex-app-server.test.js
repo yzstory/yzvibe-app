@@ -215,3 +215,19 @@ test('documents use a readable local path rather than localImage or inline binar
   assert.ok(document); assert.ok(document.text.includes(f.store.upload(file).path));
   assert.equal(document.text.includes('%PDF'), false);
 });
+
+test('completion notifications use final_answer only after successful turn completion', async t => {
+  const f = fixture(t), notifications = [];
+  f.store.on('event', e => { if (e.type === 'run.completed') notifications.push(e); });
+  await f.agent.send('go');
+  f.event('item/completed', { item: { id: 'p', type: 'agentMessage', phase: 'commentary', text: 'Working' } });
+  f.event('item/completed', { item: { id: 'f', type: 'agentMessage', phase: 'final_answer', text: 'Done' } });
+  assert.equal(notifications.length, 0);
+  f.finish(); assert.equal(notifications.length, 1); assert.equal(notifications[0].text, 'Done');
+  await f.agent.send('next');
+  f.event('item/completed', { item: { id: 'p2', type: 'agentMessage', phase: 'commentary', text: 'Still working' } });
+  f.finish(); assert.equal(notifications.length, 1);
+  await f.agent.send('stop');
+  f.event('item/completed', { item: { id: 'partial', type: 'agentMessage', text: 'Partial' } });
+  f.finish('interrupted'); assert.equal(notifications.length, 1);
+});

@@ -187,3 +187,17 @@ test('实时活动：推送载荷符合 ActivityKit 要求，失效 token 会被
   assert.ok(dropped.some((x) => x.drop && x.activityToken.startsWith('dead')));
   assert.deepEqual(await pusher.sendLiveActivity([], { state }), []);
 });
+
+test('通知开关按手机过滤，静默更新不受影响', async t => {
+  const { home } = pushHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const sent = [];
+  const pusher = new Pusher({ home, log: () => {}, postImpl: async (_, token) => { sent.push(token); return { ok: true, status: 200 }; } });
+  t.after(() => pusher.close());
+  const devices = [
+    { id: 'off', push: { token: 'off' }, notificationPreferences: { notifyOnReply: false, notifyOnApproval: false } },
+    { id: 'on', push: { token: 'on' }, notificationPreferences: { notifyOnReply: true, notifyOnApproval: true } },
+  ];
+  await pusher.send(devices, { title: 'Done', data: { kind: 'reply' } }); assert.deepEqual(sent.splice(0), ['on']);
+  await pusher.send(devices, { title: 'Approval', data: { kind: 'approval' } }); assert.deepEqual(sent.splice(0), ['on']);
+  await pusher.send(devices, { silent: true, data: { kind: 'approval.resolved' } }); assert.deepEqual(sent, ['off', 'on']);
+});

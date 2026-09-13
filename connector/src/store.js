@@ -99,6 +99,13 @@ export class Store extends EventEmitter {
     this.#saveDevices();
     return true;
   }
+  setNotificationPreferences(deviceId, preferences) {
+    const d = this.devices.find(x => x.id === deviceId); if (!d) return false;
+    const previous = d.notificationPreferences;
+    d.notificationPreferences = { ...preferences };
+    try { this.#saveDevices(); } catch (error) { d.notificationPreferences = previous; throw error; }
+    return true;
+  }
   /** 手机为某个会话开了实时活动，把它的推送 token 记下来。 */
   setLiveActivity(deviceId, sessionId, { token, environment }) {
     const d = this.devices.find((x) => x.id === deviceId); if (!d) return false;
@@ -165,14 +172,22 @@ export class Store extends EventEmitter {
         startMessageId: this.messagesOf(id).at(-1)?.id ?? null, messageIds: [], artifacts: [] };
       s.runs = [...(s.runs ?? []), run].slice(-50); s.activeRunId = run.id;
     }
+    let completedRun = null;
     if (['idle', 'error', 'closed'].includes(status) && s.activeRunId) {
       const run = s.runs?.find(r => r.id === s.activeRunId);
       if (run) { run.status = s.stopRequested ? 'interrupted' : status === 'error' ? 'failed' : status === 'closed' ? 'interrupted' : 'completed'; run.endedAt = new Date().toISOString(); }
+      if (run?.status === 'completed') completedRun = run;
       s.activeRunId = null; s.stopRequested = false;
     }
     if (status === 'running' && !['running', 'waiting_approval'].includes(s.status)) s.runStartedAt = new Date().toISOString();
     s.status = status; s.updatedAt = new Date().toISOString();
     this.#saveSessions();
+    if (completedRun) {
+      const messages = this.messagesOf(id).filter(m => completedRun.messageIds.includes(m.id) && m.role === 'assistant' && !m.streaming && m.text?.trim());
+      const final = messages.findLast(m => m.phase === 'final_answer')
+        ?? (messages.some(m => m.phase === 'commentary') ? null : messages.findLast(m => !m.phase));
+      if (final) this.emit('event', { type: 'run.completed', sessionId: id, runId: completedRun.id, messageId: final.id, text: final.text.trim() });
+    }
     this.emit('event', { type: 'session.status', sessionId: id, status });
   }
   setBaseline(id, sha) {

@@ -23,7 +23,18 @@ public final class AppStore {
     public var openSessionRequest: String?
     public var attachmentImages: [String: UIImage] = [:]                   // 上传 id → 图片（会话里展示用）
     public var failedAttachments: Set<String> = []
-    public var settings = Settings() { didSet { settings.save() } }
+    public var settings = Settings() { didSet {
+        settings.save()
+        if oldValue.notifyOnReply != settings.notifyOnReply || oldValue.notifyOnApproval != settings.notifyOnApproval {
+            syncNotificationPreferences()
+            if !isDemo { Task { await PushCenter.shared.clearDisabledNotifications() } }
+        }
+    } }
+    public var notificationSyncErrors: [String: String] = [:]
+    @ObservationIgnored var notificationSyncTask: Task<Void, Never>?
+    @ObservationIgnored var notificationSyncPending = false
+    @ObservationIgnored var notifiedRuns: [String] = []
+    @ObservationIgnored var postCompletionNotification: (String, String, String) -> Void = { Notifier.post(title: $0, body: $1, id: $2) }
     public var toast: String?
     var chatDrafts: [String: ChatDraft] = [:]
     var outbox: [OutgoingMessage] = []
@@ -204,6 +215,7 @@ public final class AppStore {
 
     public func resync() async {
         guard !isDemo, !syncing else { return }
+        syncNotificationPreferences()
         syncing = true
         defer { syncing = false }
         for d in devices {
@@ -306,6 +318,7 @@ public final class AppStore {
     /// App 启动：为每台设备刷新并订阅事件；申请通知权限。
     public func start() async {
         guard !isDemo else { return }        // 演示数据里的设备是假的，别去连
+        syncNotificationPreferences()
         PushCenter.shared.onToken = { [weak self] token, env in Task { @MainActor in await self?.registerPush(token: token, environment: env) } }
         PushCenter.shared.onSilent = { [weak self] in await self?.resync() }
         // 在线时保留用户正在使用的地址；更新候选，断线后再故障转移。
@@ -705,6 +718,7 @@ public final class AppStore {
     func handle(_ ev: ConnectorEvent, device: Device) {
         switch ev {
         case .connected:
+            syncNotificationPreferences()
             streamDevices.insert(device.id)
             Task { [weak self] in
                 guard let self else { return }
@@ -769,7 +783,8 @@ public final class AppStore {
         case .messageDone(let sid, let mid):
             if let i = messages[sid]?.firstIndex(where: { $0.id == mid }) { messages[sid]?[i].streaming = false }
             syncCursor[sid] = mid
-            if settings.notifyOnReply, let s = session(sid) { Notifier.post(title: "\(s.agent.displayName) 回复完成", body: s.title, id: "reply-\(mid)") }
+        case .runCompleted(let completion):
+            notifyCompletion(completion)
         case .toolCall(let sid, let call, let messageId):
             var list = messages[sid, default: []]
             if let i = list.lastIndex(where: { messageId != nil ? $0.id == messageId : $0.role == .assistant }) {
@@ -890,6 +905,9 @@ enum Notifier {
     static func post(title: String, body: String, id: String) {
         Task { @MainActor in
             guard UIApplication.shared.applicationState != .active else { return }
+            let settings = Settings.load()
+            guard !(id.hasPrefix("reply-") && !settings.notifyOnReply),
+                  !(id.hasPrefix("approval-") && !settings.notifyOnApproval) else { return }
             let content = UNMutableNotificationContent()
             content.title = title; content.body = body; content.sound = .default
             try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))

@@ -32,8 +32,13 @@ struct MeView: View {
                     SettingRow(icon: "bell", color: p.danger, title: "有待审批时通知", inset: 0) {
                         Toggle("", isOn: $store.settings.notifyOnApproval).labelsHidden()
                     }
-                    SettingRow(icon: "bubble.left", color: p.sage, title: "回复完成时通知", inset: 0) {
+                    SettingRow(icon: "bubble.left", color: p.sage, title: "回复完成时通知", subtitle: "整轮任务结束后，仅通知最终回复", inset: 0) {
                         Toggle("", isOn: $store.settings.notifyOnReply).labelsHidden()
+                    }
+                    if !store.notificationSyncErrors.isEmpty {
+                        Button("通知设置待同步，离线电脑可能仍按旧设置推送。点此重试") {
+                            store.syncNotificationPreferences()
+                        }.font(.caption).foregroundStyle(p.amber)
                     }
                     SettingRow(icon: "capsule.portrait", color: p.amber, title: "锁屏 / 灵动岛",
                                subtitle: "会话在跑什么、要不要你批，抬手就能看到", inset: 0) {

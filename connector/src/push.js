@@ -166,7 +166,9 @@ export class Pusher {
    */
   async send(devices, note) {
     if (!this.ready) return [];
-    const targets = devices.filter((d) => d.push?.token);
+    const targets = devices.filter((d) => d.push?.token
+      && (note.data?.kind !== 'reply' || d.notificationPreferences?.notifyOnReply !== false)
+      && (note.data?.kind !== 'approval' || d.notificationPreferences?.notifyOnApproval !== false));
     if (!targets.length) return [];
     const jwt = this.auth.jwt();
     const payload = buildPayload(note);

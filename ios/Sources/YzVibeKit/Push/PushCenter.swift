@@ -95,11 +95,32 @@ public final class PushCenter: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().setBadgeCount(count)
     }
 
+    func clearDisabledNotifications() async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let pending = await center.pendingNotificationRequests()
+        let settings = Settings.load()
+        func disabled(_ request: UNNotificationRequest) -> Bool {
+            let kind = PushPayload(userInfo: request.content.userInfo).kind
+            return ((kind == .reply || request.identifier.hasPrefix("reply-")) && !settings.notifyOnReply)
+                || ((kind == .approval || request.identifier.hasPrefix("approval-")) && !settings.notifyOnApproval)
+        }
+        center.removeDeliveredNotifications(withIdentifiers: delivered.map(\.request).filter(disabled).map(\.identifier))
+        center.removePendingNotificationRequests(withIdentifiers: pending.filter(disabled).map(\.identifier))
+    }
+
     // MARK: UNUserNotificationCenterDelegate
 
     /// App 在前台时也把审批横幅显示出来——正在看别的会话时，别的会话的审批同样要能看见。
     nonisolated public func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .sound, .list]
+        let kind = PushPayload(userInfo: notification.request.content.userInfo).kind
+        let id = notification.request.identifier
+        return await MainActor.run {
+            let settings = Settings.load()
+            if (kind == .reply || id.hasPrefix("reply-")) && !settings.notifyOnReply { return [] }
+            if (kind == .approval || id.hasPrefix("approval-")) && !settings.notifyOnApproval { return [] }
+            return [.banner, .sound, .list]
+        }
     }
 
     nonisolated public func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
