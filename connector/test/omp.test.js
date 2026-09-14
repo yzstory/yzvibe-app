@@ -97,3 +97,21 @@ test('OMP interruption only resumes the queue for explicit send-now; disconnect 
   begin();agent.event({type:'tool_execution_start',toolCallId:'t',toolName:'write',args:{path:'x'}});agent.fail(new Error('Disconnected'));
   assert.equal(store.messagesOf(s.id).flatMap(m=>m.toolCalls).find(t=>t.name==='write').state,'error');assert.equal(s.status,'error');
 });
+
+test('OMP surfaces compaction warnings and native abort without an empty success bubble', async t => {
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'omp-aborted-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+ const store=new Store(home),s=store.createSession({agent:'omp',cwd:home});
+ const agent=new OmpAgent({session:s,store});agent.rpc={request:async()=>({}),close(){}};
+ agent.active={prefix:'run',messages:new Set(),done:new Set(),usage:[],started:Date.now()};
+ store.setStatus(s.id,'running');store.enqueue(s.id,{text:'later'});
+ agent.event({type:'auto_compaction_end',result:{warning:'freed too little'}});
+ assert.match(store.messagesOf(s.id)[0].text,/上下文压缩/);
+ assert.equal(s.status,'running');
+ agent.event({type:'message_start',message:{role:'assistant'}});
+ agent.event({type:'message_end',message:{role:'assistant',content:[],stopReason:'aborted',errorMessage:'Interrupted by user'}});
+ agent.event({type:'agent_end',isTerminal:true});await new Promise(r=>setImmediate(r));
+ assert.equal(s.status,'idle');assert.equal(s.queuePaused,true);
+ assert.match(store.messagesOf(s.id).at(-1).text,/本轮已中断/);
+ assert.equal(store.messagesOf(s.id).some(m=>m.role==='assistant'&&!m.text&&!m.toolCalls.length),false);
+ agent.dispose();
+});

@@ -91,12 +91,17 @@ export class OmpAgent {
     if (e.type === 'available_commands_update') { this.catalog(e.commands ?? []); return; }
     if (e.type === 'extension_ui_request') { void this.dialog(e).catch(() => this.fail(new Error('OMP 提问处理失败'))); return; }
     const a = this.active; if (!a) return;
+    if (e.type === 'auto_compaction_end' && (e.result?.warning || e.errorMessage)) {
+      this.store.addMessage(this.session.id, { role: 'system', text: 'OMP 上下文压缩未能充分释放空间或执行失败。请检查当前模型的上下文预算；持续重复时可停止本轮，并缩小任务范围或使用更大窗口。' });
+    }
     if (e.type === 'message_start' && e.message?.role === 'assistant') { a.messageId = null; this.messageId(); }
     if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'text_delta') this.store.appendDelta(this.session.id, this.messageId(), e.assistantMessageEvent.delta);
     if (e.type === 'message_end' && e.message?.role === 'assistant') {
       const id = this.messageId();
       if (!a.done.has(id)) {
-        a.done.add(id); this.store.ensureAssistantMessage(this.session.id, id);
+        if (e.message.stopReason === 'aborted') a.stopped = true;
+        a.done.add(id);
+        if (textOf(e.message.content).trim() || this.store.messagesOf(this.session.id).some(m => m.id === id)) this.store.ensureAssistantMessage(this.session.id, id);
         this.store.finishMessage(this.session.id, id, textOf(e.message.content));
         const images = importOmpImages(e.message.content, (...args) => this.store.addUpload(...args));
         if (images.length) this.store.addMessage(this.session.id, { role: 'assistant', text: '', attachments: images });
@@ -153,6 +158,7 @@ export class OmpAgent {
     for (const id of a.messages) if (!a.done.has(id)) this.store.finishMessage(this.session.id, id);
     for (const c of this.requests.values()) c.abort(); this.requests.clear();
     if (a.error) this.store.addMessage(this.session.id, { role: 'system', text: `OMP：${a.error}` });
+    else if (status === 'interrupted') this.store.addMessage(this.session.id, { role: 'system', text: 'OMP 本轮已中断，尚未生成最终结论。已完成的消息和工具结果保留在会话中。' });
     if (status !== 'completed' && !(status === 'interrupted' && a.resumeQueue)) this.store.pauseQueue(this.session.id);
     this.store.setStatus(this.session.id, status === 'failed' ? 'error' : 'idle');
   }

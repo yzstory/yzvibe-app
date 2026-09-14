@@ -56,3 +56,15 @@ test('OMP catalog excludes inherited provider catalogs and starts empty without 
  assert.deepEqual(configuredModelOptions(native,{models:[]}),[]);
  assert.deepEqual(configuredModelOptions(native,{models:[{id:'custom/qwen'}]}).map(m=>m.id),['custom/qwen']);
 });
+
+test('OMP context budget can be configured and survives edits; invalid budgets do not overwrite configuration', t => {
+ const home=fixture(t);
+ const saved=saveOmpConfiguration(input(home,{contextWindow:262144}),home),m=saved.models[0];
+ assert.equal(m.contextWindow,262144);
+ const edit={providerId:m.providerId,originalModelName:m.modelName,key:'',baseUrl:m.baseUrl};
+ assert.equal(saveOmpConfiguration(input(home,edit),home).models[0].contextWindow,262144);
+ const before=fs.readFileSync(path.join(home,'models.yml'),'utf8');
+ for(const contextWindow of [0,-1,1.5,'262144',10000001]) assert.throws(()=>saveOmpConfiguration(input(home,{...edit,contextWindow}),home),/上下文预算/);
+ assert.equal(fs.readFileSync(path.join(home,'models.yml'),'utf8'),before);
+ assert.equal(saveOmpConfiguration(input(home,{...edit,contextWindow:131072}),home).models[0].contextWindow,131072);
+});

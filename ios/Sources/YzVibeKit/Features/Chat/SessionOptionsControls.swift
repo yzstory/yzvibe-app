@@ -146,17 +146,20 @@ struct EffortMenu: View {
 private struct EffortDial: View {
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let levels: [String]
     @Binding var effort: String?
     @State private var index = 0
     @State private var feedback = 0
+    @State private var ultraFeedback = 0
     private var selected: String { levels[min(index, levels.count - 1)] }
+    private var isUltra: Bool { selected == "ultra" }
 
     private func select(_ next: Int) {
         let clamped = min(max(next, 0), levels.count - 1)
         guard index != clamped else { return }
         index = clamped
-        feedback += 1
+        if isUltra { ultraFeedback += 1 } else { feedback += 1 }
     }
     private func commit() {
         let value: String? = selected.isEmpty ? nil : selected
@@ -170,13 +173,32 @@ private struct EffortDial: View {
                 Button("完成") { commit(); dismiss() }.font(.subheadline.weight(.semibold))
             }
             Text(EffortLevel.displayName(selected))
-                .font(.title2.weight(.bold)).foregroundStyle(p.label)
+                .font(.title2.weight(.bold)).foregroundStyle(isUltra ? p.brand : p.label)
+                .shadow(color: p.brand.opacity(isUltra ? 0.35 : 0), radius: 12)
+                .phaseAnimator([0.0, 1.0, 0.0], trigger: ultraFeedback) { content, phase in
+                    content.scaleEffect(isUltra && !reduceMotion ? 1 + 0.08 * phase : 1)
+                } animation: { _ in .spring(response: 0.28, dampingFraction: 0.7) }
             GeometryReader { geo in
                 let travel = max(1, geo.size.width - 56)
                 let step = travel / CGFloat(max(1, levels.count - 1))
                 ZStack(alignment: .leading) {
                     Capsule().fill(p.fillSecondary)
                     Capsule().fill(p.brand).frame(width: 56 + CGFloat(index) * step)
+                        .overlay {
+                            if isUltra {
+                                Capsule().fill(LinearGradient(colors: [p.brand, .yellow.opacity(0.65), p.brand], startPoint: .leading, endPoint: .trailing))
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                        .shadow(color: p.brand.opacity(isUltra ? 0.4 : 0), radius: isUltra ? 16 : 0)
+                    if !reduceMotion {
+                        Capsule().stroke(p.brand.opacity(0.7), lineWidth: 2)
+                            .phaseAnimator([0.0, 1.0, 0.0], trigger: ultraFeedback) { content, phase in
+                                content.scaleEffect(x: 1 + 0.025 * phase, y: 1 + 0.4 * phase)
+                                    .opacity(!isUltra || phase == 0 ? 0 : 1 - phase * 0.7)
+                            } animation: { _ in .easeOut(duration: 0.3) }
+                            .allowsHitTesting(false)
+                    }
                     HStack {
                         ForEach(levels.indices, id: \.self) { i in
                             if i > 0 { Spacer(minLength: 0) }
@@ -185,6 +207,9 @@ private struct EffortDial: View {
                         }
                     }.padding(.horizontal, 28)
                     Circle().fill(.white).frame(width: 44, height: 44)
+                        .overlay {
+                            if isUltra { Image(systemName: "bolt.fill").font(.system(size: 19, weight: .bold)).foregroundStyle(p.brand).accessibilityHidden(true) }
+                        }
                         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
                         .offset(x: 6 + CGFloat(index) * step)
                 }
@@ -216,6 +241,7 @@ private struct EffortDial: View {
         .tint(p.brand)
         .onAppear { index = levels.firstIndex(of: effort ?? "") ?? 0 }
         .sensoryFeedback(.selection, trigger: feedback)
+        .sensoryFeedback(.impact(weight: .heavy, intensity: 0.85), trigger: ultraFeedback)
     }
 }
 

@@ -26,7 +26,7 @@ export function ompConfiguration(home = ompConfigHome()) {
     for (const m of provider.models) {
       if (!m || typeof m.id !== 'string') continue;
       models.push({ id: `${providerId}/${m.id}`, providerId, modelName: m.id, label: m.name || m.id,
-        baseUrl: publicURL(provider.baseUrl), keyConfigured: !!provider.apiKey,
+        baseUrl: publicURL(provider.baseUrl), keyConfigured: !!provider.apiKey, contextWindow: m.contextWindow ?? null,
         editable: /^[a-zA-Z0-9_-]{1,80}$/.test(providerId) && provider.api === 'openai-completions' && !!publicURL(provider.baseUrl) });
     }
   }
@@ -49,16 +49,18 @@ export function saveOmpConfiguration(input, home = ompConfigHome()) {
   if (typeof input.key !== 'string' || input.key.length > 8192 || /[\r\n\x00]/.test(input.key)) throw badRequest('API Key 格式不合法');
   if (input.originalModelName && input.originalModelName !== modelName) throw badRequest('已有模型的 ID 不可修改，请添加新模型');
   const key = input.key.trim();
+  if (input.contextWindow != null && (!Number.isSafeInteger(input.contextWindow) || input.contextWindow < 1024 || input.contextWindow > 10_000_000)) throw badRequest('上下文预算须为 1024–10000000 的整数');
   if (!key && old?.baseUrl && publicURL(old.baseUrl) !== baseUrl) throw badRequest('更改接口地址时请重新填写 API Key'); if (!key && !old?.apiKey) throw badRequest('请填写 API Key');
   const models = [...(old?.models ?? [])];
   const index = models.findIndex(m => m.id === (input.originalModelName ?? modelName));
   if (input.originalModelName && index < 0) throw badRequest('原模型已变化，请刷新', 409);
   if (models.some((m,i) => i !== index && m.id === modelName)) throw badRequest('该供应商已有同名模型');
   // Preserve known capabilities only when the model identity has not changed.
-  const model = index >= 0 && models[index].id === modelName ? models[index] : {
+  const model = index >= 0 && models[index].id === modelName ? { ...models[index] } : {
     id: modelName, name: modelName, reasoning: false, input: ['text'], contextWindow: 32768, maxTokens: 4096,
     compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: 'max_tokens' },
   };
+  if (input.contextWindow != null) model.contextWindow = input.contextWindow;
   if (index >= 0) models[index] = model; else models.push(model);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   let keyPath, temp;

@@ -26,6 +26,7 @@ struct OmpConfigurationSection: View {
                                 Text(model.label).foregroundStyle(.primary)
                                 Text(model.baseUrl.isEmpty ? model.providerId : model.baseUrl).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 Text(model.keyConfigured ? "Key 已配置" : "未配置 Key").font(.caption2).foregroundStyle(.secondary)
+                                if let window = model.contextWindow { Text("上下文预算：\(window) tokens").font(.caption2).foregroundStyle(.secondary) }
                             }
                             Spacer()
                             Image(systemName: model.editable ? "pencil" : "desktopcomputer").foregroundStyle(.secondary)
@@ -69,6 +70,7 @@ private struct OmpConfigurationEditor: View {
     @State private var baseUrl = ""
     @State private var key = ""
     @State private var modelName = ""
+    @State private var contextWindow = "32768"
     @State private var saving = false
     @State private var error: String?
 
@@ -92,9 +94,15 @@ private struct OmpConfigurationEditor: View {
                 } header: { Text("Model Name") }
                   footer: { Text("填写接口的模型 ID。已有模型 ID 保持不变，需要其他模型请新增。") }
                 Section {
+                    TextField("例如 262144（256K）", text: $contextWindow)
+                        .keyboardType(.numberPad)
+                        .accessibilityLabel("上下文预算 tokens")
+                } header: { Text("上下文预算（tokens）") }
+                  footer: { Text("填写当前供应商与模型支持的窗口。256K = 262144；这个值决定 OMP 何时压缩上下文，不会提高服务端实际限制。") }
+                Section {
                     Label(device.name, systemImage: "desktopcomputer")
                     Text("保存到电脑 OMP，下一轮请求自动加载；终端重开 OMP 后生效。同一供应商的模型共享接口地址和 Key。").font(.footnote).foregroundStyle(.secondary)
-                    Text("保存仅同步配置，不代表接口验证成功。新模型暂按纯文本、32K 上下文预算配置，图片和思考参数可在终端按实际能力调整。").font(.footnote).foregroundStyle(.secondary)
+                    Text("保存仅同步配置，不代表接口验证成功。新模型暂按纯文本配置，图片和思考参数可在终端按实际能力调整。").font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
             }
@@ -109,17 +117,22 @@ private struct OmpConfigurationEditor: View {
                     }.disabled(saving || baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelName.isEmpty || (original?.keyConfigured != true && key.isEmpty))
                 }
             }
-            .onAppear { baseUrl = original?.baseUrl ?? ""; modelName = original?.modelName ?? "" }
+            .onAppear { baseUrl = original?.baseUrl ?? ""; modelName = original?.modelName ?? ""; contextWindow = original.map { $0.contextWindow.map(String.init) ?? "" } ?? "32768" }
             .onDisappear { key = "" }
             .interactiveDismissDisabled(saving)
         }
     }
     private func save() async {
+        let windowText = contextWindow.trimmingCharacters(in: .whitespacesAndNewlines)
+        let window = Int(windowText)
+        guard (windowText.isEmpty && original != nil) || window.map({ (1024...10_000_000).contains($0) }) == true else {
+            error = "上下文预算须为 1024–10000000 的整数"; return
+        }
         saving = true; error = nil
         defer { saving = false }
         do {
             let input = OmpConfigurationInput(revision: config.revision, providerId: original?.providerId,
-                originalModelName: original?.modelName, baseUrl: baseUrl.trimmingCharacters(in: .whitespacesAndNewlines), key: key, modelName: modelName)
+                originalModelName: original?.modelName, baseUrl: baseUrl.trimmingCharacters(in: .whitespacesAndNewlines), key: key, modelName: modelName, contextWindow: window)
             let result = try await store.client.saveOmpConfiguration(device: device, input: input)
             key = ""
             // Do not misreport a committed configuration as a failed save when a subsequent refresh fails.
