@@ -11,6 +11,7 @@ struct MarkdownText: View {
     /// 代码块「复制」后的回调（一般用来弹 toast）
     var onCopy: ((String) -> Void)?
     var sessionId: String? = nil
+    var baseDirectory: String? = nil
 
     private enum Block { case prose(NSAttributedString), code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String), table(MarkdownTable) }
 
@@ -39,17 +40,14 @@ struct MarkdownText: View {
                 case .table(let table):
                     tableView(table)
                 case .image(let title, let path):
-                    if let sessionId { ReplyImage(title: title, path: path, sessionId: sessionId).id(path) }
+                    if let sessionId { ReplyImage(title: title, path: RemoteFileReference.imagePath(path, relativeTo: baseDirectory), sessionId: sessionId).id(path) }
                 }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .environment(\.openURL, OpenURLAction { url in
-            guard url.scheme == "yzfile",
-                  let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                      .queryItems?.first(where: { $0.name == "path" })?.value
-            else { return .systemAction }
-            onOpenFile?(path)
+            guard let path = RemoteFileReference.path(from: url, relativeTo: baseDirectory), let onOpenFile else { return .systemAction }
+            onOpenFile(path)
             return .handled
         })
     }
@@ -138,14 +136,21 @@ struct MarkdownText: View {
     /// 把看着像文件路径的行内代码变成 `yzfile://` 链接，点击由下面的 openURL 拦截。
     static func linkifyPaths(_ input: AttributedString, tint: Color) -> AttributedString {
         var out = input
-        for run in input.runs where run.inlinePresentationIntent?.contains(.code) == true {
+        for run in input.runs where run.link == nil {
             let raw = String(input[run.range].characters)
-            guard let path = FilePathDetector.path(in: raw),
-                  let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: "yzfile://open?path=\(encoded)") else { continue }
-            out[run.range].link = url
-            out[run.range].foregroundColor = tint
-            out[run.range].underlineStyle = .single
+            if run.inlinePresentationIntent?.contains(.code) == true {
+                guard let path = FilePathDetector.path(in: raw), let url = RemoteFileReference.link(path) else { continue }
+                out[run.range].link = url
+                out[run.range].foregroundColor = tint
+                out[run.range].underlineStyle = .single
+            } else {
+                for match in FilePathDetector.plainPaths(in: raw) {
+                    let start = out.characters.index(run.range.lowerBound, offsetBy: raw.distance(from: raw.startIndex, to: match.range.lowerBound))
+                    let end = out.characters.index(start, offsetBy: raw.distance(from: match.range.lowerBound, to: match.range.upperBound))
+                    out[start..<end].link = RemoteFileReference.link(match.path)
+                    out[start..<end].foregroundColor = tint
+                }
+            }
         }
         return out
     }
@@ -233,7 +238,7 @@ enum FilePathDetector {
         "yml", "yaml", "toml", "ini", "cfg", "conf", "plist", "xml", "html", "css", "scss",
         "py", "rb", "go", "rs", "java", "kt", "kts", "c", "h", "cpp", "hpp", "m", "mm", "sh", "zsh",
         "bash", "sql", "csv", "lock", "gradle", "podspec", "xcconfig", "entitlements", "png", "jpg",
-        "jpeg", "gif", "webp", "svg", "pdf", "env",
+        "jpeg", "gif", "webp", "svg", "heic", "heif", "mp4", "mov", "m4v", "webm", "pdf", "env",
     ]
 
     /// 返回规范化后的路径，不像路径则返回 nil。
@@ -242,9 +247,14 @@ enum FilePathDetector {
         // 去掉常见的收尾标点（中英文都有）
         while let last = s.last, "。，,；;：:！!？?）)】]」”\"'`".contains(last) { s = String(s.dropLast()) }
         while let first = s.first, "（(【[「“\"'`".contains(first) { s = String(s.dropFirst()) }
-        guard !s.isEmpty, s.count <= 240 else { return nil }
+        if let url = URL(string: s), ["file", "sandbox"].contains(url.scheme ?? "") { return RemoteFileReference.path(from: url) }
+        s = RemoteFileReference.resolve(s)
+        guard !s.isEmpty, s.count <= 2048 else { return nil }
         // 命令、参数、URL、glob 一律排除
-        guard !s.contains(where: { $0.isWhitespace }) else { return nil }
+        if s.contains(where: { $0.isWhitespace }) {
+            guard s.hasPrefix("/") || s.hasPrefix("~/"), extensions.contains((s as NSString).pathExtension.lowercased()) else { return nil }
+            return s
+        }
         guard !s.contains("://"), !s.hasPrefix("-"), !s.contains("*"), !s.contains("?") else { return nil }
         // `a/b` 这种 Markdown 里也可能是「或」的意思，要求至少有一段像文件名或是绝对路径
         let hasSlash = s.contains("/")
@@ -256,6 +266,19 @@ enum FilePathDetector {
         let isDotfile = s.hasPrefix(".") && !s.hasPrefix("..") && s.count > 1 && !hasSlash
         guard knownExt || isDotfile || (hasSlash && looksLikePathSegment(s)) else { return nil }
         return s
+    }
+
+    static func plainPaths(in text: String) -> [(range: Range<String.Index>, path: String)] {
+        let suffixes = extensions.sorted().joined(separator: "|")
+        let pattern = #"(?<![\w:/@.])(?:(?:file://|sandbox:))?(?:[~.]?/|[\p{L}\p{N}_.-]+/)*[\p{L}\p{N}_+@.-]+\.(?:"# + suffixes + #")(?::\d+(?::\d+)?)?(?![\w])"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return [] }
+        let web = try? NSRegularExpression(pattern: #"(?:https?://|mailto:|www\.)[^\s<>]+"#, options: .caseInsensitive)
+        let external = web?.matches(in: text, range: NSRange(text.startIndex..., in: text)).map(\.range) ?? []
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard !external.contains(where: { NSIntersectionRange($0, match.range).length > 0 }) else { return nil }
+            guard let range = Range(match.range, in: text), let path = path(in: String(text[range])) else { return nil }
+            return (range, path)
+        }
     }
 
     /// 形如 `src/server`、`~/.yzvibe`、`/etc/hosts`：段之间只有常规文件名字符。

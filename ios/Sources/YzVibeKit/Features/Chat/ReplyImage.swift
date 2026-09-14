@@ -11,7 +11,7 @@ enum MessageImageLinks {
             var path = source.substring(with: match.range(at: 2))
             if path.hasPrefix("<"), path.hasSuffix(">") { path = String(path.dropFirst().dropLast()) }
             let url = URL(string: path)
-            guard url?.scheme == nil || ["http", "https"].contains(url?.scheme ?? ""),
+            guard url?.scheme == nil || ["http", "https", "file", "sandbox"].contains(url?.scheme ?? ""),
                   ["png", "jpg", "jpeg", "webp", "gif", "heic"].contains((url?.path ?? path).components(separatedBy: ".").last?.lowercased() ?? "") else { continue }
             if match.range.location > cursor { parts.append(.text(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))) }
             parts.append(.image(source.substring(with: match.range(at: 1)), path))
@@ -24,6 +24,7 @@ enum MessageImageLinks {
 
 /// 图片链接在回复里直接展示；本地路径通过会话所属连接器读取。
 struct ReplyImage: View {
+    @Environment(\.openURL) private var openURL
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     let title: String
@@ -37,7 +38,8 @@ struct ReplyImage: View {
 
     var body: some View {
         Button {
-            if let image { presented = Preview(image: image) }
+            if let url = URL(string: path), ["http", "https"].contains(url.scheme ?? "") { openURL(url) }
+            else if let image { presented = Preview(image: image) }
             else { Task { await load() } }
         } label: {
             VStack(alignment: .leading, spacing: 8) {
@@ -76,7 +78,7 @@ struct ReplyImage: View {
                 data = body
             } else {
                 guard let session = store.session(sessionId), let device = store.device(session.deviceId) else { throw ConnectorError.badURL }
-                data = try await store.client.download(device: device, sessionId: sessionId, path: path.removingPercentEncoding ?? path)
+                data = try await store.client.download(device: device, sessionId: sessionId, path: path)
             }
             guard let decoded = UIImage(data: data) else { throw ConnectorError.decoding }
             image = decoded

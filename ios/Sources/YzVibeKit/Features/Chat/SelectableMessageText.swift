@@ -10,6 +10,7 @@ struct SelectableMessageText: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
         view.isEditable = false
+        view.dataDetectorTypes = [.link]
         view.isSelectable = true
         view.isScrollEnabled = false
         view.backgroundColor = .clear

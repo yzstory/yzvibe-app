@@ -32,7 +32,7 @@ struct NewSessionView: View {
             Form {
                 Section("助手") {
                     Picker("助手", selection: $req.agent) {
-                        ForEach(AgentKind.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                        ForEach(AgentKind.supported, id: \.self) { Text($0.displayName).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
@@ -103,9 +103,9 @@ struct NewSessionView: View {
             .onAppear {
                 if !seeded {
                     seeded = true
-                    if let a = presetAgent { req.agent = a }
+                    if let a = presetAgent, AgentKind.supported.contains(a) { req.agent = a }
                     applyDefaults()
-                    if let a = presetAgent { req.agent = a }
+                    if let a = presetAgent, AgentKind.supported.contains(a) { req.agent = a }
                     if let c = presetCwd, !c.isEmpty { req.cwd = c }
                     if let m = presetFirstMessage, !m.isEmpty { firstMessage = m }
                 }
@@ -194,6 +194,9 @@ struct NewSessionView: View {
     private func applyDefaults() {
         let d = store.settings.defaults(for: req.agent)
         req.mode = d.mode; req.model = d.model; req.effort = d.effort
+        if req.agent == .omp, let model = req.model, !caps.models.contains(where: { $0.id == model }) {
+            req.model = nil; req.effort = nil
+        }
     }
 
     private func start() async {

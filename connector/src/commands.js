@@ -143,6 +143,14 @@ export function sessionCommands(agent = 'claude', cwd = os.homedir(), { claudeHo
   const dir = expandHome(cwd);
   const app = APP_COMMANDS.map((c) => ({ ...c, kind: 'app', source: 'YzVibe' }));
 
+  if (agent === 'omp') {
+    const skills = dedupe([
+      ...skillsIn(path.join(process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), '.omp/agent'), 'skills'), { source: 'OMP skill' }),
+      ...skillsIn(path.join(dir, '.omp/skills'), { source: '项目 skill' }),
+    ]).map(s => ({ ...s, name: `skill:${s.name}`, insertAsText: false }));
+    const agentCommands = ['compact', 'context', 'usage', 'help'].map(name => ({ name, description: `OMP /${name}`, kind: 'agent', source: 'OMP', insertAsText: false }));
+    return { agent, app, agentCommands, skills, prompts: [], reported: !!session?.slashCommands, note: '其他交互式命令请在 OMP 终端使用；模型和模式通过下方选项设置。' };
+  }
   if (agent === 'codex') {
     // Codex 的 skill 在 ~/.codex/skills/<name>/SKILL.md（和 Claude 同一种格式）。
     // codex exec 不解析斜杠命令，所以这些只能当提示词插进消息里，标出来别让人误会。

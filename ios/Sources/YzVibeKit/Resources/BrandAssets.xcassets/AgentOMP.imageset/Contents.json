@@ -1,0 +1,25 @@
+{
+  "images": [
+    {
+      "filename": "AgentOMP-light.png",
+      "idiom": "universal"
+    },
+    {
+      "filename": "AgentOMP.png",
+      "idiom": "universal",
+      "appearances": [
+        {
+          "appearance": "luminosity",
+          "value": "dark"
+        }
+      ]
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "template-rendering-intent": "original"
+  }
+}

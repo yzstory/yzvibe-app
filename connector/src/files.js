@@ -4,7 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 
 const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.md', '.txt', '.yml', '.yaml', '.swift', '.kt', '.py', '.go', '.rs', '.css', '.html', '.sh', '.toml', '.env', '.sql', '.xml', '.plist']);
-const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.heic']);
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.heic', '.heif']);
+const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 const MAX_PREVIEW = 2 * 1024 * 1024;
 
 /** 无论是否在工作目录内，已知凭据都不通过文件接口提供。 */
@@ -15,6 +16,8 @@ const SENSITIVE = [
   /(^|\/)\.docker\/config\.json$/, /(^|\/)\.config\/gh(\/|$)/, /(^|\/)\.git-credentials$/,
   /(^|\/)\.yzvibe\/(devices\.json|daemon\.json|apns\.json|mcp-[^/]+\.json)$/, /\.p8$/,
   /(^|\/)\.codex\/auth\.json$/,
+  /(^|\/)\.omp\/agent\/(secrets(\/|$)|auth\.json$)/,
+  /(^|\/)\.appstoreconnect(\/|$)/,
 ];
 
 const inside = (base, target) => target === base || target.startsWith(base + path.sep);
@@ -51,7 +54,8 @@ export function resolveInside(root, rel = '') {
 export function kindOf(name, isDir) {
   if (isDir) return 'folder';
   const ext = path.extname(name).toLowerCase();
-  if (ext === '.md') return 'markdown';
+  if (ext === '.md' || ext === '.markdown') return 'markdown';
+  if (VIDEO_EXT.has(ext)) return 'video';
   if (IMAGE_EXT.has(ext)) return 'image';
   if (TEXT_EXT.has(ext)) return 'code';
   return 'other';
@@ -74,7 +78,8 @@ export function resolveReadable(root, rel = '') {
   if (inside(base, lexical)) return { ...resolveInside(base, path.relative(base, lexical)), inCwd: true };
 
   const home = realPath(path.resolve(os.homedir()));
-  if (!inside(home, target)) {
+  const temporaryArtifact = ['markdown', 'image', 'video'].includes(kindOf(target, false)) && [os.tmpdir(), '/tmp'].some(dir => { try { return inside(realPath(dir), target); } catch { return false; } });
+  if (!inside(home, target) && !temporaryArtifact) {
     throw Object.assign(new Error('这个文件不在会话工作目录里，出于安全不提供访问'), { status: 403 });
   }
   return { base: home, target, inCwd: false };
@@ -94,7 +99,7 @@ export function statFile(root, rel) {
     size: st.size,
     modifiedAt: st.mtime.toISOString(),
     mime: mimeOf(target),
-    textual: kind !== 'image' && st.size <= MAX_PREVIEW,
+    textual: ['markdown', 'code'].includes(kind) && st.size <= MAX_PREVIEW,
     inCwd,
   };
 }
@@ -125,5 +130,5 @@ export function previewFile(root, rel) {
 
 export function mimeOf(file) {
   const ext = path.extname(file).toLowerCase();
-  return { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.json': 'application/json', '.md': 'text/markdown' }[ext] ?? 'application/octet-stream';
+  return { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.json': 'application/json', '.md': 'text/markdown', '.markdown': 'text/markdown', '.heic': 'image/heic', '.heif': 'image/heif', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.webm': 'video/webm' }[ext] ?? 'application/octet-stream';
 }

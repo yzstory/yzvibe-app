@@ -1,7 +1,7 @@
 {
   "name": "yzvibe",
   "version": "0.1.3",
-  "description": "YzVibe 桌面连接器：把本机的 Claude Code / Codex 会话暴露给手机 App（REST + WebSocket + 扫码配对 + 远程审批推送）",
+  "description": "柚子Vibe 桌面连接器：通过手机连接 Claude Code、Codex 和 OMP，管理会话、文件与远程审批",
   "type": "module",
   "bin": {
     "yzvibe": "bin/yzvibe.js"
@@ -21,7 +21,8 @@
   },
   "dependencies": {
     "qrcode-terminal": "^0.12.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "yaml": "^2.9.1"
   },
   "license": "MIT",
   "keywords": [

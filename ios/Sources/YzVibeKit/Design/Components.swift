@@ -94,7 +94,7 @@ public extension Chip {
         switch kind {
         case .claude: return Chip(text, tone: .claude)
         case .codex: return Chip(text, tone: .codex)
-        case .custom: return Chip(text, tone: .custom)
+        case .omp, .custom: return Chip(text, tone: .custom)
         }
     }
     static func mode(_ mode: ConnectionMode) -> Chip {

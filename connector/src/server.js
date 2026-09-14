@@ -12,6 +12,9 @@ import { startCloudflareTunnel, retryTunnel, loadRelay, saveRelay } from './tunn
 import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
 import { CodexAgent } from './agents/codex-app-server.js';
+import { OmpAgent } from './agents/omp.js';
+import { ompConfiguration, saveOmpConfiguration } from './agents/omp-config.js';
+import { ompToolDecision } from './agents/omp-policy.js';
 import { MockAgent } from './agents/mock.js';
 import { normalizeOptions, agentCapabilities } from './agents/options.js';
 import { agentQuota } from './quota.js';
@@ -31,7 +34,7 @@ export const VERSION = '0.1.3';
 
 export const DEFAULT_PORT = 19876;
 
-export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true, importTerminal = true, claudeHome, codexHome } = {}) {
+export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(), defaultAgent = 'claude', home = HOME, log = console.log, portFallback = true, importTerminal = true, claudeHome, codexHome, ompHome } = {}) {
   const store = new Store(home);
   const rules = new Rules(home);
   store.rules = rules;
@@ -69,19 +72,20 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const internalURL = `http://127.0.0.1:${api.port}/internal/approval`;
     const a = kind === 'mock' ? new MockAgent({ session, store })
       : kind === 'codex' ? new CodexAgent({ session, store })
+      : kind === 'omp' ? new OmpAgent({ session, store, internalURL: `http://127.0.0.1:${api.port}/internal/omp/permission`, internalSecret })
       : new ClaudeAgent({ session, store, internalURL, internalSecret, home, log, options });
     agents.set(session.id, a);
     return a;
   }
 
   // ---------- 终端会话导入 ----------
-  const scanOpts = { ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) };
+  const scanOpts = { ...(ompHome && { ompHome }), ...(claudeHome && { claudeHome }), ...(codexHome && { codexHome }) };
   /** 终端里的会话（未被接管的），与 store 会话合并成列表。 */
   function terminalSessions() {
     if (!importTerminal) return [];
     try {
-      const adopted = new Set(store.sessions.map((s) => s.agentSessionId).filter(Boolean));
-      return scanTerminalSessions(scanOpts).filter((t) => !store.session(t.id) && !adopted.has(t.agentSessionId));
+      const adopted = new Set(store.sessions.filter(s => s.agentSessionId).map(s => `${s.agent}:${s.agentSessionId}`));
+      return scanTerminalSessions(scanOpts).filter((t) => !store.session(t.id) && !adopted.has(`${t.agent}:${t.agentSessionId}`));
     } catch (e) { log(`[yzvibe] 扫描终端会话失败：${e.message}`); return []; }
   }
   function allSessions() {
@@ -94,7 +98,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     if (!importTerminal || store.isHidden(id)) return null;
     const t = scanTerminalSessions(scanOpts).find((x) => x.id === id); if (!t) return null;
     log(`[yzvibe] 接管终端会话：${t.agent} ${t.title}`);
-    return store.adoptSession(t, parseTranscript(t));
+    return store.adoptSession(t, parseTranscript(t, (...args) => store.addUpload(...args)));
   }
 
   // ---------- WS 广播 ----------
@@ -147,7 +151,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const text = ev.text;
         if (!text) return;
         pusher.send(store.devices, {
-          title: `${s.agent === 'codex' ? 'Codex' : 'Claude'} 回复完成`, body: `${s.title}\n${text.slice(0, 150)}`,
+          title: `${s.agent === 'codex' ? 'Codex' : s.agent === 'omp' ? 'OMP' : 'Claude'} 回复完成`, body: `${s.title}\n${text.slice(0, 150)}`,
           level: 'active', threadId: ev.sessionId, collapseId: `reply-${ev.runId}`, badge: pendingCount(),
           data: { kind: 'reply', sessionId: ev.sessionId, messageId: ev.messageId, runId: ev.runId },
         }).catch(() => {});
@@ -219,7 +223,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     const p = url.pathname;
     try {
       // 公开
-      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, protocolVersion: 2, agents: ['claude', 'codex', 'mock'], connectorId: store.connector.id, uptime: process.uptime(), endpoints: api.endpoints() });
+      if (req.method === 'GET' && p === '/health') return json(res, 200, { name: deviceName, version: VERSION, protocolVersion: 2, agents: ['claude', 'codex', 'omp', 'mock'], connectorId: store.connector.id, uptime: process.uptime(), endpoints: api.endpoints() });
       // 手机浏览器打开的落地页 / 配置：/pair?token= 与 /pair.json?token=（一次性配对码本身就是凭据，不消费它）
       if (req.method === 'GET' && (p === '/pair' || p === '/pair.json')) {
         const given = url.searchParams.get('token') ?? '';
@@ -242,6 +246,24 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         log(`[yzvibe] 手机已配对：${d.name} (${d.id.slice(0, 8)})`);
         await announce();
         return json(res, 200, { deviceToken: d.token, deviceName, connectorId: store.connector.id, name: deviceName });
+      }
+      // OMP's trusted tool hook: failures deny execution, and Plan never auto-approves writes.
+      if (req.method === 'POST' && p === '/internal/omp/permission') {
+        if (req.headers['x-yzvibe-secret'] !== internalSecret) return json(res, 403, { error: 'forbidden' });
+        const { sessionId, toolName, input } = await readJSON(req);
+        const session = store.session(sessionId);
+        if (!session || session.agent !== 'omp' || !agents.get(sessionId)?.active) return json(res, 403, { decision: 'deny' });
+        const policy = ompToolDecision(session.mode, toolName, input);
+        if (policy !== 'ask') return json(res, 200, { decision: policy });
+        const controller = new AbortController();
+        res.on('close', () => controller.abort());
+        const agent = agents.get(sessionId), key = Symbol('permission');
+        agent.requests.set(key, controller);
+        try {
+          const c = classifyPermission(toolName === 'bash' ? 'Bash' : toolName, input);
+          const decision = await store.requestApproval({ sessionId, toolName, agent: 'omp', ...c, signal: controller.signal });
+          return json(res, 200, { decision });
+        } finally { agent.requests.delete(key); }
       }
       // 内部：MCP 审批桥
       if (req.method === 'POST' && p === '/internal/approval') {
@@ -290,6 +312,8 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
 
       let m;
       if (req.method === 'GET' && p === '/diagnostics') return json(res, 200, await diagnostics({ version: VERSION, store, pusher, device: authDevice }));
+      if (p === '/agents/omp/config' && req.method === 'GET') return json(res, 200, ompConfiguration(ompHome));
+      if (p === '/agents/omp/config' && req.method === 'POST') return json(res, 200, saveOmpConfiguration(await readJSON(req), ompHome));
       if (req.method === 'GET' && p === '/agents') return json(res, 200, await agentCapabilities());
       if (req.method === 'PATCH' && p === '/devices/notifications') {
         const { notifyOnApproval, notifyOnReply } = await readJSON(req);
@@ -341,7 +365,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
       if (req.method === 'GET' && p === '/sessions') return json(res, 200, allSessions());
       if (req.method === 'POST' && p === '/sessions') {
         const body = await readJSON(req);
-        if (body.agent != null && !['claude', 'codex', 'mock'].includes(body.agent)) throw badRequest('不支持的 Agent');
+        if (body.agent != null && !['claude', 'codex', 'omp', 'mock'].includes(body.agent)) throw badRequest('不支持的 Agent');
         if (body.cwd != null && (typeof body.cwd !== 'string' || body.cwd.length > 4096)) throw badRequest('工作目录不合法');
         if (body.firstMessage != null && (typeof body.firstMessage !== 'string' || body.firstMessage.length > 64_000)) throw badRequest('首句消息过长或格式不合法');
         const agent = body.agent ?? defaultAgent;
@@ -406,7 +430,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           if (!existing) messageInput(input, store, { requireID: true });
           const receipt = store.acceptMessage(s.id, input);
           if (!existing) {
-            if (input.mode === 'now' && busy(s) && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop(); }
+            if (input.mode === 'now' && busy(s) && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop({ resumeQueue: true }); }
             if (!busy(s) && !s.queuePaused) { if (s.status === 'error') store.setStatus(s.id, 'idle'); setImmediate(() => void drainQueue(s.id)); }
           }
           return json(res, 202, publicReceipt(receipt));
@@ -436,7 +460,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         const s = resolveSession(m[1]); if (!s) return json(res, 404, { error: 'not found' });
         store.prioritizeQueued(s.id, m[2]);
         const agent = agents.get(s.id);
-        if (busy(s) && agent) { store.requestStop(s.id); agent.stop(); }
+        if (busy(s) && agent) { store.requestStop(s.id); agent.stop({ resumeQueue: true }); }
         else {
           if (s.status !== 'idle') store.setStatus(s.id, 'idle');
           void drainQueue(s.id);
@@ -479,7 +503,10 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (p === '/files/preview') { const { mime, body } = previewFile(s.cwd, rel); res.writeHead(200, { 'content-type': mime }); return res.end(body); }
         const { target } = resolveReadable(s.cwd, rel);
         res.writeHead(200, { 'content-type': mimeOf(target), 'content-length': fs.statSync(target).size, 'content-disposition': `attachment; filename="${encodeURIComponent(path.basename(target))}"` });
-        return fs.createReadStream(target).pipe(res);
+        const stream = fs.createReadStream(target);
+        res.on('close', () => stream.destroy());
+        stream.on('error', () => res.destroy());
+        return stream.pipe(res);
       }
       // 上传（二进制 body + X-Filename）
       if (req.method === 'POST' && p === '/uploads') {
@@ -530,7 +557,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     if ((busy(s) || s.queuePaused || s.queue?.length || mode === 'queue') && mode !== 'never') {
       const front = mode === 'now';
       const item = store.enqueue(s.id, { text: text ?? '', attachments }, { front });
-      if (front && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop(); }
+      if (front && !s.queuePaused) { store.requestStop(s.id); agents.get(s.id)?.stop({ resumeQueue: true }); }
       if (!busy(s) && !s.queuePaused) void drainQueue(s.id);
       return { queued: true, item };
     }

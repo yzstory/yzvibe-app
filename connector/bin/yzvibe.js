@@ -13,7 +13,7 @@
 //   yzvibe uninstall          取消开机自启
 // flags：
 //   --access=remote|local|<url>|<ip>   remote=Cloudflare Tunnel（默认，找不到 cloudflared 退回局域网）
-//   --agent=claude|codex|mock          新会话默认 Agent；mock 不调用 Claude，用假 Agent 演示
+//   --agent=claude|codex|omp|mock          新会话默认 Agent；mock 不调用 Claude，用假 Agent 演示
 //   --port=19876 --name="我的 Mac"      端口被占用时自动后移
 //   --force                            不复用已保存的 relay 地址
 import { startConnector, DEFAULT_PORT } from '../src/server.js';
@@ -33,7 +33,7 @@ for (let i = 0; i < flags.length; i++) {
 }
 
 if (command === 'help' || args.help || args.h) {
-  console.log(`用法: yzvibe [start|run|stop|restart|status|qr|logs|install|uninstall] [--access=remote|local|<url>|<ip>] [--port=${DEFAULT_PORT}] [--name=<设备名>] [--agent=claude|codex|mock] [--force]
+  console.log(`用法: yzvibe [start|run|stop|restart|status|qr|logs|install|uninstall] [--access=remote|local|<url>|<ip>] [--port=${DEFAULT_PORT}] [--name=<设备名>] [--agent=claude|codex|omp|mock] [--force]
   start      后台启动并打印配对二维码（默认命令；已在运行则直接出示二维码）
   run        前台运行，Ctrl+C 退出
   stop       停止后台连接器

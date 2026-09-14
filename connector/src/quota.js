@@ -76,6 +76,7 @@ export function quotaFromRateLimit(info) {
 
 /** GET /quota?agent=claude|codex 的实现。失败时返回 { error } 而不是抛，方便手机端展示。 */
 export async function agentQuota(agent = 'claude', { fetchImpl = fetch, force = false } = {}) {
+  if (agent === 'omp') return { agent, source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: 'OMP 使用所配置供应商的额度；当前没有统一账号余额接口。Token 用量见会话上下文。' };
   if (agent === 'codex') {
     let rl = null; try { rl = codexRateLimits(); } catch {}
     if (!rl) return { agent: 'codex', source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: '本机还没有 Codex 会话记录，先在终端或手机上跑一轮 Codex 后这里会显示额度' };

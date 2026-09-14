@@ -74,8 +74,8 @@ struct ModelMenu: View {
 
     private var options: [ModelOption] {
         var list = store.modelOptions(for: agent, caps: caps)
-        for id in store.settings.customModels(for: agent) where !list.contains(where: { $0.id == id }) { list.append(ModelOption(id: id)) }
-        if let m = model, !m.isEmpty, !list.contains(where: { $0.id == m }) { list.append(ModelOption(id: m)) }
+        for id in (agent == .omp ? [] : store.settings.customModels(for: agent)) where !list.contains(where: { $0.id == id }) { list.append(ModelOption(id: id)) }
+        if agent != .omp, let m = model, !m.isEmpty, !list.contains(where: { $0.id == m }) { list.append(ModelOption(id: m)) }
         return list
     }
     private var selection: Binding<String> { Binding(get: { model ?? "" }, set: { model = $0.isEmpty ? nil : $0 }) }
@@ -119,9 +119,9 @@ struct EffortMenu: View {
     @State private var showing = false
 
     private var levels: [String] {
-        var list = ["", "low", "medium", "high", "xhigh", "max", "ultra"]
-        for value in caps.efforts(for: model) where !value.isEmpty && !list.contains(value) { list.append(value) }
-        if let e = effort, !e.isEmpty, !list.contains(e) { list.append(e) }
+        var list = agent == .omp ? [""] : ["", "low", "medium", "high", "xhigh", "max", "ultra"]
+        for value in caps.efforts(for: agent == .omp ? (model ?? caps.models.first?.id) : model) where !value.isEmpty && !list.contains(value) { list.append(value) }
+        if agent != .omp, let e = effort, !e.isEmpty, !list.contains(e) { list.append(e) }
         return list.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
 
@@ -130,6 +130,9 @@ struct EffortMenu: View {
             OptionPill(icon: "speedometer", text: EffortLevel.displayName(effort))
         }
         .buttonStyle(.plain)
+        .onChange(of: model) { _, _ in
+            if agent == .omp, let effort, !levels.contains(effort) { self.effort = nil }
+        }
         .sheet(isPresented: $showing) {
             EffortDial(levels: levels, effort: $effort)
                 .presentationDetents([.height(250)])

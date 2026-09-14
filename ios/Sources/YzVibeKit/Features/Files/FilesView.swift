@@ -90,7 +90,7 @@ struct FilesView: View {
     }
 
     func symbol(for kind: FileEntry.Kind) -> String {
-        switch kind { case .folder: "folder"; case .code: "doc.text"; case .markdown: "text.document"; case .image: "photo"; case .other: "doc" }
+        switch kind { case .folder: "folder"; case .code: "doc.text"; case .markdown: "text.document"; case .image: "photo"; case .video: "play.rectangle"; case .other: "doc" }
     }
 }
 
@@ -98,10 +98,10 @@ struct FileRow: View {
     @Environment(\.palette) private var p
     let entry: FileEntry
     private var tint: Color {
-        switch entry.kind { case .folder: p.amberSoft; case .code: p.blueSoft; case .markdown: p.sageSoft; case .image: p.purpleSoft; case .other: p.fill }
+        switch entry.kind { case .folder: p.amberSoft; case .code: p.blueSoft; case .markdown: p.sageSoft; case .image, .video: p.purpleSoft; case .other: p.fill }
     }
     private var symbol: String {
-        switch entry.kind { case .folder: "folder"; case .code: "doc.text"; case .markdown: "text.document"; case .image: "photo"; case .other: "doc" }
+        switch entry.kind { case .folder: "folder"; case .code: "doc.text"; case .markdown: "text.document"; case .image: "photo"; case .video: "play.rectangle"; case .other: "doc" }
     }
     var body: some View {
         HStack(spacing: 12) {

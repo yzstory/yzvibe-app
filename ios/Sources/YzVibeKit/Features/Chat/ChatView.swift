@@ -37,10 +37,6 @@ struct ChatView: View {
     @State private var showDeliveries = false
 
     private var session: Session? { store.session(sessionId) }
-    private var subtitle: String {
-        guard let s = session else { return "" }
-        return [s.status.displayName, s.agent.displayName, s.folderName].filter { !$0.isEmpty }.joined(separator: " · ")
-    }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
 
     var body: some View {
@@ -124,7 +120,19 @@ struct ChatView: View {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
                     Text(session?.title ?? "会话").font(.yzHeadline).lineLimit(1)
-                    Text(subtitle).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1)
+                    HStack(spacing: 4) {
+                        if let session {
+                            Text(session.status.displayName)
+                            Text("·")
+                            AgentLogo(agent: session.agent, size: 12)
+                            Text(session.agent.displayName).fixedSize()
+                            if !session.folderName.isEmpty {
+                                Text("·")
+                                Text(session.folderName).truncationMode(.middle)
+                            }
+                        }
+                    }
+                    .font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1)
                 }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {

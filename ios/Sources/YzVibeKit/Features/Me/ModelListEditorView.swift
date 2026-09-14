@@ -18,15 +18,20 @@ struct ModelListEditorView: View {
                 Picker("助手", selection: $agent) {
                     Text("Claude").tag(AgentKind.claude)
                     Text("Codex").tag(AgentKind.codex)
+                    Text("OMP").tag(AgentKind.omp)
                 }
                 .pickerStyle(.segmented)
                 .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
             } footer: {
-                Text(agent == .claude
+                Text(agent == .omp ? "模型来自电脑 OMP 的供应商配置，ID 使用 provider/model。凭据只保存在电脑端。" : agent == .claude
                      ? "ID 原样传给 claude 的 --model。写完整 ID（如 claude-opus-5）可锁定版本；写别名（opus / sonnet / fable）则随 CLI 指向最新。"
                      : "ID 原样传给 codex 的 -m。默认列表来自电脑上 codex debug models 的目录。")
             }
 
+            if agent == .omp {
+                if let device = store.selectedDevice { OmpConfigurationSection(device: device).id(device.id) }
+                else { Section { Text("请先连接一台电脑") } }
+            } else {
             Section(customized ? "自定义列表" : "默认列表") {
                 ForEach(list) { m in
                     Button { editing = m } label: {
@@ -51,12 +56,13 @@ struct ModelListEditorView: View {
             }
 
             Section {
-                Button { adding = true } label: { Label("添加模型", systemImage: "plus") }
+                if caps.customModel { Button { adding = true } label: { Label("添加模型", systemImage: "plus") } }
                 if customized {
                     Button { store.settings.setModelPresets(nil, for: agent) } label: {
                         Label("恢复默认", systemImage: "arrow.counterclockwise")
                     }
                 }
+            }
             }
         }
         .listStyle(.insetGrouped)
@@ -91,7 +97,8 @@ struct ModelEditSheet: View {
         NavigationStack {
             Form {
                 Section("模型 ID") {
-                    TextField(agent == .claude ? "claude-opus-5" : "gpt-5.5", text: $id)
+                    TextField(agent == .omp ? "provider/model" : agent == .claude ? "claude-opus-5" : "gpt-5.5", text: $id)
+                        .disabled(agent == .omp)
                         .font(.yzMonoBody).textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
                 Section("显示名（可选）") {

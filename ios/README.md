@@ -1,4 +1,4 @@
-# YzVibe iOS
+# 柚子Vibe iOS
 
 SwiftUI 实现，iOS 17+；iOS 26 自动启用 Liquid Glass（`glassEffect` / 玻璃 Tab 栏），低版本回落为材质模糊。
 
@@ -10,6 +10,7 @@ ios/
 │  ├─ Models/               # 与 shared/protocol.md 对应的数据模型 + Mock 数据
 │  ├─ Networking/           # ConnectorClient 协议、HTTP+WS 实现、Mock 实现、Keychain
 │  ├─ Store/                # AppStore（@Observable）
+│  ├─ Voice/                # Apple 端侧转写、按住说话、原生回复朗读
 │  ├─ Push/                 # PushCenter + UIApplicationDelegate（APNs 注册与通知跳转）
 │  └─ Features/             # Root / Devices / Sessions / Chat / Approvals / Files / Me
 ├─ Tests/YzVibeKitTests/
@@ -18,6 +19,14 @@ ios/
 ├─ scripts/archive.sh       # 归档 + 导出 ipa（--upload 直传 TestFlight）
 └─ project.yml              # XcodeGen 描述
 ```
+
+## 当前功能与版本
+
+iOS 0.1.0 (26) 已进入 TestFlight 内部测试，详见 [build 26](../docs/RELEASE-0.1.0-26.md)。新增 OMP 接入与手机模型配置、本地 Markdown / 图片 / 视频预览、会话品牌图标。最新交互包括星光工具菜单、思考力度分档滑条、原生文本选区与复制、按住说话（上滑取消）及回复朗读。
+
+语音通过 Apple Speech 在端侧转写；设备或语言不支持时提示不可用，不回退到云端识别。识别结果进入草稿，用户确认后发送。回复朗读使用 AVSpeechSynthesizer，过滤代码、常见命令与日志，并与录音互斥。
+
+新增 Claude、Codex、OMP 三种助手及原彩高清 PNG 图标；OMP 支持按电脑展示模型与 HTTPS 配置，回复中的 Markdown、图片和视频可在 App 内查看。详见 [OMP](../docs/OMP.md) 与 [文件预览](../docs/REMOTE-FILE-PREVIEW.md)。
 
 ## 运行
 ```bash
@@ -47,6 +56,15 @@ ios/scripts/archive.sh --upload   # 顺便上传（需要 ASC_KEY_ID / ASC_ISSUE
 ```
 
 使用 Xcode 已登录账号上传内部测试构建，可直接使用 `scripts/ExportOptions-TestFlight.plist`，完整命令见 [build 11 发布说明](../docs/RELEASE-0.1.0-11.md)。
+
+也可使用 App Store Connect 团队 API 密钥上传已有归档（不会重新构建）：
+
+```bash
+# 先在环境中设置 ASC_KEY_ID、ASC_ISSUER_ID，以及可选的 ASC_KEY_PATH
+bash ios/scripts/upload-testflight.sh /path/to/YzVibe.xcarchive
+```
+
+命令在仓库根目录执行；将路径替换成实际归档路径。上传后仍需核对 Apple 处理状态与内部测试可用性，不重复上传已成功的构建号。
 
 ## 只编译库（无需生成工程）
 ```bash

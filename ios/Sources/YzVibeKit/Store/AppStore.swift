@@ -125,7 +125,7 @@ public final class AppStore {
     public func capabilities(for session: Session) -> AgentCapabilities { capabilities(for: session.agent, on: session.deviceId) }
     /// 模型菜单用的列表：用户在「模型列表」里改过就用用户的，否则用连接器 / 内置的。
     public func modelOptions(for agent: AgentKind, caps: AgentCapabilities) -> [ModelOption] {
-        settings.modelPresets(for: agent) ?? caps.models
+        agent == .omp ? caps.models : settings.modelPresets(for: agent) ?? caps.models
     }
 
     public func sessions(for device: Device?, activeOnly: Bool, query: String, now: Date = .now) -> [Session] {

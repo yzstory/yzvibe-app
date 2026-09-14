@@ -16,10 +16,11 @@ public enum ConnectionMode: String, Codable, CaseIterable, Sendable {
 }
 
 public enum AgentKind: String, Codable, CaseIterable, Sendable, Identifiable {
-    case claude, codex, custom
+    case claude, codex, omp, custom
+    public static let supported: [AgentKind] = [.claude, .codex, .omp]
     public var id: String { rawValue }
     public var displayName: String {
-        switch self { case .claude: "Claude"; case .codex: "Codex"; case .custom: "自定义" }
+        switch self { case .claude: "Claude"; case .codex: "Codex"; case .omp: "OMP"; case .custom: "自定义" }
     }
 }
 
@@ -37,7 +38,7 @@ public enum EffortLevel {
     public static func displayName(_ raw: String?) -> String {
         switch raw {
         case nil, "": "默认"
-        case "low": "低"; case "medium": "中"; case "high": "高"; case "xhigh": "极高"; case "max": "最大"; case "ultra": "Ultra"
+        case "off": "关闭"; case "minimal": "最低"; case "auto": "自动"; case "low": "低"; case "medium": "中"; case "high": "高"; case "xhigh": "极高"; case "max": "最大"; case "ultra": "Ultra"
         default: raw!
         }
     }
@@ -82,7 +83,7 @@ public struct AgentCapabilities: Codable, Hashable, Sendable {
     public func modeInfo(_ mode: SessionMode) -> ModeInfo? { modes[mode.rawValue] }
     /// 该模型支持的档位；目录没写就用 Agent 通用档位。
     public func efforts(for model: String?) -> [String] {
-        if let model, let m = models.first(where: { $0.id == model }), let e = m.efforts, !e.isEmpty { return e }
+        if let model, let m = models.first(where: { $0.id == model }), let e = m.efforts { return e }
         return efforts
     }
     public func label(forModel id: String?) -> String {
@@ -100,6 +101,12 @@ public struct AgentCapabilities: Codable, Hashable, Sendable {
                 efforts: ["low", "medium", "high", "xhigh", "max"],
                 models: [ModelOption(id: "gpt-5.6-sol", label: "GPT-5.6 Sol"), ModelOption(id: "gpt-5.6-terra", label: "GPT-5.6 Terra"),
                          ModelOption(id: "gpt-5.6-luna", label: "GPT-5.6 Luna"), ModelOption(id: "gpt-5.5", label: "GPT-5.5")])
+        case .omp:
+            return AgentCapabilities(
+                modes: ["plan": .init(flag: "YzVibe read-only tools", description: "仅本地读取和搜索，禁止 Shell 与写入"),
+                        "normal": .init(flag: "YzVibe tool guard", description: "工具执行前由手机审批"),
+                        "trust": .init(flag: "YzVibe trust", description: "跳过工具审批，保留用户提问")],
+                efforts: [], models: [], customModel: false)
         case .claude, .custom:
             return AgentCapabilities(
                 modes: ["plan": .init(flag: "--permission-mode plan", description: "只读分析并给出计划，批准计划后才开始改动"),
@@ -510,7 +517,7 @@ public struct Approval: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct FileEntry: Identifiable, Codable, Hashable, Sendable {
-    public enum Kind: String, Codable, Sendable { case folder, code, markdown, image, other }
+    public enum Kind: String, Codable, Sendable { case folder, code, markdown, image, video, other }
     public var id: String { path }
     public var name: String
     public var path: String

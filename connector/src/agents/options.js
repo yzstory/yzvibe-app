@@ -1,5 +1,6 @@
 // 会话选项（mode / model / effort）与各 Agent 的能力表。
 // 三个选项在两种 Agent 上的语义不同，这里集中映射，Claude / Codex 驱动只负责把结果拼进命令行。
+import { ompCapabilities, OMP_EFFORTS } from './omp-catalog.js';
 import { execFile } from 'node:child_process';
 
 export const MODES = ['plan', 'normal', 'trust'];
@@ -39,14 +40,14 @@ export const CODEX = {
 
 /** 把 POST /sessions 或 PATCH 的 body 归一成 { mode, model, effort }；非法值会被丢弃。yolo:true 等价 mode:'trust'。 */
 export function normalizeOptions(body = {}, agent = 'claude') {
-  const caps = agent === 'codex' ? CODEX : CLAUDE;
+  const caps = agent === 'omp' ? { efforts: OMP_EFFORTS } : agent === 'codex' ? CODEX : CLAUDE;
   const out = {};
   if (typeof body.mode === 'string' && MODES.includes(body.mode)) out.mode = body.mode;
   else if (body.yolo === true) out.mode = 'trust';
   if (body.model === null || body.model === '') out.model = null;
   else if (typeof body.model === 'string' && /^[\w.\-:/@]{1,80}$/.test(body.model)) out.model = body.model;
   if (body.effort === null || body.effort === '') out.effort = null;
-  else if (typeof body.effort === 'string' && (caps.efforts.includes(body.effort) || body.effort === 'ultra')) out.effort = body.effort;
+  else if (typeof body.effort === 'string' && (caps.efforts.includes(body.effort) || (agent !== 'omp' && body.effort === 'ultra'))) out.effort = body.effort;
   return out;
 }
 
@@ -111,6 +112,7 @@ export async function codexContextWindow(model) {
 
 export async function agentCapabilities() {
   return {
+    omp: await ompCapabilities(),
     claude: { modes: CLAUDE.modes, efforts: CLAUDE.efforts, models: CLAUDE.models, customModel: true },
     codex: { modes: CODEX.modes, efforts: CODEX.efforts, models: await codexModels(), customModel: true },
   };

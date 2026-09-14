@@ -1,3 +1,4 @@
+import { scanOmpSessions, parseOmpTranscript } from './agents/omp-transcripts.js';
 // 读取本机终端里已经进行过的会话：Claude Code（~/.claude/projects/*/*.jsonl）与 Codex（~/.codex/sessions/**/rollout-*.jsonl）。
 // 只解析头部信息做列表；手机打开某个会话时再把整份 transcript 翻译成我们的 Message 结构，并在 store 里「接管」它，
 // 之后发消息就走 --resume / exec resume，和手机自己建的会话一样。
@@ -269,8 +270,8 @@ function summarize(input = {}) {
 
 /** 两种 Agent 合并，按更新时间倒序。 */
 export function scanTerminalSessions(opts = {}) {
-  return [...scanClaudeSessions(opts), ...scanCodexSessions(opts)].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  return [...scanClaudeSessions(opts), ...scanCodexSessions(opts), ...scanOmpSessions(opts)].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 }
-export function parseTranscript(session) {
-  return session.agent === 'codex' ? parseCodexTranscript(session.file, session.id) : parseClaudeTranscript(session.file, session.id);
+export function parseTranscript(session, addUpload) {
+  return session.agent === 'omp' ? parseOmpTranscript(session.file, session.id, addUpload) : session.agent === 'codex' ? parseCodexTranscript(session.file, session.id) : parseClaudeTranscript(session.file, session.id);
 }

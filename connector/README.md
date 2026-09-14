@@ -1,16 +1,32 @@
 # yzvibe 桌面连接器
 
-在跑任务的电脑上运行，把本机的 Claude Code 会话暴露给手机 App。协议见 `../shared/protocol.md`。
+在运行任务的电脑上启动，手机即可连接 Claude Code、Codex 和 OMP。无需拉取项目源码。
+
+## 通过 npm 使用
+
+需要 Node.js 20 或更高版本，并提前安装、登录需要使用的 Claude Code / Codex / OMP。连接器不会代装或代登录这些工具。公网连接需要 `cloudflared`；未安装时会尝试通过 npx 启动，失败时退回局域网。
 
 ```bash
-npx yzvibe                               # 直接跑；或从仓库里：cd connector && npm install
-node bin/yzvibe.js                       # = start：后台启动（Cloudflare Tunnel，缺 cloudflared 退回局域网）并打印二维码
-node bin/yzvibe.js start --access=local  # 只在局域网配对
-node bin/yzvibe.js start --access=https://x   # 使用自己的 relay（cloudflared / ngrok）
-node bin/yzvibe.js start --access=100.64.1.2  # Tailscale IP
-node bin/yzvibe.js start --agent=codex   # 新会话默认用 Codex CLI（手机新建会话时也可单独选）
-node bin/yzvibe.js start --agent=mock    # 不调用 Claude，用内置假 Agent 演示完整流程
+npx yzvibe@latest start                 # 后台启动并显示配对二维码
+npx yzvibe@latest status                # 查看状态
+npx yzvibe@latest qr                    # 再次显示二维码
+npx yzvibe@latest restart               # 使用最新包重启（会中断进行中的任务）
+npx yzvibe@latest stop
+npx yzvibe@latest start --access=local   # 仅局域网
+npx yzvibe@latest start --agent=omp      # 新会话默认 OMP
 ```
+
+首次运行 npx 会提示安装，安装后 `start` 启动后台进程，终端可以关闭。数据保存在 `~/.yzvibe`，不会放到 npm 缓存中。直接用 `npx yzvibe start` 也可以；升级时加 `@latest`，避免复用旧版本。已有进程运行时 `start` 不会自动替换它，升级需 `restart`。
+
+长期使用，尤其开机自启，建议全局安装，避免系统清理 npx 缓存后服务入口丢失：
+
+```bash
+npm install -g yzvibe@latest
+yzvibe start
+yzvibe install                         # 可选：注册开机自启
+```
+
+全局安装升级后运行 `yzvibe restart`。已注册开机自启的实例按服务文件中的路径启动；从源码或 npx 迁移到全局安装、或 Node 路径变化时，需用新版 `yzvibe install` 重新注册，并带上原来的启动参数。`npx … restart` 不会改写旧服务的路径。源码开发仍可在 `connector` 下执行 `npm install` 和 `npm start`。
 
 ## 后台运行
 
@@ -175,3 +191,7 @@ APNs JWT 与载荷、推送环境回退与失效清理、实时活动载荷、`/
 - 需要额外专用界面的 MCP elicitation（例如第三方登录表单）会明确提示并拒绝请求，不会自动同意或一直挂起；可回电脑完成。普通 MCP 工具不受此限制。
 
 升级：更新连接器代码后运行 `yzvibe restart`；现有配对与数据保留。手机 Normal 的允许／拒绝兼容现有版本，提问表单与更完整的实时事件需要新版 iOS App。运行中的会话应结束后再重启连接器。
+
+## OMP（Oh My Pi）
+
+支持第三方 OpenAI 兼容供应商、原生会话恢复和手机工具审批。安装、模型配置及能力边界见 [OMP 接入说明](../docs/OMP.md)。

@@ -3,6 +3,8 @@ import UIKit
 
 /// 手机 ⇄ 桌面连接器的抽象（shared/protocol.md）。真实实现走 REST + WebSocket，Mock 用于静态 UI 与测试。
 public protocol ConnectorClient: Sendable {
+    func ompConfiguration(device: Device) async throws -> OmpConfiguration
+    func saveOmpConfiguration(device: Device, input: OmpConfigurationInput) async throws -> OmpConfiguration
     func updateNotifications(device: Device, preferences: NotificationPreferences) async throws
     func trustApproval(device: Device, approvalId: String) async throws -> TrustedApprovalResult
     func attachmentInfo(device: Device, id: String) async throws -> UploadedAttachmentInfo
@@ -31,6 +33,7 @@ public protocol ConnectorClient: Sendable {
     func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo
     /// 下载文件原始字节（GET /files/download）。
     func download(device: Device, sessionId: String, path: String) async throws -> Data
+    func downloadFile(device: Device, sessionId: String, path: String) async throws -> URL
     func upload(device: Device, data: Data, mime: String, filename: String) async throws -> String
     /// 各 Agent 支持的模式 / 模型 / 思考强度（GET /agents），key 为 agent 名。
     func capabilities(device: Device) async throws -> [String: AgentCapabilities]
@@ -130,6 +133,13 @@ public enum ConnectorError: LocalizedError, Sendable {
 
 // MARK: - 真实实现（M2 联调时补全 WS 解析细节）
 
+private final class RejectCredentialRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     private let session: URLSession
     private let tokenProvider: @Sendable (Device) -> String?
@@ -222,9 +232,9 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         return req
     }
 
-    private func perform<T: Decodable>(_ req: URLRequest, as: T.Type) async throws -> T {
+    private func perform<T: Decodable>(_ req: URLRequest, as: T.Type, rejectRedirects: Bool = false) async throws -> T {
         let (data, resp): (Data, URLResponse)
-        do { (data, resp) = try await session.data(for: req) } catch { throw ConnectorError.unreachable }
+        do { (data, resp) = try await session.data(for: req, delegate: rejectRedirects ? RejectCredentialRedirect() : nil) } catch { throw ConnectorError.unreachable }
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
         if ConnectionRecovery.isUnavailableTunnel(http, data: data) {
             throw ConnectorError.server(http.statusCode, "tunnel_unavailable", "原地址的 Cloudflare 隧道不可用")
@@ -452,12 +462,12 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
 
     public func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry] {
         struct Resp: Decodable { var entries: [FileEntry] }
-        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
         return try await perform(device, "/files?sessionId=\(sessionId)&path=\(encoded)", as: Resp.self).entries
     }
 
     public func preview(device: Device, sessionId: String, path: String) async throws -> String {
-        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
         let (data, resp) = try await data(device, "/files/preview?sessionId=\(sessionId)&path=\(encoded)")
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { throw ConnectorError.network("HTTP \(http.statusCode)") }
         return String(decoding: data, as: UTF8.self)
@@ -483,6 +493,16 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         return try await perform(device, "/fs/mkdir", method: "POST", body: Body(parent: parent, name: name), as: Resp.self).path
     }
 
+    public func ompConfiguration(device: Device) async throws -> OmpConfiguration {
+        try await perform(device, "/agents/omp/config", as: OmpConfiguration.self)
+    }
+    public func saveOmpConfiguration(device: Device, input: OmpConfigurationInput) async throws -> OmpConfiguration {
+        guard base(for: device)?.scheme == "https" else {
+            throw ConnectorError.network("保存 API Key 需要 HTTPS 连接，请在设备配置中切换到 Cloudflare 或其他 HTTPS 地址")
+        }
+        // A credential-bearing request must not fall back to an HTTP LAN endpoint.
+        return try await perform(request(device, "/agents/omp/config", method: "POST", body: input), as: OmpConfiguration.self, rejectRedirects: true)
+    }
     public func capabilities(device: Device) async throws -> [String: AgentCapabilities] {
         try await perform(device, "/agents", as: [String: AgentCapabilities].self)
     }
@@ -499,18 +519,49 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
     }
 
     public func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo {
-        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
         return try await perform(device, "/files/stat?sessionId=\(sessionId)&path=\(encoded)", as: FileInfo.self)
     }
 
     public func download(device: Device, sessionId: String, path: String) async throws -> Data {
-        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? path
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
         let (data, resp) = try await data(device, "/files/download?sessionId=\(sessionId)&path=\(encoded)")
         guard let http = resp as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
         if http.statusCode == 401 { throw ConnectorError.unauthorized }
         if http.statusCode == 403 { throw ConnectorError.network("这个文件不在会话工作目录里，出于安全不提供访问") }
         guard (200..<300).contains(http.statusCode) else { throw ConnectorError.network("HTTP \(http.statusCode)") }
         return data
+    }
+
+    /// URLSession streams to disk, so opening a large video does not load it all into RAM.
+    public func downloadFile(device: Device, sessionId: String, path: String) async throws -> URL {
+        let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
+        let endpoint = "/files/download?sessionId=\(sessionId)&path=\(encoded)"
+        let revision = endpointRevision(device.id)
+        func fetchFile() async throws -> (URL, URLResponse) {
+            var req = try request(device, endpoint); req.timeoutInterval = 120
+            return try await session.download(for: req)
+        }
+        let downloaded: (URL, URLResponse)
+        do { downloaded = try await fetchFile() }
+        catch {
+            try Task.checkCancellation()
+            guard await failover(device, expectedRevision: revision) else { throw ConnectorError.unreachable }
+            downloaded = try await fetchFile()
+        }
+        defer { try? FileManager.default.removeItem(at: downloaded.0) }
+        try Task.checkCancellation()
+        guard let response = downloaded.1 as? HTTPURLResponse else { throw ConnectorError.unreachable }
+        if response.statusCode == 401 { throw ConnectorError.unauthorized }
+        guard (200..<300).contains(response.statusCode) else {
+            throw ConnectorError.network(response.statusCode == 403 ? "此文件无法通过连接器访问" : "文件请求失败（HTTP \(response.statusCode)）")
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("yzvibe-file-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = directory.appendingPathComponent((path as NSString).lastPathComponent)
+        do { try FileManager.default.moveItem(at: downloaded.0, to: target) }
+        catch { try? FileManager.default.removeItem(at: directory); throw error }
+        return target
     }
 
     /// 二进制下载：连不上时同样先做一次地址故障转移。
@@ -871,6 +922,18 @@ public final class TokenStore: @unchecked Sendable {
 }
 
 public extension ConnectorClient {
+    func downloadFile(device: Device, sessionId: String, path: String) async throws -> URL {
+        let bytes = try await download(device: device, sessionId: sessionId, path: path)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("yzvibe-file-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent((path as NSString).lastPathComponent)
+        try bytes.write(to: url, options: .atomic)
+        return url
+    }
+
+    func ompConfiguration(device: Device) async throws -> OmpConfiguration { throw ConnectorError.network("请更新电脑连接器以读取 OMP 配置") }
+    func saveOmpConfiguration(device: Device, input: OmpConfigurationInput) async throws -> OmpConfiguration { throw ConnectorError.network("请更新电脑连接器以保存 OMP 配置") }
+
     func updateNotifications(device: Device, preferences: NotificationPreferences) async throws {
         throw ConnectorError.network("请升级连接器以同步通知设置")
     }

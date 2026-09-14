@@ -243,6 +243,8 @@ struct SessionCard: View {
                     } else {
                         StatusDot(session: session.status)
                     }
+                    AgentLogo(agent: session.agent)
+                        .foregroundStyle(p.labelSecondary)
                     Text(session.agent.displayName).font(.yzCaption).foregroundStyle(p.labelSecondary)
                     if session.source != .phone {
                         Chip(session.source.displayName, tone: .fill, icon: session.source == .terminal ? "terminal" : "shippingbox")

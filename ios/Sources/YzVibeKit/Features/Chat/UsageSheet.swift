@@ -81,7 +81,9 @@ struct UsageSheet: View {
                     Spacer()
                     if let ms = s.usage?.turn.durationMs { Text("本轮 \(String(format: "%.1f", Double(ms) / 1000)) s").font(.yzCaption).foregroundStyle(p.labelTertiary) }
                 }
-                Text(s.agent == .codex
+                Text(s.agent == .omp
+                     ? "OMP 返回的上下文占用，可能包含估算；窗口是电脑端模型配置的预算，不代表服务商核验的上限。"
+                     : s.agent == .codex
                      ? "来自最近一次模型调用：输入（已含缓存命中）+ 输出。窗口取自本会话记录；未读取到时显示 --。"
                      : "最近一次调用的输入 + cache 写入 + cache 命中，不含输出。")
                     .font(.yzCaption).foregroundStyle(p.labelTertiary)

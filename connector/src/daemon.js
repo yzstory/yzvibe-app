@@ -5,6 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { HOME } from './store.js';
 import { printQR } from './pairing.js';
 
@@ -109,7 +110,7 @@ export function tailLog({ lines = 60, follow = false, file = LOG_FILE } = {}) {
 }
 
 // ---------- start / stop / status ----------
-function binPath() { return path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'bin', 'yzvibe.js'); }
+function binPath() { return fileURLToPath(new URL('../bin/yzvibe.js', import.meta.url)); }
 
 /** 后台拉起 `yzvibe run <flags>`，等它写好 daemon.json 并通过健康检查后返回实例信息。 */
 export async function startDaemon(flags = [], { waitMs = 75_000 } = {}) {

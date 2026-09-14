@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import AVKit
+import Combine
 
 /// 单个远程文件的查看器：标题是文件名、副标题是完整路径，右上角「下载」与「复制」。
 /// 从文件列表点进来，或在聊天正文里点文件路径唤起。手机只读取内容，不执行任何文件。
@@ -18,6 +20,11 @@ struct FileViewerView: View {
     @State private var loading = true
     @State private var downloading = false
     @State private var share: ShareItem?
+    @State private var localFile: URL?
+    @State private var player: AVPlayer?
+    @State private var showSource = false
+    @State private var showImage = false
+    @State private var openedFile: FileRef?
 
     private struct ShareItem: Identifiable { let id = UUID(); let url: URL }
 
@@ -36,18 +43,39 @@ struct FileViewerView: View {
                             VStack(spacing: 10) {
                                 Image(systemName: "exclamationmark.triangle").font(.system(.title2)).foregroundStyle(p.amber)
                                 Text(error).font(.yzSubhead).foregroundStyle(p.labelSecondary).multilineTextAlignment(.center)
+                                Button("重新加载") { Task { await load() } }
                             }
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                         }
+                    } else if let player {
+                        if let item = player.currentItem {
+                            VideoPlayer(player: player).frame(height: 300)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .onReceive(item.publisher(for: \.status).receive(on: RunLoop.main)) { status in
+                                    if status == .failed { error = "视频无法播放，可使用下载按钮交给其他播放器" }
+                                }
+                        }
                     } else if let image {
+                        Button { showImage = true } label: {
                         PaperCard(padding: 0) {
                             Image(uiImage: image).resizable().scaledToFit()
                                 .frame(maxWidth: .infinity)
                                 .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
+                        }.buttonStyle(.plain).accessibilityLabel("全屏查看图片")
                     } else if let content {
+                        if info?.kind == .markdown && !showSource {
+                            PaperCard {
+                                MarkdownText(text: content, onOpenFile: { openedFile = FileRef(path: $0) },
+                                             onCopy: { _ in store.toast = "已复制" }, sessionId: session?.id,
+                                             baseDirectory: ((info?.path ?? path) as NSString).deletingLastPathComponent)
+                            }
+                        } else {
                         CodeBlock(content, dark: true, lines: nil, language: info?.kind.languageLabel, copyable: true,
                                   onCopy: { _ in store.toast = "已复制文件内容" })
+                        }
+                    } else if let localFile {
+                        DocumentPreview(url: localFile).frame(minHeight: 440)
                     }
                     footer
                 }
@@ -58,16 +86,23 @@ struct FileViewerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if info?.kind == .markdown, content != nil {
+                    Button { showSource.toggle() } label: { Image(systemName: showSource ? "doc.richtext" : "chevron.left.forwardslash.chevron.right") }
+                        .accessibilityLabel(showSource ? "查看渲染结果" : "查看 Markdown 源码")
+                }
                 Button { Task { await download() } } label: {
                     if downloading { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.down.to.line") }
                 }
-                .disabled(downloading || loading || error != nil)
+                .disabled(downloading || loading || info == nil)
                 Button { copyContent() } label: { Image(systemName: "doc.on.doc") }
                     .disabled(content == nil && image == nil)
             }
         }
         .sheet(item: $share) { ShareSheet(url: $0.url) }
+        .fullScreenCover(isPresented: $showImage) { if let image { ImageViewer(image: image) } }
+        .navigationDestination(item: $openedFile) { ref in FileViewerView(session: session, path: ref.path) }
         .task(id: path) { await load() }
+        .onDisappear { player?.pause(); if share == nil { removeLocalFile() } }
     }
 
     private var headline: some View {
@@ -100,7 +135,8 @@ struct FileViewerView: View {
     // MARK: 数据
 
     private func load() async {
-        loading = true; error = nil; content = nil; image = nil
+        loading = true; error = nil; content = nil; image = nil; info = nil
+        player?.pause(); player = nil; removeLocalFile()
         defer { loading = false }
         guard let session, let device = store.device(session.deviceId) else {
             content = "（演示模式没有真实文件）"; return
@@ -108,17 +144,36 @@ struct FileViewerView: View {
         do {
             let meta = try await store.client.fileInfo(device: device, sessionId: session.id, path: path)
             info = meta
-            if meta.kind == .image {
-                image = UIImage(data: try await store.client.download(device: device, sessionId: session.id, path: meta.path))
-                if image == nil { error = "这张图片无法显示，可以下载后再看" }
-            } else if meta.textual {
+            if meta.textual {
                 content = try await store.client.preview(device: device, sessionId: session.id, path: meta.path)
+            } else if meta.kind == .video || meta.kind == .image || meta.mime == "application/pdf" {
+                let url = try await store.client.downloadFile(device: device, sessionId: session.id, path: meta.path)
+                localFile = url
+                try Task.checkCancellation()
+                if meta.kind == .video {
+                    let asset = AVURLAsset(url: url)
+                    guard try await asset.load(.isPlayable) else { throw ConnectorError.network("iPhone 不支持此视频编码，可使用下载按钮交给其他播放器") }
+                    try Task.checkCancellation()
+                    let video = AVPlayer(playerItem: AVPlayerItem(asset: asset)); player = video; video.play()
+                } else if meta.kind == .image, let decoded = UIImage(contentsOfFile: url.path) { image = decoded }
+                // SVG and other native document formats use Quick Look if UIImage cannot decode them.
             } else {
-                error = "文件超过 2MB，用右上角的下载按钮取回"
+                error = "此文件暂不支持内嵌预览，可以用右上角下载按钮打开"
             }
+        } catch is CancellationError {
+            removeLocalFile()
+
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func removeLocalFile() {
+        if let localFile {
+            let dir = localFile.deletingLastPathComponent()
+            if dir.lastPathComponent.hasPrefix("yzvibe-file-") { try? FileManager.default.removeItem(at: dir) }
+        }
+        localFile = nil
     }
 
     private func copyContent() {
@@ -132,11 +187,12 @@ struct FileViewerView: View {
         downloading = true
         defer { downloading = false }
         do {
-            let data = try await store.client.download(device: device, sessionId: session.id, path: info?.path ?? path)
-            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("yzvibe-downloads", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let url = dir.appendingPathComponent(fileName)
-            try data.write(to: url, options: .atomic)
+            let url: URL
+            if let localFile, FileManager.default.fileExists(atPath: localFile.path) { url = localFile }
+            else {
+                url = try await store.client.downloadFile(device: device, sessionId: session.id, path: info?.path ?? path)
+                localFile = url
+            }
             share = ShareItem(url: url)
         } catch {
             store.toast = "下载失败：\(error.localizedDescription)"
@@ -160,6 +216,7 @@ extension FileEntry.Kind {
         case .markdown: "markdown"
         case .code: "code"
         case .image: "image"
+        case .video: "video"
         case .folder: "folder"
         case .other: "text"
         }

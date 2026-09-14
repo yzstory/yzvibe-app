@@ -23,4 +23,4 @@
 
 实际服务器连接、部署和回滚说明保存在 `.claude/skills/test-server/`，该目录已加入 Git 忽略。证书和私钥不在项目中保存。
 
-当前安装入口以仓库真实能力为准：连接器从源码运行，iOS 通过 Xcode 构建，不提供尚未确认的 App Store / TestFlight 下载链接。
+当前安装入口以仓库真实能力为准：连接器通过 npm / npx 启动，iOS 提供内部测试及 Xcode 源码构建，不提供尚未确认的 App Store / TestFlight 下载链接。
