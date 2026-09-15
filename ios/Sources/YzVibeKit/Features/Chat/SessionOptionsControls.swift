@@ -188,7 +188,7 @@ private struct EffortDial: View {
                                     .accessibilityHidden(true)
                             }
                         }
-                        .shadow(color: p.brand.opacity(isUltra ? 0.4 : 0), radius: isUltra ? 16 : 0)
+                        .shadow(color: p.brand.opacity(isUltra ? 0.18 : 0), radius: isUltra ? 10 : 0)
                     HStack {
                         ForEach(levels.indices, id: \.self) { i in
                             if i > 0 { Spacer(minLength: 0) }
@@ -232,7 +232,7 @@ private struct EffortDial: View {
     }
 }
 
-/// A repeating field of curved light bands, clipped to the Ultra track.
+/// Slowly evolving liquid color, clipped to the Ultra track.
 /// The timeline exists only while Ultra is selected and pauses offscreen/background.
 private struct UltraFlowFill: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -241,32 +241,54 @@ private struct UltraFlowFill: View {
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || scenePhase != .active || !visible)) { timeline in
-            Canvas { context, size in
-                let phase = reduceMotion ? 0.35 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
-                let spacing = 150.0
-                let shift = phase * spacing
-                let bend = 18 * sin(phase * 2 * .pi)
-                for band in -2...Int(ceil(size.width / spacing)) {
-                    let x = Double(band) * spacing + shift
-                    var ribbon = Path()
-                    ribbon.move(to: CGPoint(x: x - 25, y: 0))
-                    ribbon.addCurve(to: CGPoint(x: x + 45, y: size.height),
-                                    control1: CGPoint(x: x + 35 + bend, y: size.height * 0.3),
-                                    control2: CGPoint(x: x - 5 + bend, y: size.height * 0.7))
-                    ribbon.addLine(to: CGPoint(x: x + 120, y: size.height))
-                    ribbon.addCurve(to: CGPoint(x: x + 50, y: 0),
-                                    control1: CGPoint(x: x + 70 + bend, y: size.height * 0.7),
-                                    control2: CGPoint(x: x + 110 + bend, y: size.height * 0.3))
-                    ribbon.closeSubpath()
-                    context.fill(ribbon, with: .linearGradient(
-                        Gradient(colors: [.yellow.opacity(0), .yellow.opacity(0.5), .white.opacity(0.55), .yellow.opacity(0)]),
-                        startPoint: CGPoint(x: x - 25, y: 0),
-                        endPoint: CGPoint(x: x + 120, y: size.height)))
-                }
-            }
+            UltraLiquidSurface(time: reduceMotion ? 1.5 : timeline.date.timeIntervalSinceReferenceDate)
         }
         .onAppear { visible = true }
         .onDisappear { visible = false }
+    }
+}
+
+/// Soft overlapping currents with a faint surface reflection; no repeating stripes.
+private struct UltraLiquidSurface: View {
+    let time: Double
+
+    var body: some View {
+        Canvas { context, size in
+            let t = time * 0.55
+            let bounds = CGRect(origin: .zero, size: size)
+            context.fill(Path(bounds), with: .linearGradient(
+                Gradient(colors: [Color(red: 1, green: 0.48, blue: 0.19), Color(red: 1, green: 0.66, blue: 0.28)]),
+                startPoint: .zero, endPoint: CGPoint(x: size.width, y: size.height)))
+            // Differently paced elliptical currents merge without visible edges.
+            for i in 0..<5 {
+                let phase = Double(i) * 2.4
+                let x = size.width * (0.5 + 0.48 * sin(t * (i.isMultiple(of: 2) ? 0.7 : 0.9) + phase))
+                let y = size.height * (0.5 + 0.65 * cos(t * 0.8 + phase))
+                let warm = i.isMultiple(of: 2)
+                let color = warm ? Color(red: 1, green: 0.83, blue: 0.43) : Color(red: 0.86, green: 0.28, blue: 0.09)
+                var current = context
+                current.translateBy(x: x, y: y)
+                current.scaleBy(x: size.width * (0.3 + 0.06 * sin(t + phase)), y: size.height * 1.5)
+                current.fill(Path(ellipseIn: CGRect(x: -1, y: -1, width: 2, height: 2)), with: .radialGradient(
+                    Gradient(stops: [.init(color: color.opacity(warm ? 0.7 : 0.35), location: 0),
+                                     .init(color: color.opacity(warm ? 0.3 : 0.12), location: 0.45),
+                                     .init(color: color.opacity(0), location: 1)]),
+                    center: .zero, startRadius: 0, endRadius: 1))
+            }
+            // A low-contrast, deforming reflection gives the blended color volume.
+            var reflection = Path()
+            for step in 0...60 {
+                let u = Double(step) / 60
+                let y = size.height * (0.48 + 0.19 * sin(u * 5.8 + t) + 0.08 * sin(u * 11 - t * 0.7))
+                let point = CGPoint(x: u * size.width, y: y)
+                if step == 0 { reflection.move(to: point) } else { reflection.addLine(to: point) }
+            }
+            var light = context
+            light.addFilter(.blur(radius: 7))
+            light.stroke(reflection, with: .linearGradient(
+                Gradient(colors: [.clear, Color(red: 1, green: 0.9, blue: 0.65).opacity(0.35), .clear]),
+                startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)), lineWidth: 10)
+        }
     }
 }
 
