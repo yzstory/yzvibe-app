@@ -146,7 +146,6 @@ struct EffortMenu: View {
 private struct EffortDial: View {
     @Environment(\.palette) private var p
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let levels: [String]
     @Binding var effort: String?
     @State private var index = 0
@@ -175,9 +174,6 @@ private struct EffortDial: View {
             Text(EffortLevel.displayName(selected))
                 .font(.title2.weight(.bold)).foregroundStyle(isUltra ? p.brand : p.label)
                 .shadow(color: p.brand.opacity(isUltra ? 0.35 : 0), radius: 12)
-                .phaseAnimator([0.0, 1.0, 0.0], trigger: ultraFeedback) { content, phase in
-                    content.scaleEffect(isUltra && !reduceMotion ? 1 + 0.08 * phase : 1)
-                } animation: { _ in .spring(response: 0.28, dampingFraction: 0.7) }
             GeometryReader { geo in
                 let travel = max(1, geo.size.width - 56)
                 let step = travel / CGFloat(max(1, levels.count - 1))
@@ -186,19 +182,13 @@ private struct EffortDial: View {
                     Capsule().fill(p.brand).frame(width: 56 + CGFloat(index) * step)
                         .overlay {
                             if isUltra {
-                                Capsule().fill(LinearGradient(colors: [p.brand, .yellow.opacity(0.65), p.brand], startPoint: .leading, endPoint: .trailing))
+                                UltraFlowFill()
+                                    .clipShape(Capsule())
                                     .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
                             }
                         }
                         .shadow(color: p.brand.opacity(isUltra ? 0.4 : 0), radius: isUltra ? 16 : 0)
-                    if !reduceMotion {
-                        Capsule().stroke(p.brand.opacity(0.7), lineWidth: 2)
-                            .phaseAnimator([0.0, 1.0, 0.0], trigger: ultraFeedback) { content, phase in
-                                content.scaleEffect(x: 1 + 0.025 * phase, y: 1 + 0.4 * phase)
-                                    .opacity(!isUltra || phase == 0 ? 0 : 1 - phase * 0.7)
-                            } animation: { _ in .easeOut(duration: 0.3) }
-                            .allowsHitTesting(false)
-                    }
                     HStack {
                         ForEach(levels.indices, id: \.self) { i in
                             if i > 0 { Spacer(minLength: 0) }
@@ -207,9 +197,6 @@ private struct EffortDial: View {
                         }
                     }.padding(.horizontal, 28)
                     Circle().fill(.white).frame(width: 44, height: 44)
-                        .overlay {
-                            if isUltra { Image(systemName: "bolt.fill").font(.system(size: 19, weight: .bold)).foregroundStyle(p.brand).accessibilityHidden(true) }
-                        }
                         .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
                         .offset(x: 6 + CGFloat(index) * step)
                 }
@@ -242,6 +229,44 @@ private struct EffortDial: View {
         .onAppear { index = levels.firstIndex(of: effort ?? "") ?? 0 }
         .sensoryFeedback(.selection, trigger: feedback)
         .sensoryFeedback(.impact(weight: .heavy, intensity: 0.85), trigger: ultraFeedback)
+    }
+}
+
+/// A repeating field of curved light bands, clipped to the Ultra track.
+/// The timeline exists only while Ultra is selected and pauses offscreen/background.
+private struct UltraFlowFill: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion || scenePhase != .active || !visible)) { timeline in
+            Canvas { context, size in
+                let phase = reduceMotion ? 0.35 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
+                let spacing = 150.0
+                let shift = phase * spacing
+                let bend = 18 * sin(phase * 2 * .pi)
+                for band in -2...Int(ceil(size.width / spacing)) {
+                    let x = Double(band) * spacing + shift
+                    var ribbon = Path()
+                    ribbon.move(to: CGPoint(x: x - 25, y: 0))
+                    ribbon.addCurve(to: CGPoint(x: x + 45, y: size.height),
+                                    control1: CGPoint(x: x + 35 + bend, y: size.height * 0.3),
+                                    control2: CGPoint(x: x - 5 + bend, y: size.height * 0.7))
+                    ribbon.addLine(to: CGPoint(x: x + 120, y: size.height))
+                    ribbon.addCurve(to: CGPoint(x: x + 50, y: 0),
+                                    control1: CGPoint(x: x + 70 + bend, y: size.height * 0.7),
+                                    control2: CGPoint(x: x + 110 + bend, y: size.height * 0.3))
+                    ribbon.closeSubpath()
+                    context.fill(ribbon, with: .linearGradient(
+                        Gradient(colors: [.yellow.opacity(0), .yellow.opacity(0.5), .white.opacity(0.55), .yellow.opacity(0)]),
+                        startPoint: CGPoint(x: x - 25, y: 0),
+                        endPoint: CGPoint(x: x + 120, y: size.height)))
+                }
+            }
+        }
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
     }
 }
 
