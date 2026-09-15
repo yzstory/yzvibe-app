@@ -2,6 +2,17 @@
 
 连接器通过 Oh My Pi 的 NDJSON RPC 接入，已验证版本 **18.1.20**。官方项目：https://github.com/can1357/oh-my-pi 。不复用 Codex App Server 协议。
 
+## 执行过程与子代理（iOS build 30）
+
+- 连续的工具 / 纯思考消息合并为一个「执行过程」入口；点开后查看步骤，再展开思考、命令或子代理详情。原始消息不合并、不改写，用户消息、审批、附件和独立正文保留边界。
+- OMP 实际返回的 `thinking_delta` / `thinking` 内容可折叠查看；没有返回时只显示等待状态，不生成额外推理文本。思考字段最多保留 32,000 字符，不传签名或原始子代理事件。
+- 请求 `set_subagent_subscription: progress`，接收 `subagent_lifecycle` / `subagent_progress`；同时兼容 `task` 工具结果中的 `details.progress/results`。显示任务名、当前动作、工具数量、耗时、重试及结束状态。
+- 后台 task 返回 `details.async.state: running` 时继续等待子代理；非终结 `agent_end` 不结束任务。高频思考 / 工具进度每 250 ms 合并，终结事件先冲刷缓冲。中断 / 连接失败时收尾，未收到结果的子任务标为待确认。
+- 手机显示等待动效及耗时，支持系统「减少动态效果」，切到后台暂停动画。断网显示等待同步，不假装仍有实时进度。
+- 实时订阅适用于 **连接器启动或恢复的 OMP RPC 会话**。独立终端的历史导入只显示已经写入文件的思考与子任务快照，不是对另一个终端进程的实时订阅；未结束的历史子任务标为状态未知。已有连接器副本中从未保存的思考不能凭空恢复。
+
+本机已用无模型调用的 RPC 探针确认 `set_subagent_subscription` 返回 `progress`；源码接口参考 [OMP RPC](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/modes/rpc/rpc-types.ts)。这些新增字段需要配套的新连接器代码；未升级的连接器仍可使用手机端的工具分组与等待 UI。
+
 ## 安装与模型
 
 使用官方安装方式安装 `omp`；连接器依次使用 `YZVIBE_OMP_BIN`、`~/.local/bin/omp`、PATH 中的 `omp`。

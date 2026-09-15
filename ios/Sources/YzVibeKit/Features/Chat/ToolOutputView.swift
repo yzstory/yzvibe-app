@@ -61,14 +61,16 @@ struct ToolCallCard: View {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let call: ToolCall
+    var live = false
     @State private var expanded = false
 
     private var symbol: String {
-        switch call.name {
-        case "Bash", "PowerShell", "Shell": "terminal"
-        case "Read", "Grep", "Glob": "doc.text.magnifyingglass"
-        case "Write", "Edit", "MultiEdit", "NotebookEdit": "square.and.pencil"
-        case "WebFetch", "WebSearch": "globe"
+        switch call.name.lowercased() {
+        case "bash", "powershell", "shell": "terminal"
+        case "read", "grep", "glob", "find": "doc.text.magnifyingglass"
+        case "write", "edit", "multiedit", "notebookedit": "square.and.pencil"
+        case "webfetch", "websearch", "web_search": "globe"
+        case "task", "subagent": "person.2"
         default: "wrench.and.screwdriver"
         }
     }
@@ -80,6 +82,10 @@ struct ToolCallCard: View {
                 .accessibilityValue(expanded ? "已展开" : "已折叠")
             if expanded {
                 Divider_().padding(.vertical, 2)
+                if !call.subagents.isEmpty {
+                    VStack(spacing: 8) { ForEach(call.subagents) { SubagentProgressRow(agent: $0, live: live) } }
+                        .padding(10)
+                }
                 Text(call.detail.isEmpty ? "无命令详情" : call.detail)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(p.label)
@@ -107,7 +113,7 @@ struct ToolCallCard: View {
             Spacer(minLength: 4)
             switch call.state {
             case .done: Chip(call.outputKind == .diff ? "已改" : "完成", tone: .sage)
-            case .running: ProgressView().controlSize(.small)
+            case .running: Text(call.subagents.isEmpty ? "运行中" : "子代理运行中").font(.yzCaption).foregroundStyle(p.brand)
             case .error: Chip("失败", tone: .danger)
             }
             Image(systemName: "chevron.down").font(.system(.caption2, weight: .bold))

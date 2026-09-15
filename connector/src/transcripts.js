@@ -149,7 +149,7 @@ function codexHeader(file, st) {
       if (meta && firstUser) break;
     }
     firstUser = firstUser ?? fallbackUser;
-    if (!meta?.cwd || !firstUser || !fs.existsSync(meta.cwd)) return null;
+    if (!meta?.cwd || !fs.existsSync(meta.cwd)) return null;
     return { sessionId: meta.id ?? meta.session_id ?? path.basename(file, '.jsonl'), cwd: meta.cwd, title: firstUser, createdAt: meta.timestamp ?? null, originator: meta.originator ?? null, source: meta.source ?? null };
   });
 }
@@ -197,11 +197,24 @@ export function readCodexContext(threadId, { codexHome = CODEX_HOME } = {}) {
 }
 
 export function scanCodexSessions({ codexHome = CODEX_HOME } = {}) {
+  // Desktop messages can contain multi-megabyte image rows, beyond the bounded
+  // header read. Its title index also preserves names edited in the desktop app.
+  const titles = new Map();
+  try {
+    for (const line of lines(fs.readFileSync(path.join(codexHome, 'session_index.jsonl'), 'utf8'))) {
+      const entry = parse(line);
+      if (typeof entry?.id === 'string' && typeof entry.thread_name === 'string' && entry.thread_name.trim()) {
+        titles.set(entry.id, entry.thread_name.trim());
+      }
+    }
+  } catch { /* Older CLI installations may not have a desktop title index. */ }
   const out = [];
   for (const { file, st } of recentFiles(codexDirs(codexHome), /^rollout-.*\.jsonl$/)) {
     const h = codexHeader(file, st); if (!h) continue;
+    const sessionTitle = titles.get(h.sessionId) ?? h.title;
+    if (!sessionTitle) continue;
     out.push({
-      id: `codex:${h.sessionId}`, agent: 'codex', agentSessionId: h.sessionId, cwd: h.cwd, title: h.title, branch: null,
+      id: `codex:${h.sessionId}`, agent: 'codex', agentSessionId: h.sessionId, cwd: h.cwd, title: sessionTitle, branch: null,
       source: h.source === 'exec' ? 'sdk' : 'terminal', status: 'idle', pendingApprovals: 0,
       createdAt: h.createdAt ?? new Date(st.birthtimeMs || st.mtimeMs).toISOString(), updatedAt: new Date(st.mtimeMs).toISOString(),
       mode: 'normal', model: null, effort: null, usage: null, file,

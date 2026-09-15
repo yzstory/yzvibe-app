@@ -3,8 +3,11 @@ import UIKit
 
 /// 轻量 Markdown：围栏代码块（带语言标签与复制按钮）/ 标题 / 列表 / 段落。
 /// 段落内的行内代码若看着像文件路径，会变成可点链接，交给 `onOpenFile` 打开远程文件查看器。
+@MainActor
 struct MarkdownText: View {
     @Environment(\.palette) private var p
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
     let text: String
     /// 点了正文里的文件路径；不给就不做 linkify
     var onOpenFile: ((String) -> Void)?
@@ -14,6 +17,17 @@ struct MarkdownText: View {
     var baseDirectory: String? = nil
 
     private enum Block { case prose(NSAttributedString), code(String, String?), heading(String, Int), bullet(String), numbered(String, String), paragraph(String), image(String, String), table(MarkdownTable) }
+
+    private final class ParsedBlocks: NSObject {
+        let value: [Block]
+        init(_ value: [Block]) { self.value = value }
+    }
+    private static let parsedCache: NSCache<NSString, ParsedBlocks> = {
+        let cache = NSCache<NSString, ParsedBlocks>()
+        cache.countLimit = 160
+        cache.totalCostLimit = 12 * 1024 * 1024
+        return cache
+    }()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -54,6 +68,15 @@ struct MarkdownText: View {
 
     // Keep adjacent paragraphs/headings/lists in one native selection surface.
     private var selectionBlocks: [Block] {
+        // Include rendering inputs so theme, accessibility fonts and path detection stay correct.
+        let key = "\(dynamicTypeSize)|\(colorScheme)|\(p.label)|\(p.brand)|\(onOpenFile != nil)|\(sessionId != nil)|\(text)" as NSString
+        if let cached = Self.parsedCache.object(forKey: key) { return cached.value }
+        let result = makeSelectionBlocks()
+        Self.parsedCache.setObject(ParsedBlocks(result), forKey: key, cost: text.utf8.count * 8 + 256)
+        return result
+    }
+
+    private func makeSelectionBlocks() -> [Block] {
         var result: [Block] = []
         var prose = NSMutableAttributedString(string: "")
         func flush() {
@@ -134,7 +157,7 @@ struct MarkdownText: View {
     }
 
     /// 把看着像文件路径的行内代码变成 `yzfile://` 链接，点击由下面的 openURL 拦截。
-    static func linkifyPaths(_ input: AttributedString, tint: Color) -> AttributedString {
+    nonisolated static func linkifyPaths(_ input: AttributedString, tint: Color) -> AttributedString {
         var out = input
         for run in input.runs where run.link == nil {
             let raw = String(input[run.range].characters)

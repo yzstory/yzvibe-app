@@ -165,3 +165,24 @@
 - iOS 118 项通过（53 XCTest + 65 Swift Testing），包含工作区并行语音测试；日志 /tmp/yzvibe-notification-ios-tests-r3.log。
 - 连接器 103 项全量测试通过；日志 /tmp/yz-notification-node-final.log。
 - 通知修复 33dfb94 已 push；GitHub CI 34728876242 全部通过，工作区语音输入改动保留。尚未上传包含通知修复的 TestFlight 构建。
+
+## 2026-09-14 Android 实施开始
+用户确认全部兼容计划。保留既有改动，Android 独立新增；不发布未验证的厂商推送承诺。
+
+### Android 首版验证
+- assembleDebug / testDebugUnitTest / lintDebug 通过；9 项单元测试覆盖协议和 HTTP 边界。
+- API 35 模拟器实际配对独立 mock 连接器，验证会话切换及进程重启后的草稿恢复、可靠投递、流式回复、审批允许、渲染后的 Markdown 预览。
+- 自动测试发现并修复连续回复未跟随最新位置的问题；同时保留手动离开底部后不自动跳回。
+- 新增 android/tools/smoke.py，可在隔离模拟器重复执行；不启动真实 Agent、不读取真实会话。
+- APK 为 debug 签名首版内部联调包；未提交商店、未 push、未修改 iOS 或重启用户连接器。
+- 国内厂商后台推送仍待品牌/凭据，当前不能宣称锁屏审批可达；其余差异见 android/README.md。
+
+### 2026-09-15 手机历史缓存与渲染优化
+- iOS：新增 actor 磁盘历史缓存（100 MB LRU）；缓存优先展示、重连仅刷新当前会话、其余进入时校准；写入合并并跳过未完整加载的历史。初始渲染最近 80 条，较早消息按需展开；Markdown 解析有界缓存。
+- Android：新增同预算 IO 磁盘缓存；完整快照标记控制重复进入请求，断线后重新校准；保留既有草稿/发送队列存储。
+- 验证：iOS 模拟器 144 项测试通过（含 4 项新缓存/重连测试）；Android 11 项单测、assembleDebug、lintDebug 通过。未执行 push、发布或连接器重启。
+
+### 2026-09-15 TestFlight Build 34
+- 用户授权发布：当前 iOS 源码归档为 0.1.0（34），主 App 与 Widget 构建号一致。
+- 使用共享 App Store Connect API 密钥及 `testFlightInternalTestingOnly=true` 上传，09:06:12 日志确认 `Upload succeeded`、`EXPORT SUCCEEDED`。
+- 归档保留于 `ios/build/YzVibe-build34.xcarchive`，上传日志 `/tmp/yzvibe-build34-upload.log`。按用户既有要求，上传成功后停止，不等待 Apple 后续处理；本轮未 push 或重启连接器。

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { ompThinking, ompSubagentsFromDetails } from './omp-progress.js';
 export const OMP_HOME = process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), '.omp/agent');
 const cache = new Map();
 const textOf = c => typeof c === 'string' ? c : (Array.isArray(c) ? c : []).filter(x => x.type === 'text').map(x => x.text ?? '').join('\n');
@@ -45,12 +46,17 @@ export function parseOmpTranscript(file, sessionId, addUpload) {
       const tool = out.flatMap(x => x.toolCalls).find(t => t.id === m.toolCallId);
       const images = importOmpImages(m.content, addUpload, path.join(path.dirname(path.dirname(path.dirname(file))), 'blobs'));
       if (images.length) out.push({ id: `omp-image-${e.id}`, sessionId, role: 'assistant', text: '', attachments: images, toolCalls: [], streaming: false, createdAt: e.timestamp });
-      if (tool) { tool.state = m.isError ? 'error' : 'done'; tool.output = textOf(m.content).slice(0,64000); }
+      if (tool) {
+        tool.state = m.isError ? 'error' : 'done'; tool.output = textOf(m.content).slice(0,64000);
+        // A transcript is a snapshot, not proof that an old background job is still alive.
+        tool.subagents = ompSubagentsFromDetails(m.details, [], Date.parse(e.timestamp) || Date.now()).map(p =>
+          ['pending', 'running'].includes(p.status) ? { ...p, status: 'unknown', detail: '历史快照，实时状态未知' } : p);
+      }
       continue;
     }
     if (!['user','assistant'].includes(m.role)) continue;
     const toolCalls = (Array.isArray(m.content) ? m.content : []).filter(x=>x.type==='toolCall').map(t=>({ id:t.id,name:t.name,input:t.arguments,detail:JSON.stringify(t.arguments),state:'done' }));
-    out.push({ id:`omp-history-${e.id}`,sessionId,role:m.role,text:textOf(m.content),attachments:importOmpImages(m.content, addUpload, path.join(path.dirname(path.dirname(path.dirname(file))), 'blobs')),toolCalls,streaming:false,createdAt:e.timestamp });
+    out.push({ id:`omp-history-${e.id}`,sessionId,role:m.role,text:textOf(m.content),thinking:ompThinking(m.content),attachments:importOmpImages(m.content, addUpload, path.join(path.dirname(path.dirname(path.dirname(file))), 'blobs')),toolCalls,streaming:false,createdAt:e.timestamp });
   }
   return out.slice(-300);
 }

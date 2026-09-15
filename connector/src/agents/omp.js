@@ -10,6 +10,7 @@ import { expandHome } from '../files.js';
 import { accumulateUsage } from './usage.js';
 import { importOmpImages } from './omp-transcripts.js';
 import { ompCapabilities } from './omp-catalog.js';
+import { ompThinking, ompSubagent, ompSubagentsFromDetails } from './omp-progress.js';
 
 const textOf = content => typeof content === 'string' ? content : (content ?? []).filter(x => x.type === 'text').map(x => x.text ?? '').join('\n');
 const guard = fileURLToPath(new URL('./omp/guard.ts', import.meta.url));
@@ -41,6 +42,9 @@ export class OmpAgent {
     if (!state.sessionId) throw new Error('OMP 未返回会话 ID');
     this.store.setAgentSessionId(this.session.id, state.sessionId);
     this.defaultModel = state.model; this.defaultEffort = state.thinkingLevel;
+    // Progress is aggregated by OMP; raw child token streams would flood the phone.
+    try { await rpc.request('set_subagent_subscription', { level: 'progress' }, 4000); }
+    catch { /* Older OMP versions still expose task progress in tool result details. */ }
     const commands = await rpc.request('get_available_commands'); this.catalog(commands.commands ?? []);
     return rpc;
   }
@@ -85,23 +89,69 @@ export class OmpAgent {
     if (!this.active.messageId) { this.active.messageId = `${this.active.prefix}-${this.active.messages.size}`; this.active.messages.add(this.active.messageId); }
     return this.active.messageId;
   }
-  event(e) {
+  flushThinking() {
+    const a = this.active; if (!a) return;
+    clearTimeout(a.thinkingTimer); a.thinkingTimer = null;
+    if (a.thinkingMessageId) this.store.updateAssistantMessage(this.session.id, a.thinkingMessageId, { thinking: a.thinking ?? '', streaming: true });
+  }
+  flushProgress() {
+    const a = this.active; if (!a) return;
+    clearTimeout(a.progressTimer); a.progressTimer = null;
+    const pending = [...(a.pendingProgress?.values() ?? [])]; a.pendingProgress?.clear();
+    for (const event of pending) this.event(event, true);
+  }
+  subagentEvent(payload) {
+    const a = this.active;
+    const id = payload.progress?.id ?? payload.id; if (!id) return;
+    const existing = this.store.messagesOf(this.session.id).flatMap(m => m.toolCalls)
+      .find(t => t.id.startsWith(`${a.prefix}-`) && t.subagents?.some(p => p.id === id));
+    const toolId = payload.parentToolCallId ? `${a.prefix}-${payload.parentToolCallId}` : existing?.id ?? `${a.prefix}-subagents`;
+    const call = this.store.messagesOf(this.session.id).flatMap(m => m.toolCalls).find(t => t.id === toolId);
+    const subagents = [...(call?.subagents ?? [])];
+    const index = subagents.findIndex(p => p.id === id);
+    const value = ompSubagent(payload, subagents[index]); if (!value) return;
+    if (index >= 0) subagents[index] = value; else subagents.push(value);
+    this.store.upsertToolCall(this.session.id, { id: toolId, name: call?.name ?? 'task', detail: call?.detail ?? '子代理任务',
+      state: call?.state === 'error' ? 'error' : subagents.some(p => ['pending', 'running'].includes(p.status)) ? 'running'
+        : subagents.some(p => ['failed', 'aborted'].includes(p.status)) ? 'error' : 'done', subagents }, this.messageId());
+  }
+  event(e, buffered = false) {
     if (e.type === 'extension_ui_request' && e.method === 'notify' && e.message === 'yzvibe-omp-guard-ready-v1') { this.guardReady = true; return; }
     if (e.type === 'extension_error') { this.fail(new Error('OMP 扩展加载或执行失败，已停止本轮')); return; }
     if (e.type === 'available_commands_update') { this.catalog(e.commands ?? []); return; }
     if (e.type === 'extension_ui_request') { void this.dialog(e).catch(() => this.fail(new Error('OMP 提问处理失败'))); return; }
     const a = this.active; if (!a) return;
+    if (!buffered && ['subagent_progress', 'tool_execution_update'].includes(e.type)) {
+      a.pendingProgress ??= new Map();
+      const key = e.type === 'tool_execution_update' ? `tool:${e.toolCallId}` : `agent:${e.payload?.parentToolCallId ?? ''}:${e.payload?.progress?.id}`;
+      a.pendingProgress.set(key, e);
+      if (!a.progressTimer) { a.progressTimer = setTimeout(() => this.flushProgress(), 250); a.progressTimer.unref?.(); }
+      return;
+    }
+    if (!buffered && ['subagent_lifecycle', 'tool_execution_end', 'message_start', 'message_end', 'agent_end'].includes(e.type)) this.flushProgress();
     if (e.type === 'auto_compaction_end' && (e.result?.warning || e.errorMessage)) {
       this.store.addMessage(this.session.id, { role: 'system', text: 'OMP 上下文压缩未能充分释放空间或执行失败。请检查当前模型的上下文预算；持续重复时可停止本轮，并缩小任务范围或使用更大窗口。' });
     }
-    if (e.type === 'message_start' && e.message?.role === 'assistant') { a.messageId = null; this.messageId(); }
+    if (e.type === 'subagent_lifecycle' || e.type === 'subagent_progress') { this.subagentEvent(e.payload ?? {}); return; }
+    if (e.type === 'message_start' && e.message?.role === 'assistant') {
+      this.flushThinking(); a.thinkingMessageId = null; a.thinking = ''; a.messageId = null; this.messageId();
+    }
     if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'text_delta') this.store.appendDelta(this.session.id, this.messageId(), e.assistantMessageEvent.delta);
+    if (e.type === 'message_update' && e.assistantMessageEvent?.type === 'thinking_delta') {
+      a.thinking = ((a.thinking ?? '') + (e.assistantMessageEvent.delta ?? '')).slice(0, 32_000);
+      a.thinkingMessageId = this.messageId();
+      if (!a.thinkingTimer) { a.thinkingTimer = setTimeout(() => this.flushThinking(), 250); a.thinkingTimer.unref?.(); }
+    }
     if (e.type === 'message_end' && e.message?.role === 'assistant') {
       const id = this.messageId();
       if (!a.done.has(id)) {
         if (e.message.stopReason === 'aborted') a.stopped = true;
         a.done.add(id);
-        if (textOf(e.message.content).trim() || this.store.messagesOf(this.session.id).some(m => m.id === id)) this.store.ensureAssistantMessage(this.session.id, id);
+        this.flushThinking(); a.thinkingMessageId = null;
+        const thinking = ompThinking(e.message.content) || a.thinking || '';
+        if (textOf(e.message.content).trim() || thinking || this.store.messagesOf(this.session.id).some(m => m.id === id)) {
+          this.store.updateAssistantMessage(this.session.id, id, { text: textOf(e.message.content), thinking, streaming: false });
+        }
         this.store.finishMessage(this.session.id, id, textOf(e.message.content));
         const images = importOmpImages(e.message.content, (...args) => this.store.addUpload(...args));
         if (images.length) this.store.addMessage(this.session.id, { role: 'assistant', text: '', attachments: images });
@@ -111,13 +161,23 @@ export class OmpAgent {
     }
     if (e.type.startsWith('tool_execution_')) {
       const result = e.result ?? e.partialResult;
+      const previous = this.store.messagesOf(this.session.id).flatMap(m => m.toolCalls).find(t => t.id === `${a.prefix}-${e.toolCallId}`);
+      let subagents = ompSubagentsFromDetails(result?.details, previous?.subagents);
+      const asyncState = result?.details?.async?.state;
+      const failed = e.isError || asyncState === 'failed';
+      if (failed || asyncState === 'completed') {
+        subagents = subagents.map(p => ['pending', 'running'].includes(p.status)
+          ? { ...p, status: 'unknown', detail: failed ? '工具已失败，子任务结果待确认' : '后台任务已结束，子任务结果待确认', updatedAt: new Date().toISOString() } : p);
+      }
       if (e.type === 'tool_execution_end') {
         const images = importOmpImages(result?.content, (...args) => this.store.addUpload(...args));
         if (images.length) this.store.addMessage(this.session.id, { role: 'assistant', text: '', attachments: images });
       }
-      this.store.upsertToolCall(this.session.id, { id: `${a.prefix}-${e.toolCallId}`, name: e.toolName ?? 'Tool',
+      this.store.upsertToolCall(this.session.id, { id: `${a.prefix}-${e.toolCallId}`, name: e.toolName ?? previous?.name ?? 'Tool',
         ...(e.args && { input: e.args, detail: JSON.stringify(e.args) }),
-        state: e.type === 'tool_execution_end' ? e.isError ? 'error' : 'done' : 'running',
+        state: failed ? 'error' : asyncState === 'running' || subagents.some(p => ['pending', 'running'].includes(p.status)) ? 'running'
+          : asyncState === 'completed' || e.type === 'tool_execution_end' ? 'done' : 'running',
+        ...(subagents.length && { subagents }),
         ...(result && { output: textOf(result.content).slice(0, 64_000), truncated: textOf(result.content).length > 64_000, exitCode: result.details?.exitCode }) }, this.messageId());
     }
     if (e.type === 'command_output') this.store.appendDelta(this.session.id, this.messageId(), typeof e.text === 'string' ? e.text : typeof e.output === 'string' ? e.output : textOf(e.content));
@@ -142,6 +202,7 @@ export class OmpAgent {
   }
   async finish(status) {
     const a = this.active; if (!a || a.finishing) return; a.finishing = true;
+    this.flushProgress();
     try {
       const state = await this.rpc?.request('get_state');
       if (this.active !== a) return;
@@ -154,6 +215,9 @@ export class OmpAgent {
       }));
     } catch { /* Completion remains valid even if the final usage query fails. */ }
     if (this.active !== a) return;
+    this.flushProgress();
+    this.flushThinking();
+    this.settleTools(a, status);
     this.active = null; clearTimeout(a.stopTimer);
     for (const id of a.messages) if (!a.done.has(id)) this.store.finishMessage(this.session.id, id);
     for (const c of this.requests.values()) c.abort(); this.requests.clear();
@@ -168,9 +232,21 @@ export class OmpAgent {
     void this.rpc?.request('abort').catch(() => this.fail(new Error('OMP 中断失败')));
     a.stopTimer = setTimeout(() => this.fail(new Error('OMP 未确认停止，队列已保留')), 10_000); a.stopTimer.unref?.();
   }
+  settleTools(a, status) {
+    for (const id of a.messages) {
+      for (const tool of this.store.messagesOf(this.session.id).find(m => m.id === id)?.toolCalls ?? []) {
+        if (tool.state !== 'running' && !tool.subagents?.some(p => ['pending', 'running'].includes(p.status))) continue;
+        const detail = status === 'interrupted' ? '本轮已中断' : status === 'failed' ? 'OMP 连接中断，执行结果待确认' : '本轮已结束，未收到子任务的最终状态';
+        this.store.upsertToolCall(this.session.id, { ...tool, state: 'error', output: detail,
+          ...(tool.subagents && { subagents: tool.subagents.map(p => ['pending', 'running'].includes(p.status)
+            ? { ...p, status: status === 'interrupted' ? 'aborted' : 'unknown', detail, updatedAt: new Date().toISOString() } : p) }) }, id);
+      }
+    }
+  }
   fail(error) {
     const a = this.active;
     if (a) {
+      this.flushProgress(); this.flushThinking(); this.settleTools(a, 'failed');
       this.active = null; clearTimeout(a.stopTimer);
       for (const id of a.messages) {
         for (const tool of this.store.messagesOf(this.session.id).find(m => m.id === id)?.toolCalls ?? []) {

@@ -255,3 +255,24 @@ Claude 需要权限时调用 MCP 工具 `approve`（connector/src/mcp-approve.js
 ### 手机文件附件
 
 照片、拍摄内容统一预处理为 JPEG；系统文件选择器读取的文档保留原始字节与文件名。手机每条消息最多 6 个附件、合计 20 MB。文档发送沿用上传 ID 与可靠待发送箱；连接器将文档的本地路径作为文本输入提供给 Agent，图片仍使用原生图片输入。上传元数据持久化到 `upload-info/`，随过期附件一起清理；聊天里可通过元数据接口区分缩略图和文件预览。
+
+## Android 客户端兼容说明（2026-09-14）
+
+Android 首版以 `connector/src/server.js` 当前实现为准，复用既有 REST/WS，不变更 iOS 的协议：
+
+- `GET /health` 的 `connectorId` 用于确认切换地址后仍是原电脑。
+- `/ws` 认证使用 Authorization header；发送 `sync.request`（`sessionIds` 最多 100 项）后接收同一有序通道上的 `sync.snapshot`，再应用后续事件，不用晚到的 REST 快照覆盖新增量。
+- `POST /sessions/:id/deliveries` 带稳定 `clientMessageId`；先持久化客户端待投递，再上传附件和发送。响应不确定时查询 `GET /sessions/:id/deliveries/:id`，仅 `404` 且 `code=delivery_missing` 表示可以重新投递。
+- `GET /agents` 的 `modes` 是以模式名为 key 的对象；`models` 是数组，模型可以自带 `efforts`。OMP 未配置的模型不填充假目录。
+- Android 目前未实现厂商后台推送。`/devices/push` 仍只用于 APNs，不能向它注册 FCM 或国产厂商 token。未来扩展必须显式区分平台和供应商，保持旧 iOS 兼容。
+
+## OMP 执行过程（iOS build 30）
+
+增量兼容字段，无需变更现有 REST 路径：
+
+- `Message.thinking?: string`：模型实际输出的思考文本，最大 32,000 字符；缺省为空。通过 `message.updated` 发送快照并随消息持久化。最终 `message.updated` 包含完整正文，随后发送 `message.done`。
+- `ToolCall.subagents?: SubagentProgress[]`：在 REST 消息、执行记录和 `tool.call` 事件中保持同一结构。缺省为空。
+- `SubagentProgress`：`id, name, agent, status, task, detail, toolCount, durationMs, updatedAt`。`status` 为 `pending/running/completed/failed/aborted/unknown`，`updatedAt` 为 ISO 8601 日期；`durationMs` 是该快照时已用的毫秒数。只有会话在线且正在运行时才继续本地计时。
+- `detail` 是当前工具、意图或重试状态的有限投影，不包含完整子代理事件、模型配置、签名或日志。子代理归属原始 `toolCallId`，后续助手消息不会改变其归属。
+- `task` 返回并不一定表示后台执行结束；优先依据 OMP `details.async.state` 与子代理生命周期。缺少终结证据、断线或终端历史快照以 `unknown` 表示，不显示永久运行中的动画。
+- 高频 thinking / 工具 / 子代理进度按 250 ms 合并；终结事件先冲刷进度。手机端分组只改变展示，不修改原始消息 ID 或审批顺序。旧客户端忽略新增字段。

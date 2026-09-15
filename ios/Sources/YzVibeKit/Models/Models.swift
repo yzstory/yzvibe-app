@@ -376,6 +376,7 @@ public struct ToolCall: Codable, Hashable, Sendable {
     public var truncated: Bool
     public var exitCode: Int?
     public var files: [String] = []
+    public var subagents: [SubagentProgress] = []
 
     public init(id: String = UUID().uuidString, name: String, detail: String, state: State,
                 output: String? = nil, outputKind: OutputKind = .text, truncated: Bool = false) {
@@ -383,7 +384,7 @@ public struct ToolCall: Codable, Hashable, Sendable {
         self.output = output; self.outputKind = outputKind; self.truncated = truncated
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, detail, state, output, outputKind, truncated, exitCode, files }
+    enum CodingKeys: String, CodingKey { case id, name, detail, state, output, outputKind, truncated, exitCode, files, subagents }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
@@ -395,6 +396,7 @@ public struct ToolCall: Codable, Hashable, Sendable {
         truncated = try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false
         exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode)
         files = try c.decodeIfPresent([String].self, forKey: .files) ?? []
+        subagents = try c.decodeIfPresent([SubagentProgress].self, forKey: .subagents) ?? []
     }
 }
 
@@ -403,6 +405,7 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
     public var sessionId: String
     public var role: MessageRole
     public var text: String
+    public var thinking: String = ""
     public var attachments: [String]
     public var toolCalls: [ToolCall]
     public var approvalId: String?
@@ -418,13 +421,14 @@ public struct Message: Identifiable, Codable, Hashable, Sendable {
         self.toolCalls = toolCalls; self.approvalId = approvalId; self.createdAt = createdAt; self.streaming = streaming; self.isLocal = isLocal
     }
 
-    enum CodingKeys: String, CodingKey { case id, sessionId, role, text, attachments, toolCalls, approvalId, createdAt, streaming, clientMessageId }
+    enum CodingKeys: String, CodingKey { case id, sessionId, role, text, thinking, attachments, toolCalls, approvalId, createdAt, streaming, clientMessageId }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(String.self, forKey: .id)
         sessionId = try c.decodeIfPresent(String.self, forKey: .sessionId) ?? ""
         role = MessageRole(rawValue: try c.decodeIfPresent(String.self, forKey: .role) ?? "") ?? .assistant
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        thinking = try c.decodeIfPresent(String.self, forKey: .thinking) ?? ""
         attachments = try c.decodeIfPresent([String].self, forKey: .attachments) ?? []
         toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls) ?? []
         approvalId = try c.decodeIfPresent(String.self, forKey: .approvalId)

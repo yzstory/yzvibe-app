@@ -43,7 +43,7 @@
 - **会话品牌图标**：名称前显示 Codex、Claude、OMP 的随 App 打包的原彩高清 PNG Logo，保留状态指示与运行动画。
 - **输入与阅读**：统一附件/命令/技能菜单、带触感的思考力度滑条、原生文本选区、复制、按住说话及正文朗读。
 
-客户端目前为 **SwiftUI / iOS 17+**，iOS 26 使用 Liquid Glass，低版本使用材质模糊。Android 和微信小程序仅预留目录。
+iOS 客户端为 **SwiftUI / iOS 17+**，iOS 26 使用 Liquid Glass，低版本使用材质模糊。Android 原生首版已可构建（Android 10+），支持配对、会话、聊天、审批、文件和语音入口；仍需厂商后台推送和真机验收，详见 [Android 构建与兼容说明](android/README.md)。微信小程序仅预留目录。
 
 ### Claude Code、Codex 与 OMP 的区别
 
@@ -246,14 +246,14 @@ YzVibe/
 │   ├── PRD.md          产品需求与规划
 │   └── DESIGN.md       UI 设计规范
 ├── design/             Logo 生成原图、提示词与设计画布
-├── android/            Android 预留目录
+├── android/            Kotlin / Compose Android 客户端
 └── miniprogram/        微信小程序预留目录
 ```
 
 ## 后续方向
 
 - 加固消息发送、队列恢复、地址切换与 Live Activity 的异常处理。
-- Android 与微信小程序客户端。
+- Android 厂商后台推送、真机兼容性与完整体验对齐；微信小程序客户端。
 - 持续完善远程连接、通知和多 Agent 交互体验。
 
 以上为规划，当前可用能力以代码及本文功能表为准。

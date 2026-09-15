@@ -38,6 +38,17 @@ struct ChatView: View {
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
+    @State private var historyLimit = 80
+    @State private var historyAnchor: String?
+    private var timeline: [ChatTimelineRow] { ChatTimelineRow.make(Array(messages.suffix(historyLimit)), groupsMixedContent: session?.agent == .omp) }
+    private var runProgress: ChatRunProgress? {
+        guard let session, busy else { return nil }
+        let start = messages.lastIndex(where: { $0.role == .user }) ?? messages.startIndex
+        let current = messages.suffix(from: start)
+        return ChatRunProgress(status: session.status, connected: store.device(session.deviceId)?.online == true,
+            startedAt: current.first?.createdAt ?? session.updatedAt, calls: current.flatMap(\.toolCalls),
+            streamingText: current.contains { $0.streaming && !$0.text.isEmpty })
+    }
 
     var body: some View {
         ZStack {
@@ -70,8 +81,15 @@ struct ChatView: View {
                         else if nearBottom { followsLatest = true }
                     }
                     .onTapGesture { hideKeyboard() }
-                    .onChange(of: messages.count) { _, _ in
+                    .onChange(of: historyLimit) { _, _ in
+                        if let historyAnchor { proxy.scrollTo(historyAnchor, anchor: .top); self.historyAnchor = nil }
+                    }
+                    .onChange(of: messages.count) { oldCount, newCount in
                         if followsLatest { scrollToBottom(proxy, animated: false) }
+                        else if oldCount > 0 && newCount > oldCount {
+                            // Keep the beginning of the visible window stable while reading history.
+                            historyLimit += newCount - oldCount
+                        }
                     }
                     .onChange(of: queued.count) { _, _ in
                         if followsLatest { scrollToBottom(proxy, animated: false) }
@@ -169,6 +187,7 @@ struct ChatView: View {
             }
         }
         .task(id: sessionId) { await store.loadMessages(sessionId) }
+        .onDisappear { store.leaveMessages(sessionId) }
         // 上一屏（新建会话表单 / 搜索框）的键盘有时会把输入条顶在半空，进来先收掉
         .onAppear { hideKeyboard() }
         // 会话在别处被删掉时别停在空白页
@@ -210,14 +229,37 @@ struct ChatView: View {
     @ViewBuilder
     private var messageList: some View {
         LazyVStack(spacing: 14) {
+            if messages.count > historyLimit {
+                Button("加载更早的消息（还有 \(messages.count - historyLimit) 条）") {
+                    followsLatest = false
+                    historyAnchor = timeline.first?.id
+                    historyLimit += 80
+                }.font(.yzFootnote)
+            }
             if store.loadingMessages.contains(sessionId), !messages.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("正在同步历史…").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                 }
             }
-            ForEach(messages) { m in
-                MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
+            let rows = timeline
+            ForEach(rows) { row in
+                switch row {
+                case .message(let m):
+                    MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
+                case .activity(let group):
+                    HStack {
+                        ChatActivityCard(activity: group, progress: row.id == rows.last?.id ? runProgress : nil,
+                            live: busy && store.device(session?.deviceId ?? "")?.online == true,
+                            onOpenFile: { openFile = FileRef(path: $0) })
+                        Spacer(minLength: 24)
+                    }
+                }
+            }
+            if let progress = runProgress {
+                if case .activity = rows.last {} else {
+                    HStack { ChatWaitingView(progress: progress); Spacer(minLength: 24) }
+                }
             }
             ForEach(store.outbox.filter { $0.sessionId == sessionId }) { item in
                 OutgoingMessageCard(item: item,
@@ -422,6 +464,7 @@ struct AssistantBubble: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !message.thinking.isEmpty { ThinkingDisclosure(text: message.thinking) }
             if !message.text.isEmpty {
                 MarkdownText(text: message.text, onOpenFile: onOpenFile, onCopy: { _ in store.toast = "已复制代码" }, sessionId: message.sessionId)
                     .foregroundStyle(p.label).textSelection(.enabled)
@@ -453,9 +496,6 @@ struct AssistantBubble: View {
                 }
                 .font(.system(.subheadline, weight: .medium))
                 .buttonStyle(.plain)
-            }
-            if message.streaming {
-                HStack(spacing: 4) { ForEach(0..<3, id: \.self) { _ in Circle().fill(p.labelTertiary).frame(width: 6, height: 6) } }
             }
         }
         .lineSpacing(4)

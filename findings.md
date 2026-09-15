@@ -171,3 +171,12 @@
 - 改成真实 run 完成事件，Codex 保存 phase，成功结束再通知本轮 final；保留聊天全部增量/消息结束事件。APNs 与本地回退按手机分工。
 - PATCH /devices/notifications 认证后按手机持久化开关，App 串行同步并在重连时重试；离线同步失败展示说明。连接器版本 0.1.3。
 - 首次 iOS 回归因演示模式触发 UNUserNotificationCenter（无 App bundle）崩溃；演示模式跳过系统通知清理后 118 项通过。
+
+## Android 调研
+android 仅 .gitkeep。iOS 使用 Swift 原生状态层，REST/WS 可复用。现有推送仅 APNs；国内厂商推送需外部凭据。安装环境仅发现 Java 8，无 SDK。
+
+### Android 实施发现
+- modes 是对象，models/efforts 是数组，OMP 力度要优先读当前模型；Codex/Claude 保留客户端 Ultra 入口。
+- Markwon 的可选择 TextView 需要同时处理短按链接，才能兼顾逐字复制与远程文档打开；已在模拟器确认。
+- 本地草稿使用 AtomicFile 小文档，未引入 Room；大规模离线历史仍属后续工作。
+- 现有推送接口只接受 APNs 十六进制 token，不能直接复用给 Android。

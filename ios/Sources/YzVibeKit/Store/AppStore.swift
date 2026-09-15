@@ -58,6 +58,10 @@ public final class AppStore {
     private let persistence = DevicePersistence()
     private var eventTasks: [String: Task<Void, Never>] = [:]
     private var loadedMessages: Set<String> = []
+    @ObservationIgnored var historyCache: MessageCache?
+    @ObservationIgnored private var cacheWrites: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var visibleHistories: Set<String> = []
+    @ObservationIgnored private var staleHistories: Set<String> = []
     public private(set) var loadingMessages: Set<String> = []
     public private(set) var messageLoadErrors: [String: String] = [:]
     public private(set) var loadingDevices: Set<String> = []
@@ -92,6 +96,7 @@ public final class AppStore {
                 store?.adoptEndpoint(deviceId, base: base)
             }
         }
+        store.historyCache = MessageCache()
         store.devices = store.persistence.load()
         store.selectedDeviceId = UserDefaults.standard.string(forKey: "yz.selectedDevice") ?? store.devices.first?.id
         return store
@@ -105,6 +110,9 @@ public final class AppStore {
         sessions = MockData.sessions
         approvals = MockData.approvals
         for s in sessions { messages[s.id] = MockData.messages(for: s.id); loadedMessages.insert(s.id) }
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--omp-progress-preview") { OmpActivityPreview.configure(self) }
+        #endif
     }
 
     // MARK: 派生
@@ -191,6 +199,7 @@ public final class AppStore {
         if streamDevices.contains(device.id) { await syncDevice(device); return }
         guard loadingDevices.insert(device.id).inserted else { return }
         defer { loadingDevices.remove(device.id) }
+        staleHistories.formUnion(sessions.filter { $0.deviceId == device.id }.map(\.id))
         do {
             let fresh = try await client.sessions(device: device).map { var s = $0; s.deviceId = device.id; return s }
             sessions.removeAll { $0.deviceId == device.id }
@@ -247,7 +256,7 @@ public final class AppStore {
                     setDevice(device.id) { $0.endpoints = health.endpoints }
                 }
                 setDevice(device.id) { $0.online = true; $0.lastSeen = .now }
-                _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && loadedMessages.contains($0.id) }.map(\.id))
+                _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && visibleHistories.contains($0.id) }.map(\.id))
                 if let token = PushCenter.shared.token { await registerPush(token: token, environment: PushCenter.shared.environment) }
                 connectionErrors[device.id] = nil
                 return // Session/message state is applied on the ordered WS snapshot channel.
@@ -274,7 +283,7 @@ public final class AppStore {
                 $0.agents = Dictionary(grouping: fresh, by: \.agent).mapValues(\.count) }
 
             // 已经打开过的会话补上离线期间的新消息
-            for sid in loadedMessages where fresh.contains(where: { $0.id == sid }) {
+            for sid in visibleHistories where fresh.contains(where: { $0.id == sid }) {
                 await catchUpMessages(sid)
             }
             if pushToken == nil, let t = PushCenter.shared.token { await registerPush(token: t, environment: PushCenter.shared.environment) }
@@ -297,6 +306,8 @@ public final class AppStore {
             merged.sort { $0.createdAt < $1.createdAt }
             messages[sessionId] = merged
             syncCursor[sessionId] = fetched.last?.id
+            staleHistories.remove(sessionId)
+            scheduleHistoryCache(sessionId, device: device.id)
         } catch { }
     }
 
@@ -427,7 +438,12 @@ public final class AppStore {
     }
 
     public func loadMessages(_ sessionId: String) async {
-        guard !loadedMessages.contains(sessionId), let s = session(sessionId), let device = device(s.deviceId), loadingMessages.insert(sessionId).inserted else { return }
+        visibleHistories.insert(sessionId)
+        guard (!loadedMessages.contains(sessionId) || staleHistories.contains(sessionId)), let s = session(sessionId), let device = device(s.deviceId), loadingMessages.insert(sessionId).inserted else { return }
+        if messages[sessionId] == nil, let cached = await historyCache?.load(device: device.id, session: sessionId), messages[sessionId] == nil, session(sessionId) != nil {
+            messages[sessionId] = cached
+        }
+        guard session(sessionId)?.deviceId == device.id else { loadingMessages.remove(sessionId); return }
         messageLoadErrors[sessionId] = nil
         var awaitingSnapshot = false
         defer { if !awaitingSnapshot { loadingMessages.remove(sessionId) } }
@@ -446,7 +462,8 @@ public final class AppStore {
             for i in list.indices { list[i].sessionId = sessionId }
             messages[sessionId] = list
             syncCursor[sessionId] = list.last?.id
-            loadedMessages.insert(sessionId)
+            loadedMessages.insert(sessionId); staleHistories.remove(sessionId)
+            scheduleHistoryCache(sessionId, device: device.id)
         } catch { loadedMessages.remove(sessionId); if !(error is CancellationError) { messageLoadErrors[sessionId] = error.localizedDescription } }
     }
 
@@ -507,7 +524,23 @@ public final class AppStore {
         } catch { toast = error.localizedDescription }
     }
 
+    public func leaveMessages(_ id: String) { visibleHistories.remove(id) }
+
+    private func scheduleHistoryCache(_ id: String, device: String) {
+        guard historyCache != nil, loadedMessages.contains(id), cacheWrites[id] == nil else { return }
+        cacheWrites[id] = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            guard let self, let list = messages[id], session(id)?.deviceId == device else { self?.cacheWrites[id] = nil; return }
+            await historyCache?.save(device: device, session: id, messages: list.filter { !$0.isLocal })
+            cacheWrites[id] = nil
+            if messages[id] != list, session(id)?.deviceId == device { scheduleHistoryCache(id, device: device) }
+        }
+    }
+
     private func forgetLocally(_ id: String) {
+        cacheWrites[id]?.cancel(); cacheWrites[id] = nil
+        if let owner = session(id)?.deviceId { Task { await historyCache?.remove(device: owner, session: id) } }
+        visibleHistories.remove(id); staleHistories.remove(id)
         snapshotTimeouts[id]?.cancel(); snapshotTimeouts[id] = nil
         loadingMessages.remove(id); messageLoadErrors[id] = nil
         taskRuns[id] = nil; runErrors[id] = nil
@@ -719,13 +752,22 @@ public final class AppStore {
     }
 
     func handle(_ ev: ConnectorEvent, device: Device) {
+        defer {
+            switch ev {
+            case .snapshot(let snap): for id in snap.messages.keys { scheduleHistoryCache(id, device: device.id) }
+            case .messageDelta(let id, _, _), .messageDone(let id, _), .toolCall(let id, _, _): scheduleHistoryCache(id, device: device.id)
+            case .messageUpdated(let message): scheduleHistoryCache(message.sessionId, device: device.id)
+            default: break
+            }
+        }
         switch ev {
         case .connected:
+            staleHistories.formUnion(sessions.filter { $0.deviceId == device.id }.map(\.id))
             syncNotificationPreferences()
             streamDevices.insert(device.id)
             Task { [weak self] in
                 guard let self else { return }
-                do { _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && loadedMessages.contains($0.id) }.map(\.id)) }
+                do { _ = try await client.requestSnapshot(device: device, sessionIds: sessions.filter { $0.deviceId == device.id && visibleHistories.contains($0.id) }.map(\.id)) }
                 catch { connectionErrors[device.id] = error.localizedDescription }
             }
         case .snapshot(let snapshot):
@@ -736,7 +778,8 @@ public final class AppStore {
             approvals.append(contentsOf: snapshot.approvals.map { var a = $0; a.deviceId = device.id; return a })
             for (sid, list) in snapshot.messages {
                 snapshotTimeouts[sid]?.cancel(); snapshotTimeouts[sid] = nil
-                messages[sid] = list
+                if messages[sid] != list { messages[sid] = list }
+                staleHistories.remove(sid)
                 loadedMessages.insert(sid); loadingMessages.remove(sid); messageLoadErrors[sid] = nil
             }
             setDevice(device.id) { $0.online = true; $0.lastSeen = .now; $0.sessionCount = fresh.filter { $0.status != .closed }.count }
@@ -816,6 +859,7 @@ public final class AppStore {
             }
             Notifier.clear(id: "approval-\(aid)")
         case .disconnected(let error):
+            staleHistories.formUnion(sessions.filter { $0.deviceId == device.id }.map(\.id))
             setDevice(device.id) { $0.online = false }
             connectionErrors[device.id] = error?.localizedDescription ?? "实时连接已断开，正在重连"
             Task { await probeConnection(device) }

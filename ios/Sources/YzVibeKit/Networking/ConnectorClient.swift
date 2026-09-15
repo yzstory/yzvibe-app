@@ -826,6 +826,9 @@ final class ConnectorSocket: @unchecked Sendable {
                                 truncated: obj["truncated"] as? Bool ?? false)
             call.exitCode = obj["exitCode"] as? Int
             call.files = obj["files"] as? [String] ?? []
+            if let raw = obj["subagents"], let data = try? JSONSerialization.data(withJSONObject: raw) {
+                call.subagents = (try? JSONDecoder.yz.decode([SubagentProgress].self, from: data)) ?? []
+            }
             return .toolCall(sessionId: sid, call: call, messageId: obj["messageId"] as? String)
         case "approval.requested":
             guard let data = try? JSONSerialization.data(withJSONObject: obj),

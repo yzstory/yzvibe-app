@@ -457,6 +457,14 @@ export class Store extends EventEmitter {
     this.#saveMessages(sessionId);
     this.emit('event', { type: 'message.updated', sessionId, message: m });
   }
+  updateAssistantMessage(sessionId, messageId, { text, thinking, streaming }) {
+    const m = this.ensureAssistantMessage(sessionId, messageId);
+    if (typeof text === 'string') m.text = text;
+    if (typeof thinking === 'string') m.thinking = thinking;
+    if (typeof streaming === 'boolean') m.streaming = streaming;
+    this.#saveMessages(sessionId);
+    this.emit('event', { type: 'message.updated', sessionId, message: m });
+  }
   /**
    * 新增 / 更新一张工具卡。`output` 是工具的实际输出（Bash 的 stdout、Edit 的 diff），
    * 手机上可以展开看——之前只显示「运行中 / 完成」，看不到结果就没法判断该不该批下一步。
@@ -487,7 +495,8 @@ export class Store extends EventEmitter {
     this.#saveMessages(sessionId);
     const t = m.toolCalls[i >= 0 ? i : m.toolCalls.length - 1];
     this.emit('event', { type: 'tool.call', sessionId, messageId: m.id, toolId: t.id, name: t.name, input: { detail: t.detail }, state: t.state,
-                         output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated), exitCode: t.exitCode ?? null, files: t.files ?? [] });
+                         output: t.output ?? null, outputKind: t.outputKind ?? 'text', truncated: Boolean(t.truncated), exitCode: t.exitCode ?? null, files: t.files ?? [],
+                         ...(t.subagents && { subagents: t.subagents }) });
   }
 
   // ---------- 审批 ----------
