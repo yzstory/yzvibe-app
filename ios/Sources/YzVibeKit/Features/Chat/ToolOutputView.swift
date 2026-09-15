@@ -14,7 +14,7 @@ struct ToolCallGroup: View {
     var body: some View {
         Button { showingCalls = true } label: {
             HStack(spacing: 10) {
-                Image(systemName: "terminal").foregroundStyle(p.brand)
+                Image(systemName: "terminal").foregroundStyle(p.labelSecondary)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(calls.count) 次工具调用").font(.yzFootnoteStrong).foregroundStyle(p.label)
                     Text(names).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1)
@@ -27,9 +27,9 @@ struct ToolCallGroup: View {
                 if failures > 0 { Chip("\(failures) 项失败", tone: .danger) }
                 Image(systemName: "chevron.right").font(.system(.caption2, weight: .bold)).foregroundStyle(p.labelTertiary)
             }
-            .padding(12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
             .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(p.fillSecondary))
         }
         .buttonStyle(.plain)
         .accessibilityHint("打开工具调用列表，展开可查看命令")

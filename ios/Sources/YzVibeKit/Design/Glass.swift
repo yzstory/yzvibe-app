@@ -2,9 +2,8 @@ import SwiftUI
 
 /// 漂浮层材质：iOS 26 走系统 `glassEffect`，更低版本回落到系统材质 + 发丝描边。
 ///
-/// 方向 B 只在真正漂浮的东西上用它 —— 输入条、Toast、扫码取景框。内容一律用 `PaperCard`
-/// 或系统 `List`。旧版那层手绘的白色高光渐变已经去掉：它在纯色背景上会显出塑料感，
-/// 而系统材质自己就带高光。
+/// 用于导航、输入区、Toast 和配对遮罩等悬浮层。
+/// 会话和审批内容使用不透明内容面，避免与控制层争夺视觉焦点。
 public struct LiquidGlass<S: Shape & InsettableShape>: ViewModifier {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -50,7 +49,7 @@ public extension View {
 // 高度用 @ScaledMetric 跟随动态字体；系统的 borderedProminent 没有投影，这里也不加，
 // 免得在暖纸底上显出一层「浮起来的塑料」。
 
-/// 主按钮：品牌橙实心 + 白字（4.58:1）。
+/// 主按钮：品牌橙实心 + 随深浅色适配的 brandInk。
 public struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p

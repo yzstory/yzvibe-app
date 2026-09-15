@@ -33,7 +33,7 @@
 | 少打扰的通知 | 按设备同步审批与完成通知偏好；只在最终回复时通知，支持锁屏与 Live Activity（需配置 APNs） |
 | 日常常驻   | 后台守护、日志轮转、设备撤销、资源清理、macOS / Linux 用户服务             |
 
-**当前版本**：Connector **[0.1.3](https://www.npmjs.com/package/yzvibe)** 已发布到 npm，直接运行 `npx yzvibe@latest start`，无需拉取源码。iOS 最新构建为 **0.1.0 (28)**，2026-09-14 已上传，Apple 后续处理与内部测试可安装状态尚未核验；最近确认进入内部测试的是 [build 27](docs/RELEASE-0.1.0-27.md)。本仓库未提供公开邀请链接，非内部测试成员可从源码构建。详见 [build 28](docs/RELEASE-0.1.0-28.md)。
+**当前版本**：Connector **[0.1.3](https://www.npmjs.com/package/yzvibe)** 已发布到 npm，直接运行 `npx yzvibe@latest start`，无需拉取源码。iOS 最新构建为 **[0.1.0 (35)](docs/RELEASE-0.1.0-35.md)**，2026-09-15 已确认进入 TestFlight 内部测试，包含会话列表、聊天阅读与大字号排版优化。本仓库未提供公开邀请链接，非内部测试成员可从源码构建。
 
 **最近更新**：
 

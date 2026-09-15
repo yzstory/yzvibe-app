@@ -366,7 +366,8 @@ struct MessageRow: View {
         case .user:
             HStack { Spacer(minLength: 60); UserBubble(message: message) }
         case .assistant, .tool:
-            HStack { AssistantBubble(message: message, onOpenFile: onOpenFile); Spacer(minLength: 40) }
+            AssistantBubble(message: message, onOpenFile: onOpenFile)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .system:
             if let aid = message.approvalId, let a = store.approval(aid) {
                 ApprovalCardView(approval: a, showsContext: false)
@@ -500,8 +501,8 @@ struct AssistantBubble: View {
         }
         .lineSpacing(4)
         .fixedSize(horizontal: false, vertical: true)
-        .padding(18)
-        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(p.surfaceElevated))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 8)
         .task(id: message.streaming ? "" : message.text) {
             guard message.role == .assistant, !message.streaming else { spokenText = ""; return }
             spokenText = ReplySpeechText.extract(message.text)
@@ -605,7 +606,7 @@ struct InputBar<Accessory: View>: View {
                         if let onSkills { Button(action: onSkills) { Label("技能", systemImage: "sparkles") } }
                     }
                 } label: {
-                    Image(systemName: "sparkles").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.brand)
+                    Image(systemName: "sparkles").font(.system(.subheadline, weight: .semibold)).foregroundStyle(p.labelSecondary)
                         .frame(width: 44, height: 44)
                 }.accessibilityLabel("附件、命令行和技能")
                 .disabled(preparing > 0 || voice?.active == true)

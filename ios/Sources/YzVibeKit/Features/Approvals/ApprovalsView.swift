@@ -57,7 +57,7 @@ struct ApprovalsView: View {
     }
 }
 
-/// 审批卡：聊天流内嵌与收件箱共用。玻璃底 + 左侧风险色条 + 三个决定。
+/// 审批卡：稳定内容面与风险色条，标题使用实际操作类别。
 struct ApprovalCardView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
@@ -74,7 +74,7 @@ struct ApprovalCardView: View {
             HStack(spacing: 8) {
                 Image(systemName: approval.kind.symbol).font(.system(.footnote, weight: .semibold)).foregroundStyle(riskColor)
                     .frame(width: 30, height: 30).background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(riskColor.opacity(0.14)))
-                Text(approval.status == .pending ? (approval.questions.isEmpty ? "需要你的批准" : "需要你的回答") : approval.kind.displayName).font(.yzHeadline).foregroundStyle(p.label)
+                Text(approval.status == .pending && !approval.questions.isEmpty ? "需要你的回答" : approval.kind.displayName).font(.yzHeadline).foregroundStyle(p.label)
                 Spacer(minLength: 4)
                 if approval.status == .pending { Chip(approval.risk.displayName, tone: riskTone) } else { statusChip }
             }

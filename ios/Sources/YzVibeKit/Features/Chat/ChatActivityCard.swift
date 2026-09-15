@@ -12,7 +12,7 @@ struct ChatActivityCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Button { showingDetails = true } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "list.bullet.rectangle").font(.system(.title3)).foregroundStyle(p.brand)
+                    Image(systemName: "list.bullet.rectangle").font(.system(.title3)).foregroundStyle(p.labelSecondary)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("执行过程").font(.yzFootnoteStrong).foregroundStyle(p.label)
                         Text(activity.calls.isEmpty ? "思考记录" : "\(activity.calls.count) 次工具调用")
@@ -39,7 +39,7 @@ struct ChatActivityCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(p.surfaceElevated))
+        .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).fill(p.surfaceElevated))
         .sheet(isPresented: $showingDetails) {
             NavigationStack {
                 ScrollView {

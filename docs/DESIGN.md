@@ -1,135 +1,86 @@
 # YzVibe 设计规范
 
-## 当前 iOS 视觉：黑橙与液态玻璃（2026-09-12）
+## 设计方向
 
-- 颜色以 [Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift) 为准。深色页面 `#0B0B0D`、内容面 `#19191D`、强调橙 `#FF9A52`；浅色使用中性白与深橙 `#C04B00`。
-- 使用连续圆角：内容卡 26pt、会话玻璃卡 28pt、输入区 32pt。色彩不渗入正文背景，避免旧版暖棕混浊感。
-- 导航与 Tab 保留系统玻璃；会话卡、输入区使用系统 `glassEffect`（iOS 26），旧系统回落到 regularMaterial。降低透明度时使用不透明底色。
-- 助手回答使用炭灰圆角内容面，用户气泡恢复橙色；代码面使用中性黑，保留语义状态色。
-- 交互不变：侧滑、工具调用折叠、发送与模型设置分层均保留。继续支持动态字体、减少动态效果与增强对比度。
-- 调试预览：Debug 构建传入 `--design-preview` 查看模拟会话；加 `--design-chat` 直接检查聊天。Release 不启用这些入口。
+**安静、清晰、可靠，带一点柚子的温暖。**
 
-以下为旧版方向 B 的历史说明，色值与布局不再代表当前 iOS 实现。
+黑灰内容层、橙色关键操作和原生导航共同构成 iOS 视觉。先让用户看清任务、结果和待处理事项，再通过材质与动效表达层级。
 
----
+- 配色与尺寸唯一来源：[Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift)。
+- 2026-09-15：收窄玻璃范围、会话标题优先、减少重复路径、扩大聊天阅读宽度、减轻工具摘要。
+- 历史暖纸与黑橙方案见 [2026-09-12 快照](design-history/2026-09-12.md)，不作为当前实现规范。
 
-> **方向 B「焦橙纸感」** —— 结构全部交给系统（大标题 / List / Tab 栏），品牌只通过一个焦橙和一层暖纸出现。
-> 本文是 iOS / Android / 小程序三端的视觉唯一来源；各端把 token 映射到自己的原生系统。
-> 备选方向与决策依据见 [design/directions/](../design/directions/)。
+## 1. 内容与悬浮层
 
-## 1. 设计立场
+| 层级 | 材质 | 用途 |
+| --- | --- | --- |
+| 页面 | `surface`，稳定的中性底色 | 列表、聊天、设置背景 |
+| 内容 | 不透明 `surfaceElevated` | 会话、审批、执行过程卡片 |
+| 内容中的细节 | `fillSecondary` 或留白 | 代码、按需展开的工具摘要 |
+| 悬浮操作 | 系统 Liquid Glass；iOS 17–25 回落到 regularMaterial | 导航、Tab、输入区、Toast、配对遮罩 |
 
-- **结构还给系统。** 大标题、搜索、Section、侧滑、Tab 栏一律用平台原生组件，不自绘。用户已经会用它们了。
-- **只有一个强调色。** 焦橙 `#C75015` 承担 tint、主按钮、用户气泡、选中态。其余状态用中性或语义色，界面上不出现第五种彩色胶囊。
-- **橙的面积控制在 10% 以内。** 大面积橙块只有一处：用户消息气泡（对应 Messages 的蓝气泡）。
-- **暖纸中性。** 底色是偏暖的纸 `#F9F6F2`，不是系统的冷灰，也不是纯白。深度靠**发丝描边**而不是投影。
-- **玻璃只给真正漂浮的东西。** 输入条、Toast、扫码取景框。内容层永远不透明。
-- **不做背景装饰。** 上一版的三个柔焦装饰球已移除 —— 它们是「不像 iOS」的主要来源，也让系统玻璃没有正确的折射对象。
+玻璃用于漂浮的控制层。会话列表、长回答、代码内容不使用玻璃，不叠加多层玻璃。边界优先用留白和底色表达；审批保留风险色条与清晰边缘。
 
-## 2. 颜色 Token
+## 2. 配色
 
-颜色**直接用 sRGB hex 定义**。上一版用 oklch 换算，文档标注的 `#C2573A` 和实际渲染的 `#DE602F` 差了整整一档、深色底比设计意图暗了一档；改用 hex 后文档与代码不会再漂。
-唯一来源：[Theme.swift](../ios/Sources/YzVibeKit/Design/Theme.swift)。每次改色都要跑 `PaletteContrastTests`。
+| Token | 浅色 | 深色 | 用途 |
+| --- | --- | --- | --- |
+| `surface` | `#F6F6F7` | `#0B0B0D` | 页面 |
+| `surfaceElevated` | `#FFFFFF` | `#19191D` | 内容面 |
+| `brand` | `#C04B00` | `#FF9A52` | 主操作、用户气泡、选中态 |
+| `brandInk` | `#FFFFFF` | `#261305` | 品牌色上的文字 |
+| `brandText` | `#A64000` | `#FFB57D` | 链接、小字强调 |
+| `label` | `#19191B` | `#F5F5F7` | 主文字 |
+| `labelSecondary` | `#606065` | `#B9B9C0` | 次要说明 |
+| `labelTertiary` | `#79797F` | `#92929C` | 时间、辅助信息 |
 
-### 2.1 品牌与语义色
+- 橙色优先用于发送、主要决定、选中态；附件与工具摘要默认中性。
+- 在线、警示、失败继续使用语义色，同时提供文字或辅助功能说明。
+- Agent Logo 保留打包资源的原彩，状态指示与 Logo 分开。
+- `PaletteProvider` 统一适配深浅色及增强对比度；完整 token 以代码为准。
+- 改色必须通过 `PaletteContrastTests`。
 
-| Token | Light | Dark | 对比度 | 用途 |
-|---|---|---|---|---|
-| `brand` | `#C75015` | `#FF9868` | 白字 4.58:1 / 深字 8.19:1 | 主按钮、用户气泡、tint、选中态 |
-| `brandText` | `#A63D02` | `#FFB08A` | 浅橙底 5.30:1 | 胶囊里的橙色文字、小字强调 |
-| `brandSoft` | `#FFE5D8` | `#3A2A22` | — | 胶囊底、选中底 |
-| `brandInk` | `#FFFFFF` | `#241812` | — | 压在 brand 上的文字 |
-| `sage` | `#1B7046` | `#5FD08E` | 纸底 5.65:1 | 在线、空闲、已允许 |
-| `danger` | `#C4261C` | `#FF6961` | 纸底 5.35:1 | 拒绝、停止、待审批 |
-| `amber` | `#B0761A` | `#E8B45C` | 纸底 3.58:1 | 中风险色条、图标（不承载正文） |
-| `amberText` | `#8A5A0E` | `#E8B45C` | 琥珀底 5.19:1 | 琥珀胶囊里的文字 |
-| `purple` / `blue` | `#6E4B9E` / `#1F6FA8` | `#C09AE8` / `#6FB6E8` | — | 设置页图标底，不用于状态语义 |
+## 3. 会话列表
 
-**橙色的使用规则**：`brand` 用于填充和 tint；小字、链接、胶囊文字一律用 `brandText`。
-这是苹果自己的做法 —— `systemOrange #FF9500` 配白字只有 2.20:1，苹果从不让橙色承担文字对比。
+- 第一行是会话标题，使用系统 `.headline`；正常字号最多两行，辅助功能大字号允许换行。
+- 第二层是 Agent、状态、更新时间；较窄或大字号环境下允许元信息纵向排列。
+- 来源与待审批提示保留可见，分支按实际数据展示。
+- 按目录分组且没有搜索词时，路径由分组头承载，不在每张卡里重复；搜索或取消分组时保留路径。
+- 会话卡使用不透明内容面，圆角 20pt、内边距 16pt。用底色和卡间距分隔，不加玻璃高光或投影。
+- 保留原生导航、搜索、分组折叠、侧滑和上下文菜单。
 
-### 2.2 纸感分层（Surface）
+## 4. 聊天与审批
 
-| Token | Light | Dark | 用途 |
-|---|---|---|---|
-| `surface` | `#F9F6F2` | `#201E1B` | 页面底（暖纸 / 暖灰棕，都不用纯白或纯黑） |
-| `surfaceElevated` | `#FFFDFA` | `#2C2A27` | 卡片、气泡 |
-| `fill` | `#EFEAE2` | `#383530` | 输入框、次级按钮、中性胶囊 |
-| `fillSecondary` | `#F4F0E9` | `#322F2B` | 代码块底 |
-| `border` | `#E6DFD5` | `white 12%` | 发丝描边、分割线 |
-| `label` | `#231813` | `#F5F2EE` | 主文字（16.1:1 / 14.9:1） |
-| `labelSecondary` | `#6D6059` | `#B5AEA6` | 副文字（5.62:1 / 7.58:1） |
-| `labelTertiary` | `#877E78` | `#8A837B` | 时间戳、占位（3.69:1 / 4.44:1） |
+- 用户消息保留橙色气泡，尾部小圆角表示方向。
+- 助手正文直接排在页面上，使用统一的阅读边距，避免外层卡片压缩正文、表格和代码宽度。
+- 复制、朗读保持 44pt 触控区域；流式输出、文本选区和文件链接沿用现有行为。
+- 工具调用以中性图标、摘要和展开箭头作为轻量入口；运行与错误状态始终可见，详情按需打开。
+- 执行过程卡仍有中性底色，与最终回答区分。
+- 审批标题显示真实操作类别；需要用户回答的请求保留对应提示。不根据命令文本猜测操作意图。
+- 审批保留风险等级、原始命令或详情、允许／拒绝和现有 Face ID 行为；权限逻辑不由视觉样式决定。
+- 输入区保留玻璃，普通附件菜单使用中性色；发送操作使用橙色。
 
-### 2.3 增强对比度
+## 5. 字体、尺寸与反馈
 
-系统「增强对比度」开关打开时切到 `lightHighContrast` / `darkHighContrast`：
-主色压到 `#A83B00`（白字 6.38:1），三级文字提到 `#6F675F`（5.16:1），描边加深。
-由 `PaletteProvider` 读 `\.colorSchemeContrast` 自动完成，视图层不用管。
+- 全部字体以系统文本样式为基础，跟随 Dynamic Type；需要随字号变化的尺寸使用 `@ScaledMetric`。
+- 圆角按用途：内容卡 20pt、代码与细节 10–14pt、输入区 32pt、独立按钮为胶囊或圆形。
+- 列表页面边距 20pt，聊天外边距 16pt，内容卡内边距 16pt。
+- 普通界面反馈使用现有 `Motion.quick`：弹簧 response 0.28、dampingFraction 1。
+- 不添加持续装饰动画。尊重减少动态效果，按压、展开和状态反馈保持直接。
 
-### 2.4 玻璃（只给漂浮层）
+## 6. 无障碍与验证
 
-| Token | 值 | 说明 |
-|---|---|---|
-| 材质 | iOS 26 `.glassEffect(.regular)`；< 26 用 `.regularMaterial` | 不再手绘白色高光渐变 |
-| 描边 | 0.5pt `border` | 系统材质自带高光，只补一圈边 |
-| 降低透明度 | `accessibilityReduceTransparency` 打开时换成不透明 `surfaceElevated` | 必须处理，否则文字读不清 |
-| 用在哪 | 输入条、Toast、配对遮罩、扫码取景框 | 仅此四处 |
+- 正文对比度至少 4.5:1；必要非文本标识至少 3:1。
+- 深色、浅色、辅助功能大字号均检查会话和聊天；检查长标题、长路径及状态提示。
+- 降低透明度时，悬浮材质回落到不透明底；增强对比度使用专用色板。
+- 纯图标操作提供 `accessibilityLabel`，状态不只依赖颜色。
+- Debug 参数 `--design-preview` 使用演示数据，追加 `--design-chat` 直接进入聊天；Release 不启用。
 
-## 3. 字体
+## 7. 品牌与跨端
 
-全部基于系统文本样式，**跟随动态字体缩放**。不再写死 pt —— 需要固定尺寸的控件用 `@ScaledMetric`。
+欢迎页与空状态可以适量使用柚子角色；核心工作界面优先保证阅读效率。官网保留暖纸色和编辑式排版，承担品牌表达。Android 共享配色语义与信息层级，导航和交互映射到原生平台组件。
 
-| 语义 | 映射 | 用途 |
-|---|---|---|
-| `yzLargeTitle` | `.largeTitle` bold | 系统大标题（由 `.navigationTitle` 提供） |
-| `yzTitle2` / `yzTitle3` | `.title2` / `.title3` semibold | 卡片标题、会话名 |
-| `yzHeadline` | `.headline` | 列表主文字 |
-| `yzBody` | `.body` | 消息正文、设置行 |
-| `yzCallout` | `.callout` semibold | 按钮 |
-| `yzSubhead` / `yzSubheadStrong` | `.subheadline` | 副文字 |
-| `yzFootnote` / `yzFootnoteStrong` | `.footnote` | 时间、说明、胶囊 |
-| `yzCaption` / `yzEyebrow` | `.caption` | 分组标题、辅助信息 |
-| `yzMono` / `yzMonoBody` | `.footnote` / `.subheadline` + `.monospaced` | 路径、命令、代码 |
+## 参考
 
-## 4. 形状、间距、动效
-
-- 圆角：sm 8 / md 10 / lg 14 / xl 16 / 2xl 20 / 卡片 16 / 胶囊全圆。比上一版整体收紧一档，贴近系统列表。
-- 页面横向边距 20pt；卡片内边距 14–16pt；触控目标 ≥ 44pt
-- 动效：`ease-out cubic-bezier(0.23,1,0.32,1)` 220ms；抽屉 `cubic-bezier(0.32,0.72,0,1)` 400ms；按压 scale 0.97
-- 阴影几乎不用：卡片只有 `shadow 4% / radius 2`，层级靠描边和留白
-
-## 5. 组件规范
-
-| 组件 | 规格 |
-|---|---|
-| 导航 | 系统 `NavigationStack` + `.navigationTitle` + `.searchable`；不自绘导航条 |
-| Tab 栏 | 系统 `TabView`，`.tint(brand)`，审批项用系统 `.badge` |
-| 列表 | 会话 / 审批用 `List(.plain)` + 每行一张 `PaperCard`；设置类用 `List(.insetGrouped)` |
-| PaperCard | `surfaceElevated`，圆角 16，1pt `border` 描边，阴影 4% |
-| StatusDot | 8pt：`sage`=空闲/在线，`brand`=运行中，`danger`=待审批/出错，`labelTertiary`=已关闭 |
-| Chip | 胶囊，`.footnote` semibold；Claude=`brandSoft`/`brandText`，Codex 与自定义=`fill`/`labelSecondary` |
-| SessionCard | StatusDot + AgentChip + 来源 + 时间；标题 `.title3`；路径 mono 块；侧滑=停止 / 复制路径 |
-| ApprovalCard | 纸卡 + 左侧 4pt 风险色条；命令 mono 块；拒绝（描边）/ 允许（brand 实心）/ 总是允许…（菜单） |
-| MessageBubble | 用户：`brand` 实心 + `brandInk`，圆角 20 右下 6；助手：`surfaceElevated` + 描边，圆角 20 左下 6 |
-| GlassInputBar | 圆角 22 玻璃；相机 / 命令 / 会话选项胶囊 / 发送圆钮（brand 实心 38pt） |
-| 空状态 | 一律 `ContentUnavailableView`，不自绘 |
-| 分段控件 | 一律系统 `Picker(.segmented)` |
-
-## 6. 各端映射
-
-| 概念 | iOS | Android | 小程序 |
-|---|---|---|---|
-| 结构 | `NavigationStack` / `List` / `TabView` | `Scaffold` + `LargeTopAppBar` + `LazyColumn` + `NavigationBar` | 原生导航栏 + `scroll-view` |
-| 颜色 | `Palette`（hex） | Material 3 自定义 scheme | CSS 变量 |
-| 字体 | 系统文本样式 + 动态字体 | `MaterialTheme.typography` + `fontScale` | `rpx` + 系统字号设置 |
-| 玻璃 | `.glassEffect()` / `.regularMaterial` | `Modifier.hazeEffect` 或半透明 Surface | `backdrop-filter: blur(24px)` |
-| 圆角 | `RoundedRectangle(cornerRadius:, style: .continuous)` | `RoundedCornerShape` | `border-radius` |
-
-## 7. 无障碍红线
-
-1. **动态字体**：不写死字号。违反了在大字号下会截断。
-2. **对比度**：正文 4.5:1、非文本 3:1。由 [PaletteContrastTests](../ios/Tests/YzVibeKitTests/PaletteContrastTests.swift) 在 CI 上守住。
-3. **降低透明度**：玻璃必须有不透明回落。
-4. **增强对比度**：走 `lightHighContrast` / `darkHighContrast`。
-5. 纯图标按钮必须有 `accessibilityLabel`；纯装饰元素 `accessibilityHidden(true)`。
+- [Apple：Design foundations from idea to interface](https://developer.apple.com/videos/play/wwdc2025/359/)
+- [Apple：Meet Liquid Glass](https://developer.apple.com/videos/play/wwdc2025/219/)

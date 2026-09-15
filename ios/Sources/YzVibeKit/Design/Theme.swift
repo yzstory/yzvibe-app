@@ -101,7 +101,7 @@ public extension Color {
 }
 
 public enum Radius {
-    public static let sm: CGFloat = 8, md: CGFloat = 10, lg: CGFloat = 14, xl: CGFloat = 16, xxl: CGFloat = 28, card: CGFloat = 26
+    public static let sm: CGFloat = 8, md: CGFloat = 10, lg: CGFloat = 14, xl: CGFloat = 16, xxl: CGFloat = 28, card: CGFloat = 20
 }
 
 public enum Spacing {

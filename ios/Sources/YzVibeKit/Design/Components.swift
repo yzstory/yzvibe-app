@@ -1,10 +1,9 @@
 import SwiftUI
 import UIKit
 
-// MARK: - 背景：暖纸
+// MARK: - 中性页面背景
 
-/// 页面底色。方向 B 去掉了旧版的三个柔焦装饰球 —— 它们是「不像 iOS」最主要的来源，
-/// 也让系统玻璃没法正确折射。现在只保留一层暖纸底，层级完全交给系统的 List / 材质。
+/// 中性页面底色；内容面与悬浮控制层在上方形成层级。
 public struct AmbientBackground: View {
     @Environment(\.palette) private var p
     public init() {}
@@ -28,7 +27,7 @@ public struct PaperCard<Content: View>: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         content()
             .padding(padding)
-            .background(shape.fill(p.surfaceElevated.gradient))
+            .background(shape.fill(p.surfaceElevated))
             .overlay(shape.strokeBorder(p.border.opacity(0.6), lineWidth: 0.5))
 
     }
@@ -51,7 +50,7 @@ public struct Eyebrow: View {
 
 // MARK: - 胶囊标签
 
-/// 方向 B 收敛了强调色：Claude 用品牌橙，其余 Agent 一律中性，避免界面出现五种彩色胶囊。
+/// 标签使用语义色；Agent 来源标签保持中性，品牌图标单独展示。
 public enum ChipTone { case claude, codex, custom, sage, brand, fill, danger, warning }
 
 public struct Chip: View {

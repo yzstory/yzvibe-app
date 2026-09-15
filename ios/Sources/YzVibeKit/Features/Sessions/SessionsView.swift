@@ -54,6 +54,7 @@ struct SessionsView: View {
                             }
                         } label: {
                             Image(systemName: allCollapsed ? "chevron.down" : "chevron.up")
+                                .foregroundStyle(p.labelSecondary)
                         }
                         .accessibilityLabel(allCollapsed ? "展开全部分组" : "收拢全部分组")
                     }
@@ -117,7 +118,9 @@ struct SessionsView: View {
 
     /// 一行 = 一张纸卡；分隔线交给卡片之间的留白，不用系统 separator。
     private func row(_ s: Session) -> some View {
-        NavigationLink(value: s.id) { SessionCard(session: s) }
+        NavigationLink(value: s.id) {
+            SessionCard(session: s, showsPath: !store.settings.groupByFolder || !query.isEmpty)
+        }
             .buttonStyle(.plain)
             .listRowInsets(EdgeInsets(top: 5, leading: Spacing.page, bottom: 5, trailing: Spacing.page))
             .listRowSeparator(.hidden)
@@ -174,6 +177,7 @@ struct SessionsView: View {
             Toggle("按文件夹分组", isOn: $store.settings.groupByFolder)
         } label: {
             Image(systemName: store.settings.activeOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .foregroundStyle(store.settings.activeOnly ? p.brand : p.labelSecondary)
         }
         .accessibilityLabel("筛选")
     }
@@ -207,80 +211,149 @@ struct DevicePickerMenu: View {
 /// 文件夹分组头：跟随系统 Section header 的观感（小写字重、贴左）。
 struct FolderHeader: View {
     @Environment(\.palette) private var p
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .caption2) private var disclosureWidth = 12.0
     let cwd: String
     let count: Int
     let collapsed: Bool
     let toggle: () -> Void
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 6) {
-                Image(systemName: collapsed ? "chevron.right" : "chevron.down")
-                    .font(.system(.caption2, weight: .bold))
-                    .frame(width: 12)
-                Text((cwd as NSString).lastPathComponent).font(.yzFootnoteStrong).foregroundStyle(p.label)
-                Text(cwd).font(.yzMono).foregroundStyle(p.labelTertiary).lineLimit(1).truncationMode(.middle)
-                Spacer(minLength: 4)
-                Text("\(count)").font(.yzFootnote).foregroundStyle(p.labelTertiary)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(.caption2, weight: .bold))
+                        .frame(width: disclosureWidth)
+                    Text((cwd as NSString).lastPathComponent)
+                        .font(.yzFootnoteStrong).foregroundStyle(p.label)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !typeSize.isAccessibilitySize { folderPath }
+                    Spacer(minLength: 4)
+                    Text("\(count)").font(.yzFootnote).foregroundStyle(p.labelTertiary)
+                }
+                if typeSize.isAccessibilitySize { folderPath }
             }
             .foregroundStyle(p.labelSecondary)
+            .frame(minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .textCase(nil)
-        .listRowInsets(EdgeInsets(top: 10, leading: Spacing.page + 2, bottom: 4, trailing: Spacing.page))
+        .accessibilityLabel("\((cwd as NSString).lastPathComponent)，\(count) 个会话")
+        .accessibilityValue(collapsed ? "已折叠" : "已展开")
+        .accessibilityHint(cwd)
+        .listRowInsets(EdgeInsets(top: 0, leading: Spacing.page + 2, bottom: 0, trailing: Spacing.page))
+    }
+
+    private var folderPath: some View {
+        Text(cwd).font(.yzCaption.monospaced()).foregroundStyle(p.labelTertiary)
+            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+            .truncationMode(.middle)
     }
 }
 
+/// 稳定的内容面：标题优先，目录由分组头承载，元信息按可用宽度排列。
 struct SessionCard: View {
     @Environment(\.palette) private var p
+    @Environment(\.dynamicTypeSize) private var typeSize
     let session: Session
+    var showsPath = true
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 6) {
-                    if session.status == .running {
-                        RunningSessionIndicator()
-                    } else {
-                        StatusDot(session: session.status)
-                    }
-                    AgentLogo(agent: session.agent)
-                        .foregroundStyle(p.labelSecondary)
-                    Text(session.agent.displayName).font(.yzCaption).foregroundStyle(p.labelSecondary)
-                    if session.source != .phone {
-                        Chip(session.source.displayName, tone: .fill, icon: session.source == .terminal ? "terminal" : "shippingbox")
-                    }
-                    if session.pendingApprovals > 0 { Chip("\(session.pendingApprovals) 待审批", tone: .danger) }
-                    Spacer(minLength: 4)
-                    Text(RelativeTime.string(from: session.updatedAt))
-                        .font(.yzFootnote).foregroundStyle(p.labelTertiary).lineLimit(1)
-                }
-                Text(session.title).font(.system(.body, weight: .semibold)).foregroundStyle(p.label).lineLimit(2)
-                    .lineSpacing(3)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(session.title)
+                .font(.yzHeadline).foregroundStyle(p.label)
+                .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
-                    if let b = session.branch {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.triangle.branch").font(.system(.caption2, weight: .semibold))
-                            Text(b).font(.yzMono)
-                        }
-                        .foregroundStyle(p.labelSecondary).lineLimit(1)
-                    }
-                    Image(systemName: "folder").font(.yzCaption).foregroundStyle(p.labelTertiary)
-                    Text(session.cwd).font(.yzCaption).foregroundStyle(p.labelSecondary).lineLimit(1).truncationMode(.middle)
+                    agentStatus
+                    Spacer(minLength: 8)
+                    updatedTime
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    agentStatus
+                    updatedTime
                 }
             }
+
+            if session.pendingApprovals > 0 && session.status != .waitingApproval {
+                Chip("\(session.pendingApprovals) 待审批", tone: .danger)
+            }
+            if session.source != .phone || session.branch?.isEmpty == false {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { contextLabels }
+                    VStack(alignment: .leading, spacing: 6) { contextLabels }
+                }
+                .font(.yzCaption).foregroundStyle(p.labelSecondary)
+            }
+            if showsPath {
+                Label(session.cwd, systemImage: "folder")
+                    .labelStyle(.titleAndIcon)
+                    .font(.yzCaption).foregroundStyle(p.labelSecondary)
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+                    .truncationMode(.middle)
+            }
         }
-        .padding(20)
+        .padding(Spacing.card)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .liquidGlass(in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .background(RoundedRectangle(cornerRadius: Radius.card, style: .continuous).fill(p.surfaceElevated))
         .accessibilityElement(children: .combine)
-        .accessibilityValue(session.status.displayName)
     }
+
+    private var agentStatus: some View {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 6))
+        return layout {
+            HStack(spacing: 6) {
+                AgentLogo(agent: session.agent)
+                Text(session.agent.displayName)
+            }
+            if !typeSize.isAccessibilitySize { Text("·").accessibilityHidden(true) }
+            HStack(spacing: 6) {
+                if session.status == .running {
+                    RunningSessionIndicator()
+                } else {
+                    StatusDot(session: session.status)
+                }
+                Text(session.status == .waitingApproval && session.pendingApprovals > 0
+                     ? "\(session.pendingApprovals) 待审批" : session.status.displayName)
+                    .foregroundStyle(session.status == .waitingApproval ? p.danger : p.labelSecondary)
+            }
+        }
+        .font(.yzCaption).foregroundStyle(p.labelSecondary)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var updatedTime: some View {
+        Text(RelativeTime.string(from: session.updatedAt))
+            .font(.yzCaption).foregroundStyle(p.labelTertiary)
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private var contextLabels: some View {
+        if session.source != .phone {
+            Label(session.source.displayName, systemImage: session.source == .terminal ? "terminal" : "shippingbox")
+                .labelStyle(.titleAndIcon)
+                .fixedSize()
+        }
+        if let branch = session.branch, !branch.isEmpty {
+            Label(branch, systemImage: "arrow.triangle.branch")
+                .labelStyle(.titleAndIcon)
+                .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+        }
+    }
+
 }
 
 /// 仅运行中的卡片显示进度环；减少动态效果时使用静态标记。
 private struct RunningSessionIndicator: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.palette) private var p
+    @ScaledMetric(relativeTo: .caption) private var size = 14.0
     var body: some View {
         Group {
             if reduceMotion {
@@ -289,8 +362,8 @@ private struct RunningSessionIndicator: View {
                 ProgressView().controlSize(.mini).tint(p.brand)
             }
         }
-        .frame(width: 14, height: 14)
-        .accessibilityLabel("正在运行")
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
