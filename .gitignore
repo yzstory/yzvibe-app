@@ -26,6 +26,25 @@ design/canvas/yzvibe-app-design.html
 .yzvibe/
 *.log
 .env
+.env.*
+!.env.example
+!.env.*.example
+!.env.template
+
+# 本地凭据与签名材料
+credentials.env
+.appstoreconnect/
+private_keys/
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa
+id_ed25519
 
 # 本机服务器运维资料（不提交连接信息）
 .claude/skills/test-server/

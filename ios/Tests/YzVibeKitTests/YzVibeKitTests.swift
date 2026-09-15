@@ -36,22 +36,23 @@ final class YzVibeKitTests: XCTestCase {
     }
 
     func testPairingPayloadParsesJSONConfig() throws {
+        // Synthetic pairing data only; never paste a live QR payload into a fixture.
         let json = #"""
         {
           "yzvibe": 1,
           "name": "YuKisMacServer.local",
           "host": "https://abc-def.trycloudflare.com",
           "port": null,
-          "token": "-FqSCst-R1itUJck",
+          "token": "test-pair-token",
           "mode": "tunnel",
           "connectorId": "865356ad",
           "url": "yzvibe://pair?host=x&token=y",
-          "link": "https://abc-def.trycloudflare.com/pair?token=-FqSCst-R1itUJck"
+          "link": "https://abc-def.trycloudflare.com/pair?token=test-pair-token"
         }
         """#
         let p = try XCTUnwrap(PairingPayload(text: json))
         XCTAssertEqual(p.host, "https://abc-def.trycloudflare.com")
-        XCTAssertEqual(p.token, "-FqSCst-R1itUJck")
+        XCTAssertEqual(p.token, "test-pair-token")
         XCTAssertEqual(p.mode, .tunnel)              // port 为 null 时回落到默认端口
         XCTAssertEqual(p.port, Device.defaultPort)
         XCTAssertEqual(p.name, "YuKisMacServer.local")
