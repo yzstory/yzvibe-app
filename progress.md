@@ -186,3 +186,58 @@
 - 用户授权发布：当前 iOS 源码归档为 0.1.0（34），主 App 与 Widget 构建号一致。
 - 使用共享 App Store Connect API 密钥及 `testFlightInternalTestingOnly=true` 上传，09:06:12 日志确认 `Upload succeeded`、`EXPORT SUCCEEDED`。
 - 归档保留于 `ios/build/YzVibe-build34.xcarchive`，上传日志 `/tmp/yzvibe-build34-upload.log`。按用户既有要求，上传成功后停止，不等待 Apple 后续处理；本轮未 push 或重启连接器。
+
+## 2026-09-15 跨端功能对齐（进行中）
+用户要求一次完成 HTML 双端预览与 Android 设备/会话/详情缺口。保留上一轮 Android 未提交的视觉改动；本轮不自动发布。
+- 安卓第一轮 native 详情及工具聚合编译通过；iOS HTML 实现完整 App 模拟器编译通过。
+- Lint 发现 readNBytes 只支持 API 33，已替换为有上限的通用流读取。iOS 新 WebKit delegate 签名需要 @MainActor @Sendable，已修正。
+- iOS 实际 WKWebView 渲染测试通过（相对 CSS、SVG、JS 与点击）；连接器全量 130/130 通过。
+- Android 长回复首次定位末尾、80 项连续工具单卡折叠已通过并截图核验。测试截图遇到主窗口/弹层多个 root，改为采集最上层 root。
+- 全量 iOS 测试暴露旧网络测试的全局回调保留 client，URLSession 已销毁后仍触发 socket 重连；修正该测试 teardown 清除回调，再运行全量。单独 HTML 用例已正常通过。
+- Android 13 项单元测试、Lint（0 错误）通过；ParityFlowTest 在深色、浅色和 1.3 倍字体均通过。
+- iOS 92 项全量测试通过，完整 App 模拟器构建通过。旧缓存测试固定等待 30 ms 在并行 UI 测试下不稳定，改为有上限地等待真实回调。
+- Compose captureToImage 对 Material sheet 取到了底层 Activity window；改用系统合成截图，重新采集最终页面图（功能断言不受影响）。
+
+### 双端预览与 Android 对齐：最终验收
+- Connector 全量 130 项、iOS 全量 92 项、Android 单元测试 13 项通过；iOS App/Widget 模拟器构建通过，Android APK 构建及 Lint 通过（0 errors、15 warnings）。
+- ParityFlowTest 在深色、浅色、1.3 倍字体三组均通过，产出 27 张系统窗口截图；逐项核对 HTML 交互、上下文卡片、彩色 diff、交付记录、配置与诊断，以及长会话与工具分组。
+- 截图改为系统窗口捕获，避免 Compose 根节点截图漏掉底部弹层。
+- HTML 预览需要同时更新桌面连接器与移动客户端；仅支持 HTML 所在目录内的静态资源，外部 CDN/API 不开放。本轮未上传 TestFlight 或发布连接器。
+
+### iOS build 36 发布完成
+- 用户授权先发布 iOS；App/Widget 版本升至 36，Release 归档与上传成功。
+- Apple API 确认 VALID / IN_BETA_TESTING，内部测试可更新；发布说明见 docs/RELEASE-0.1.0-36.md。
+
+### iOS build 37：日常开屏优化与上传
+- 冷启动约 1.5 秒、首次约 1.9 秒；前台计时、后台取消、通知与配对跳过、恢复不重播。
+- Release 归档及版本检查通过，2026-09-15 22:11:06 上传成功；按用户要求停止于 Upload succeeded，不等待 Apple 处理。
+
+### 2026-09-15 Android：安装官方 Android skills 并按其优化
+- 用户要求只在本项目安装 https://github.com/android/skills 并据此优化安卓端、尽量复刻 iOS。24 个官方 skill 复制到 `.claude/skills/<name>/`（Claude Code 的项目级 skills 目录，附 Apache-2.0 LICENSE），不装到全局。本轮实际用到 edge-to-edge、adaptive、navigation-event 三个。
+- 边到边（edge-to-edge skill）：`enableEdgeToEdge()` + `isNavigationBarContrastEnforced = false`；`styles.xml` 不再写死 `statusBarColor` / `navigationBarColor`，系统栏图标明暗由 `YzTheme` 按应用内「外观」决定（enableEdgeToEdge 自己的判断只看系统深色模式，应用内覆盖时会对不上）。列表统一改 `contentPadding` 让位；输入条用 `safeDrawing` 底部并集同时覆盖导航栏与输入法，去掉会重复加边距的 `imePadding`。开场全屏 Dialog 补 `decorFitsSystemWindows = false`。
+- 自适应（adaptive skill Step 1/2/4）：`Scaffold + NavigationBar` 换成 `NavigationSuiteScaffold`，宽窗口自动切侧边导航栏；会话内与键盘弹出时用 `NavigationSuiteType.None` 隐藏导航区（该版本还没有 `NavigationSuiteScaffoldState`）。设备与会话列表换 `LazyVerticalGrid` + `GridCells.Adaptive`，分组头 `GridItemSpan(maxLineSpan)` 占整行。新增 `ui/Previews.kt` 四档形态因子预览。未做列表-详情双栏：`ListDetailSceneStrategy` 以 Navigation 3 为前置，迁移范围超出本轮，已记进 android/README.md 的边界清单。
+- 预测式返回：会话页 `BackHandler` 换成 `PredictiveBackHandler`，手势进度驱动缩放 / 位移 / 淡出 / 圆角，松手取消回弹。没用 navigation-event skill 的 `androidx.navigationevent`，因为它要 compileSdk 36（本机只装了 Platform 35）且本应用未用 Navigation 3；已在 README 记下这处偏离。
+- iOS 对齐补齐：四套色板（浅 / 深 × 标准 / 高对比度）与 `Accents`（琥珀 / 鼠尾草 / 紫 / 蓝）对齐 iOS `Palette`；「外观」自动 / 浅色 / 深色；顶部胶囊 Toast 接管一过性提示（`report` 走 Toast、`fail` 才弹对话框）；「我」页补按目录分组 / 只看近七天 / 显示终端会话，与会话页共用 `Preferences`；中风险审批和用量仪表中档改用琥珀，不再和品牌橙混用。
+- 验证：`assembleDebug` + 13 项单元测试 + `lintDebug`（0 error）通过；API 35 模拟器上 `DesignFlowTest`、`ParityFlowTest` 各自通过。实机核对了浅色 / 深色、输入法顶起输入条、2560×1600 下的侧边栏与三列网格、返回手势中途的缩放帧。
+- 踩坑：mock 连接器的配对 token 一次性，手工冒烟用掉后跑联调测试会卡在第一个 `await`；`adb shell am start -d` 传含 `&` 的深链要在设备端 shell 里加引号，否则 token 被截断。两条都写进了 android/README.md。
+
+### 项目发布体系与 deploy skill
+- 新增本地 .agents/skills/deploy，Claude 入口软链至同一文件；精确 Git 忽略，不安装全局。
+- docs/RELEASING.md 记录四渠道、独立 npm 版本、共享移动 build、产物证据及发布边界。Android versionCode 从1同步37，未重新分发包。
+- mobile_version.py 在临时夹具验证版本不一致、同步、升版和降级拒绝；quick_validate 通过（系统 Python 缺 PyYAML，使用临时 venv）。官网7文件白名单打包通过；Git 忽略与 diff --check 通过。
+- 网站旧/新域名不一致，当前 TLS 查询未取得站点有效响应，未宣称线上验证通过；skill 要求实际部署时核对。没有执行发布、push 或重启。
+
+### 官网双端更新已发布
+- 安卓二维码解码并链接至蒲公英 youzivibe，保留原始图片用于扫码；文案精简至3节，删除过时版本说明。
+- 重新构建并截图 iOS 会话/聊天与 Android 审批；Android三种配置回归通过。CUA验证桌面和390px布局、复制、图集及下载页。
+- static-only原子发布20260915-230947，保留旧版20260914-164657；线上8文件HTTPS200与SHA一致，404及HTTP308通过，无服务重启。
+- 本地8765端口被占用，改用8767预览；旧服务未动。截图与源码在工作区，未push。
+
+### 0.2.0 首版双端打包
+- iOS App/Widget 与 Android 同步 0.2.0 (38)，包内版本校验一致。Android Debug 构建/单测/Lint与iOS Release归档通过。
+- APK保存到android/app/build/outputs/releases/YzVibe-0.2.0-38-debug.apk。
+- iOS于2026-09-15 23:18:39上传success；未等待Apple处理，未发布其他渠道。
+
+### 0.2.0 (39) 设备页指南与版本
+- 双端新增品牌官网指引、包内App版本与每设备真实连接器版本，统一build39。
+- 安卓构建/单测/Lint、iOS Release归档与包内版本校验通过；23:32:16 iOS上传success，不等后续处理。

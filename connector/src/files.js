@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.md', '.txt', '.yml', '.yaml', '.swift', '.kt', '.py', '.go', '.rs', '.css', '.html', '.sh', '.toml', '.env', '.sql', '.xml', '.plist']);
+const TEXT_EXT = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json', '.md', '.txt', '.yml', '.yaml', '.swift', '.kt', '.py', '.go', '.rs', '.css', '.html', '.htm', '.sh', '.toml', '.env', '.sql', '.xml', '.plist']);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.heic', '.heif']);
 const VIDEO_EXT = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 const MAX_PREVIEW = 2 * 1024 * 1024;
@@ -130,5 +130,19 @@ export function previewFile(root, rel) {
 
 export function mimeOf(file) {
   const ext = path.extname(file).toLowerCase();
-  return { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.json': 'application/json', '.md': 'text/markdown', '.markdown': 'text/markdown', '.heic': 'image/heic', '.heif': 'image/heif', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.webm': 'video/webm' }[ext] ?? 'application/octet-stream';
+  return { '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript', '.txt': 'text/plain', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.ico': 'image/x-icon', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.json': 'application/json', '.md': 'text/markdown', '.markdown': 'text/markdown', '.heic': 'image/heic', '.heif': 'image/heif', '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v', '.webm': 'video/webm' }[ext] ?? 'application/octet-stream';
+}
+
+/** WebViews receive only resources beneath the opened HTML file's directory, never an API origin. */
+export function webPreviewResource(cwd, entry, resource) {
+  const document = resolveReadable(cwd, entry).target;
+  if (!['.html', '.htm'].includes(path.extname(document).toLowerCase())) throw forbidden();
+  const { target } = resolveInside(path.dirname(document), resource);
+  const extensions = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.json', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.woff', '.woff2', '.ttf', '.otf', '.mp4', '.webm', '.txt']);
+  if (!extensions.has(path.extname(target).toLowerCase())) throw forbidden();
+  let st;
+  try { st = fs.statSync(target); } catch (e) { if (e.code === 'ENOENT') throw Object.assign(new Error('页面资源不存在'), { status: 404 }); throw e; }
+  if (!st.isFile()) throw Object.assign(new Error('请选择具体文件'), { status: 400 });
+  if (st.size > 20 * 1024 * 1024) throw Object.assign(new Error('页面资源超过 20 MB'), { status: 413 });
+  return { mime: mimeOf(target), body: fs.readFileSync(target) };
 }

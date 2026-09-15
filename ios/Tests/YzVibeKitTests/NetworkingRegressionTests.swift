@@ -175,7 +175,7 @@ struct NetworkingRegressionTests {
 
     @Test func staleFailoverCannotUndoAManualSelection() async throws {
         let (client, device, session) = fixture()
-        defer { session.invalidateAndCancel() }
+        defer { FixtureProtocol.requests.reset(); session.invalidateAndCancel() }
         var selected = device; selected.adopt(base: "https://selected.good")
         let chosen = selected
         FixtureProtocol.requests.onRequest { request in

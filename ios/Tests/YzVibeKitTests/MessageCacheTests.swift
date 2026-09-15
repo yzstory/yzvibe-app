@@ -66,7 +66,10 @@ import Testing
         store.leaveMessages(first.id)
         await store.loadMessages(second.id)
         store.handle(.connected, device: device)
-        try await Task.sleep(for: .milliseconds(30))
+        for _ in 0..<100 {
+            if !client.snapshotRequests.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(client.snapshotRequests == [[second.id]])
         store.handle(.snapshot(EventSnapshot(sessions: [first, second], approvals: [], messages: [second.id: []])), device: device)
         store.leaveMessages(second.id)

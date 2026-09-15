@@ -48,6 +48,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
         val connection: String = "未连接",
         val loading: Boolean = false,
         val error: String? = null,
+        val toast: String? = null,
         val capabilities: JSONObject = obj(),
         val draft: JSONObject = obj(),
         val outbox: List<JSONObject> = emptyList(),
@@ -80,7 +81,13 @@ class AppModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissError() = update { copy(error = null) }
 
-    fun report(text: String) = update { copy(error = text) }
+    fun dismissToast() = update { copy(toast = null) }
+
+    /** 打断式失败：弹对话框要求用户确认。 */
+    fun fail(text: String) = update { copy(error = text) }
+
+    /** 一过性提示：顶部 Toast 自动消失，跟 iOS 的 `store.toast` 对齐，不打断当前操作。 */
+    fun report(text: String) = update { copy(toast = text) }
 
     fun launch(block: suspend () -> Unit) =
         viewModelScope.launch {
@@ -89,7 +96,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                report(e.message ?: "操作失败")
+                fail(e.message ?: "操作失败")
             }
         }
 
@@ -126,10 +133,24 @@ class AppModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun editDevice(d: Device, name: String, address: String) = launch {
+        switchDeviceEndpoint(d, name, address)
+    }
+
+    suspend fun switchDeviceEndpoint(d: Device, name: String, address: String) {
         validateBase(address)
         val health = api.json(null, "/health", base = address) as JSONObject
         require(health.str("connectorId") == d.id) { "此地址属于另一台电脑，未发送设备凭据" }
-        val next = d.copy(name = name.ifBlank { d.name }, base = address.trimEnd('/'))
+        api.json(
+            d,
+            "/sessions",
+            base = address,
+        ) // Verify credentials before persisting the new endpoint.
+        val next =
+            d.copy(
+                name = name.ifBlank { d.name },
+                base = address.trimEnd('/'),
+                endpoints = (listOf(address, d.base) + d.endpoints).distinct(),
+            )
         val list = state.value.devices.map { if (it.id == d.id) next else it }
         withContext(Dispatchers.IO) {
             store.write("devices", obj("items" to JSONArray(list.map { it.json() })))
@@ -247,7 +268,7 @@ class AppModel(app: Application) : AndroidViewModel(app) {
                                 notifications.update(state.value.snapshot)
                                 if (event.str("type") == "sync.snapshot") reconcileAll(d)
                             } catch (e: Exception) {
-                                report("同步数据失败：${e.message}")
+                                fail("同步数据失败：${e.message}")
                             }
                         }
                     }

@@ -1,0 +1,42 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { WebSocket } from 'ws';
+import { createConnector, VERSION } from '../src/server.js';
+
+test('版本与包一致；在线身份去重，断连及撤销后移除，历史配对不算在线', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yz-status-'));
+  const c = await createConnector({ port: 0, home, importTerminal: false, log: () => {} });
+  const clients = [];
+  t.after(async () => { for (const ws of clients) ws.terminate(); await c.close(); fs.rmSync(home, { recursive: true, force: true }); });
+  const port = await c.listen();
+  const base = `http://127.0.0.1:${port}`;
+  const headers = { 'x-yzvibe-secret': c.internalSecret };
+  const status = async () => (await fetch(`${base}/internal/status`, { headers })).json();
+  const expected = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url))).version;
+  assert.equal(VERSION, expected);
+  assert.equal((await (await fetch(`${base}/health`)).json()).version, expected);
+  assert.equal((await status()).version, expected);
+  const a = c.store.addDevice('A'), b = c.store.addDevice('B');
+  c.store.addDevice('old pairing');
+  assert.equal((await status()).stats.onlineDevices, 0);
+  const connect = async d => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${d.token}`);
+    clients.push(ws); await once(ws, 'open'); return ws;
+  };
+  const first = await connect(a), duplicate = await connect(a);
+  await connect(b);
+  assert.equal((await status()).stats.onlineDevices, 2);
+  assert.equal((await status()).stats.devices, 3);
+  first.close(); await once(first, 'close');
+  assert.equal((await status()).stats.onlineDevices, 2);
+  duplicate.close(); await once(duplicate, 'close');
+  assert.equal((await status()).stats.onlineDevices, 1);
+  c.store.removeDevice(b.id);
+  assert.equal((await status()).stats.onlineDevices, 0);
+  const devices = await (await fetch(`${base}/internal/devices`, { headers })).json();
+  assert.ok(devices.every(d => d.online === false && !('token' in d)));
+});

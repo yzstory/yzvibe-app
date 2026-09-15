@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { expandHome } from '../files.js';
 import { codexOptionArgs, CODEX_PLAN_PREFIX, codexContextWindow } from './options.js';
 import { codexTurnUsage, accumulateUsage } from './usage.js';
+import { resolveAgentBin, agentEnv } from './bin.js';
 
 export class CodexAgent {
   constructor({ session, store, spawnProcess = spawn }) {
@@ -52,7 +53,7 @@ export class CodexAgent {
 
     this.turnErrored = false;
     store.setStatus(session.id, 'running');
-    this.proc = this.spawnProcess('codex', args, { cwd: expandHome(session.cwd), stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env } });
+    this.proc = this.spawnProcess(resolveAgentBin('codex'), args, { cwd: expandHome(session.cwd), stdio: ['pipe', 'pipe', 'pipe'], env: agentEnv() });
     let stderr = '';
     this.proc.stdin.on('error', (error) => { if (error.code !== 'EPIPE') console.error(`[codex stdin] ${error.message}`); });
     this.proc.stdout.on('data', (b) => this.#onData(b));

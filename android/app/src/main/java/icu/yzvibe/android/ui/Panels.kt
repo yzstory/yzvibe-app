@@ -8,17 +8,24 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import icu.yzvibe.android.core.*
 import icu.yzvibe.android.platform.approvalGate
 import java.io.File
@@ -33,19 +40,97 @@ import org.json.JSONObject
 fun Approvals(model: AppModel, approvals: List<JSONObject>) {
     val context = LocalContext.current
     LazyColumn(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        Modifier.fillMaxSize(),
+        contentPadding =
+            PaddingValues(20.dp, 16.dp, 20.dp, 16.dp + screenBottomInset()),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        if (approvals.isEmpty()) item { Text("没有待审批的请求", Modifier.padding(24.dp)) }
+        if (approvals.isEmpty()) item { EmptyState("暂时没有待审批", "需要你确认的操作会出现在这里。") }
+        else
+            item {
+                Text(
+                    "${approvals.size} 项操作等待确认",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         items(approvals, key = { it.str("id", it.str("approvalId")) }) { a ->
             val id = a.str("id", a.str("approvalId"))
             var answers by remember(id) { mutableStateOf(mapOf<String, String>()) }
             var rememberRule by remember(id) { mutableStateOf(false) }
-            Card {
-                Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                    Text(a.str("summary"), style = MaterialTheme.typography.titleMedium)
-                    Text("风险：${a.str("risk")}", color = Orange)
-                    Markdown(a.str("detail"))
+            val risk =
+                when (a.str("risk")) {
+                    "high" -> MaterialTheme.colorScheme.error
+                    "medium" -> MaterialTheme.accents.amber
+                    else -> MaterialTheme.colorScheme.tertiary
+                }
+            Card(
+                colors =
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, risk.copy(alpha = .3f)),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Surface(
+                            color = risk.copy(alpha = .12f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Icon(
+                                if (a.str("kind") == "shell") Icons.Default.Terminal
+                                else Icons.Default.VerifiedUser,
+                                null,
+                                Modifier.padding(10.dp).size(20.dp),
+                                tint = risk,
+                            )
+                        }
+                        Text(
+                            if (a.items("questions").isNotEmpty()) "需要你的回答"
+                            else
+                                when (a.str("kind")) {
+                                    "shell" -> "执行命令"
+                                    "write" -> "修改文件"
+                                    "network" -> "访问网络"
+                                    else -> "调用工具"
+                                },
+                            Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Surface(color = risk.copy(alpha = .12f), shape = RoundedCornerShape(50)) {
+                            Text(
+                                when (a.str("risk")) {
+                                    "high" -> "高风险"
+                                    "medium" -> "中风险"
+                                    else -> "低风险"
+                                },
+                                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = risk,
+                            )
+                        }
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        SelectionContainer {
+                            Text(
+                                a.str("detail").ifBlank { a.str("summary") },
+                                Modifier.fillMaxWidth()
+                                    .heightIn(max = 220.dp)
+                                    .verticalScroll(rememberScrollState())
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(14.dp),
+                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                     a.items("questions").forEach { q ->
                         val qid = q.str("id", q.str("question"))
                         Field(answers[qid].orEmpty(), q.str("question", q.str("header"))) {
@@ -60,20 +145,28 @@ fun Approvals(model: AppModel, approvals: List<JSONObject>) {
                         }
                     }
                     if (a.items("suggestions").isNotEmpty())
-                        Row {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(rememberRule, { rememberRule = it })
-                            Text(a.items("suggestions").first().str("label", "记住此审批规则"))
+                            Text(
+                                a.items("suggestions").first().str("label", "记住此审批规则"),
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
                         }
-                    Row {
-                        TextButton(
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                            colors =
+                                ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                ),
                             onClick = {
                                 model.action("/approvals/$id", body = obj("decision" to "deny"))
-                            }
+                            },
                         ) {
                             Text("拒绝")
                         }
-                        Spacer(Modifier.weight(1f))
                         Button(
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp),
                             enabled =
                                 a.items("questions").all {
                                     answers[it.str("id", it.str("question"))].orEmpty().isNotBlank()
@@ -95,16 +188,21 @@ fun Approvals(model: AppModel, approvals: List<JSONObject>) {
                                 }
                             },
                         ) {
-                            Text("允许")
+                            Text(if (a.items("questions").isEmpty()) "允许一次" else "提交回答")
                         }
                     }
                     if (a.items("questions").isEmpty())
                         TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors =
+                                ButtonDefaults.textButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
                             onClick = {
                                 approvalGate(context, model::report) {
                                     model.action("/approvals/$id/trust")
                                 }
-                            }
+                            },
                         ) {
                             Text("切换此会话到 Trust 并允许")
                         }
@@ -129,12 +227,14 @@ fun SessionPanel(
     var error by remember(panel) { mutableStateOf<String?>(null) }
     val capability = state.capabilities.optJSONObject(session.str("agent")) ?: obj()
     val haptic = LocalHapticFeedback.current
-    LaunchedEffect(panel) {
+    var revision by remember(panel) { mutableIntStateOf(0) }
+    LaunchedEffect(sid, panel, revision) {
+        error = null
         try {
             data =
                 when (panel) {
                     "文件" -> model.call("/files", query = mapOf("sessionId" to sid))
-                    "改动" -> model.call("/sessions/$sid/diff", query = mapOf("scope" to "session"))
+                    "改动" -> obj()
                     "交付记录" -> model.call("/sessions/$sid/runs", query = mapOf("summary" to "1"))
                     "命令",
                     "技能" -> model.call("/sessions/$sid/commands")
@@ -143,7 +243,20 @@ fun SessionPanel(
                         obj(
                             "会话用量" to session.optJSONObject("usage"),
                             "账号用量" to
-                                model.call("/quota", query = mapOf("agent" to session.str("agent"))),
+                                try {
+                                    model.call(
+                                        "/quota",
+                                        query =
+                                            mapOf(
+                                                "agent" to session.str("agent"),
+                                                "force" to if (revision > 0) "1" else "0",
+                                            ),
+                                    )
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    obj("error" to (e.message ?: "额度获取失败"))
+                                },
                         )
                     else -> obj()
                 }
@@ -151,10 +264,16 @@ fun SessionPanel(
             error = e.message
         }
     }
-    ModalBottomSheet(onDismissRequest = close) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(20.dp)) {
+    ModalBottomSheet(
+        onDismissRequest = close,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).padding(20.dp)) {
             Text(panel, style = MaterialTheme.typography.headlineSmall)
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            error?.let {
+                Text(it, color = MaterialTheme.colorScheme.error)
+                TextButton(onClick = { revision++ }) { Text("重试") }
+            }
             if (data == null && error == null) CircularProgressIndicator(Modifier.padding(30.dp))
             when (panel) {
                 "审批" ->
@@ -358,24 +477,17 @@ fun SessionPanel(
                             }
                         }
                     }
-                "交付记录" ->
-                    LazyColumn {
-                        items((data as? JSONArray)?.objects().orEmpty()) { run ->
-                            var detail by remember { mutableStateOf<JSONObject?>(null) }
-                            TextButton(
-                                onClick = {
-                                    model.launch {
-                                        detail =
-                                            model.call("/sessions/$sid/runs/${run.str("id")}")
-                                                as JSONObject
-                                    }
-                                }
-                            ) {
-                                Text("${run.str("status")} · ${run.str("startedAt")}")
-                            }
-                            detail?.let { Markdown(it.toString(2)) }
-                        }
+                "改动" -> ChangesPanel(model, sid, session)
+                "上下文" ->
+                    UsagePanel(
+                        state.snapshot.sessions.find { it.str("id") == sid } ?: session,
+                        (data as? JSONObject)?.optJSONObject("账号用量"),
+                    ) {
+                        revision++
                     }
+                "交付记录" ->
+                    if (data != null)
+                        RunsPanel(model, sid, (data as? JSONArray)?.objects().orEmpty(), file)
                 else ->
                     Box(Modifier.verticalScroll(rememberScrollState())) {
                         Markdown(
@@ -447,9 +559,16 @@ fun FilePreview(
     var body by remember(path) { mutableStateOf<String?>(null) }
     var mime by remember(path) { mutableStateOf("") }
     var error by remember(path) { mutableStateOf<String?>(null) }
+    var canonicalPath by remember(path) { mutableStateOf(path) }
+    var showSource by remember(path) { mutableStateOf(false) }
+    var htmlError by remember(path) { mutableStateOf<String?>(null) }
+    val previewDevice = remember(path, sid) { model.state.value.device }
+    val html =
+        mime == "text/html" ||
+            path.substringBefore('?').substringAfterLast('.').lowercase() in listOf("html", "htm")
     LaunchedEffect(path) {
         try {
-            val d = model.state.value.device ?: error("未连接")
+            val d = previewDevice ?: error("未连接")
             val upload = path.startsWith("upload:")
             val id = path.removePrefix("upload:")
             val meta =
@@ -457,6 +576,7 @@ fun FilePreview(
                     if (upload) "/uploads/$id/info" else "/files/stat",
                     query = if (upload) emptyMap() else mapOf("sessionId" to sid, "path" to path),
                 ) as JSONObject
+            canonicalPath = meta.str("path", path)
             val name = meta.str("filename", meta.str("name", path.substringAfterLast('/')))
             mime = meta.str("mime", "application/octet-stream")
             require(!meta.optBoolean("directory")) { "请选择具体文件" }
@@ -478,8 +598,11 @@ fun FilePreview(
             error = e.message
         }
     }
-    ModalBottomSheet(onDismissRequest = close) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 700.dp).padding(20.dp)) {
+    ModalBottomSheet(
+        onDismissRequest = close,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).imePadding().padding(20.dp)) {
             Text(path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium)
             error?.let { Text(it) }
             if (local == null && error == null) CircularProgressIndicator()
@@ -517,7 +640,30 @@ fun FilePreview(
                         Text("分享")
                     }
                 }
-                if (body != null)
+                if (html) {
+                    Row {
+                        FilterChip(!showSource, { showSource = false }, { Text("页面") })
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(showSource, { showSource = true }, { Text("源码") })
+                    }
+                    if (showSource) SourceBlock(body.orEmpty())
+                    else if (path.startsWith("upload:")) Text("HTML 附件请保存到会话目录后预览页面。")
+                    else {
+                        htmlError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        if (previewDevice != null)
+                            key(canonicalPath) {
+                                HtmlPreview(
+                                    model,
+                                    previewDevice,
+                                    sid,
+                                    canonicalPath,
+                                    Modifier.fillMaxWidth().weight(1f),
+                                ) {
+                                    htmlError = it
+                                }
+                            }
+                    }
+                } else if (body != null)
                     Box(Modifier.verticalScroll(rememberScrollState())) {
                         Markdown(body!!) { link ->
                             if (link.startsWith("http://") || link.startsWith("https://"))
@@ -546,67 +692,177 @@ fun FilePreview(
 
 @Composable
 fun Settings(model: AppModel) {
-    val settingsContext = LocalContext.current
-    var auth by remember {
-        mutableStateOf(
-            settingsContext
-                .getSharedPreferences("preferences", android.content.Context.MODE_PRIVATE)
-                .getBoolean("approvalAuth", false)
-        )
-    }
+    val settingsState by model.state.collectAsStateWithLifecycle()
+    val preferences = LocalPreferences.current
+    val auth = preferences.approvalAuth
     val notificationPermission =
         androidx.activity.compose.rememberLauncherForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
         ) {}
+    var showDiagnostics by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf("") }
     var data by remember { mutableStateOf<Any?>(null) }
-    Column(Modifier.padding(24.dp).verticalScroll(rememberScrollState())) {
-        Text("柚子Vibe · Android", style = MaterialTheme.typography.headlineSmall)
-        Row {
-            Checkbox(
-                auth,
-                {
-                    auth = it
-                    settingsContext
-                        .getSharedPreferences("preferences", android.content.Context.MODE_PRIVATE)
-                        .edit()
-                        .putBoolean("approvalAuth", it)
-                        .apply()
-                },
-            )
-            Text("远程审批前验证指纹或锁屏密码")
-        }
-        Text("语音默认使用设备离线识别；朗读使用 Android 系统 TTS。", Modifier.padding(vertical = 16.dp))
-        Text("后台推送尚未配置。当前版本仅在应用保持前台连接时同步，锁屏后请回到应用检查审批。", color = Orange)
-        TextButton(
-            onClick = {
-                if (android.os.Build.VERSION.SDK_INT >= 33)
-                    notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
-        ) {
-            Text("开启任务和审批提醒")
-        }
-        listOf("OMP 模型配置", "审批规则", "连接诊断").forEach { title ->
-            TextButton(
-                onClick = {
-                    model.launch {
-                        data =
-                            model.call(
-                                when (title) {
-                                    "OMP 模型配置" -> "/agents/omp/config"
-                                    "审批规则" -> "/rules"
-                                    else -> "/diagnostics"
-                                }
-                            )
-                        panel = title
-                    }
-                }
+    Column(
+        Modifier.padding(horizontal = 20.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Text(title)
+                Image(
+                    androidx.compose.ui.res.painterResource(
+                        icu.yzvibe.android.R.drawable.brand_logo
+                    ),
+                    null,
+                    Modifier.size(52.dp).clip(RoundedCornerShape(14.dp)).background(Color.White),
+                )
+                Column {
+                    Text("柚子Vibe", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        "离开电脑，继续 Vibe。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
-        TextButton(onClick = { model.action("/sessions/hidden", "DELETE") }) { Text("恢复隐藏会话") }
+        Text(
+            "安全与提醒",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("审批前验证身份", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "使用指纹或锁屏密码",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(auth, preferences::approvalAuth)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Text(
+                    "后台推送尚未配置。当前仅在前台同步，锁屏后请回到应用检查审批。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = {
+                        if (android.os.Build.VERSION.SDK_INT >= 33)
+                            notificationPermission.launch(
+                                android.Manifest.permission.POST_NOTIFICATIONS
+                            )
+                    }
+                ) {
+                    Text("开启任务和审批提醒")
+                }
+            }
+        }
+        Text(
+            "会话与连接",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        listOf("OMP 模型配置", "审批规则", "连接诊断").forEach { title ->
+            Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+                TextButton(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    colors =
+                        ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                    onClick = {
+                        if (title == "连接诊断") showDiagnostics = true
+                        else
+                            model.launch {
+                                data =
+                                    model.call(
+                                        when (title) {
+                                            "OMP 模型配置" -> "/agents/omp/config"
+                                            "审批规则" -> "/rules"
+                                            else -> "/diagnostics"
+                                        }
+                                    )
+                                panel = title
+                            }
+                    },
+                ) {
+                    Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+        Text(
+            "会话列表",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                SettingSwitch("按目录分组", "同一个工作目录的会话收在一起", preferences.groupByFolder) {
+                    preferences.groupByFolder(it)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SettingSwitch("只看近七天", "隐藏更早的会话", preferences.activeOnly) {
+                    preferences.activeOnly(it)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SettingSwitch("显示终端会话", "在电脑终端里直接开的会话", preferences.showTerminalSessions) {
+                    preferences.showTerminalSessions(it)
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                TextButton(onClick = { model.action("/sessions/hidden", "DELETE") }) {
+                    Text("恢复隐藏会话")
+                }
+            }
+        }
+        Text(
+            "外观",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            Appearance.entries.forEachIndexed { index, option ->
+                SegmentedButton(
+                    selected = preferences.appearance == option,
+                    onClick = { preferences.appearance(option) },
+                    shape =
+                        SegmentedButtonDefaults.itemShape(index, Appearance.entries.size),
+                    colors =
+                        SegmentedButtonDefaults.colors(
+                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            activeContentColor = MaterialTheme.colorScheme.primary,
+                        ),
+                ) {
+                    Text(option.label)
+                }
+            }
+        }
+        Text(
+            "语音使用设备离线识别，朗读使用系统 TTS。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(24.dp + screenBottomInset()))
     }
+    if (showDiagnostics)
+        settingsState.device?.let { device ->
+            DeviceDiagnosticsPanel(model, device) { showDiagnostics = false }
+        }
     if (panel == "OMP 模型配置") OmpSettings(model, data as? JSONObject ?: obj()) { panel = "" }
     else if (panel.isNotEmpty())
         ModalBottomSheet(onDismissRequest = { panel = "" }) {
@@ -628,6 +884,25 @@ fun Settings(model: AppModel) {
                 Spacer(Modifier.height(30.dp))
             }
         }
+}
+
+/** 「标题 + 说明 + 开关」的设置行，和 iOS `Toggle` 行的信息层级一致。 */
+@Composable
+internal fun SettingSwitch(title: String, detail: String, checked: Boolean, change: (Boolean) -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked, change)
+    }
 }
 
 @Composable

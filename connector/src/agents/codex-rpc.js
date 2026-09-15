@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { resolveAgentBin, agentEnv } from './bin.js';
 
 /** One private stdio transport. Request ids and pending approvals never cross processes. */
 export class CodexRPC extends EventEmitter {
@@ -7,8 +8,8 @@ export class CodexRPC extends EventEmitter {
     super();
     this.pending = new Map(); this.nextId = 0; this.timeout = timeout;
     this.closed = false; this.buffer = ''; this.stderr = '';
-    this.proc = spawnProcess('codex', ['app-server', '--listen', 'stdio://'], {
-      cwd, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env },
+    this.proc = spawnProcess(resolveAgentBin('codex'), ['app-server', '--listen', 'stdio://'], {
+      cwd, stdio: ['pipe', 'pipe', 'pipe'], env: agentEnv(),
     });
     this.proc.stdout.setEncoding('utf8');
     this.proc.stdout.on('data', data => {

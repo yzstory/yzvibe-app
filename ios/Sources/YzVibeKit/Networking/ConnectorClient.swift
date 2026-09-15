@@ -30,6 +30,7 @@ public protocol ConnectorClient: Sendable {
     func listFiles(device: Device, sessionId: String, path: String) async throws -> [FileEntry]
     func preview(device: Device, sessionId: String, path: String) async throws -> String
     /// 单个文件的元信息（GET /files/stat）；path 可以是相对工作目录的路径，也可以是绝对路径或 `~/…`。
+    func webResource(device: Device, sessionId: String, entry: String, resource: String) async throws -> (Data, String)
     func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo
     /// 下载文件原始字节（GET /files/download）。
     func download(device: Device, sessionId: String, path: String) async throws -> Data
@@ -518,6 +519,17 @@ public final class HTTPConnectorClient: ConnectorClient, @unchecked Sendable {
         try await perform(device, "/quota?agent=\(agent.rawValue)", as: QuotaInfo.self)
     }
 
+    public func webResource(device: Device, sessionId: String, entry: String, resource: String) async throws -> (Data, String) {
+        var query = URLComponents()
+        query.queryItems = [URLQueryItem(name: "sessionId", value: sessionId), URLQueryItem(name: "entry", value: entry), URLQueryItem(name: "resource", value: resource)]
+        let (bytes, response) = try await data(device, "/files/web-preview?" + (query.percentEncodedQuery ?? ""))
+        guard let http = response as? HTTPURLResponse else { throw ConnectorError.network("无响应") }
+        if http.statusCode == 401 { throw ConnectorError.unauthorized }
+        if http.statusCode == 404 { throw ConnectorError.network("页面资源不存在，或电脑连接器需要更新") }
+        guard (200..<300).contains(http.statusCode), bytes.count <= 20 * 1024 * 1024 else { throw ConnectorError.network("页面资源不可访问或超过 20 MB") }
+        return (bytes, http.mimeType ?? "application/octet-stream")
+    }
+
     public func fileInfo(device: Device, sessionId: String, path: String) async throws -> FileInfo {
         let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#"))) ?? path
         return try await perform(device, "/files/stat?sessionId=\(sessionId)&path=\(encoded)", as: FileInfo.self)
@@ -963,4 +975,10 @@ public extension ConnectorClient {
     func resumeQueue(device: Device, sessionId: String) async throws -> Session { throw ConnectorError.unreachable }
     func deleteSession(device: Device, sessionId: String) async throws {}
     func restoreHiddenSessions(device: Device) async throws -> Int { 0 }
+}
+
+extension ConnectorClient {
+    public func webResource(device: Device, sessionId: String, entry: String, resource: String) async throws -> (Data, String) {
+        throw ConnectorError.network("演示连接不提供 HTML 资源")
+    }
 }

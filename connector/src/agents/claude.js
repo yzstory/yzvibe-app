@@ -6,6 +6,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { expandHome } from '../files.js';
 import { claudeOptionArgs } from './options.js';
+import { resolveAgentBin, agentEnv } from './bin.js';
 import { claudeTurnUsage, accumulateUsage } from './usage.js';
 import { rememberRateLimit } from '../quota.js';
 import { diffFromToolInput } from '../diff.js';
@@ -159,7 +160,8 @@ export class ClaudeAgent {
     this.needsRespawn = false;
 
     const cwd = expandHome(session.cwd);
-    this.proc = spawn('claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, CLAUDECODE: undefined } });
+    const bin = resolveAgentBin('claude');
+    this.proc = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], env: agentEnv({ CLAUDECODE: undefined }) });
     this.proc.stdout.on('data', (b) => this.#onData(b));
     this.proc.stderr.on('data', (b) => { const s = String(b).trim(); if (s) console.error(`[claude ${session.id.slice(0, 8)}] ${s}`); });
     this.proc.on('exit', (code) => {
@@ -169,7 +171,7 @@ export class ClaudeAgent {
       this.store.setStatus(session.id, code === 0 || code === null ? 'idle' : 'error');
     });
     this.proc.on('error', (e) => {
-      this.store.addMessage(session.id, { role: 'system', text: `无法启动 claude：${e.message}` });
+      this.store.addMessage(session.id, { role: 'system', text: `无法启动 claude（${bin}）：${e.message}` });
       this.store.setStatus(session.id, 'error');
     });
   }

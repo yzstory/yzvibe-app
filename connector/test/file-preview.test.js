@@ -24,3 +24,25 @@ test('authenticated media transfer preserves special filenames and exact bytes',
  assert.equal((await fetch(url)).status,401);
  const r=await fetch(url,{headers:{authorization:`Bearer ${token}`}});assert.equal(r.status,200);assert.equal(r.headers.get('content-type'),'video/mp4');assert.deepEqual(Buffer.from(await r.arrayBuffer()),bytes);
 });
+
+test('HTML preview serves scoped resources with correct MIME and rejects authentication/path escapes', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-web-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ const api = await createConnector({port:0,home,importTerminal:false,log:()=>{}}); await api.listen(); t.after(()=>api.close());
+ const token = api.store.addDevice('fixture').token;
+ const s = api.store.createSession({agent:'mock',cwd:home});
+ const page = path.join(home,'pages'); fs.mkdirSync(page); fs.mkdirSync(path.join(page,'assets'));
+ fs.writeFileSync(path.join(page,'index.html'), '<h1>Rendered</h1>');
+ fs.writeFileSync(path.join(page,'assets','样式 #1.css'), 'body{color:red}');
+ fs.writeFileSync(path.join(home,'outside.json'), '{}');
+ fs.symlinkSync(path.join(home,'outside.json'),path.join(page,'escape.json'));
+ fs.writeFileSync(path.join(page,'.env'),'FIXTURE_ONLY');
+ const url = new URL(`http://127.0.0.1:${api.port}/files/web-preview`);
+ url.searchParams.set('sessionId',s.id); url.searchParams.set('entry','pages/index.html');
+ const get = resource => {url.searchParams.set('resource',resource); return fetch(url,{headers:{authorization:`Bearer ${token}`}});};
+ assert.equal((await fetch(url)).status,401);
+ let r = await get('index.html'); assert.equal(r.status,200); assert.equal(r.headers.get('content-type'),'text/html'); assert.match(await r.text(), /Rendered/);
+ r = await get('assets/样式 #1.css'); assert.equal(r.status,200); assert.equal(r.headers.get('content-type'),'text/css');
+ for (const resource of ['../outside.json','escape.json','.env']) assert.equal((await get(resource)).status,403);
+ assert.equal((await get('missing.png')).status,404);
+});

@@ -36,7 +36,7 @@ yzvibe install                         # 可选：注册开机自启
 |---|---|
 | `yzvibe start [flags]` | 后台启动并出示二维码；已在运行则只出示二维码（默认命令） |
 | `yzvibe run [flags]` | 前台运行，Ctrl+C 退出（调试用） |
-| `yzvibe status` | PID、地址、模式、会话数、已配对手机数 |
+| `yzvibe status` | 运行中与 CLI 版本、PID、地址、会话数、当前在线及历史配对数 |
 | `yzvibe qr` | 再次出示三种配对方式：二维码 + 手机浏览器外链 + 可粘贴的 JSON 配置；配对码 10 分钟一次性，过期自动换新，不用重启（`--link` / `--json` 只输出一项，便于管道） |
 | `yzvibe logs [-f] [-n 100]` | 查看 `~/.yzvibe/yzvibe.log`（超过 5MB 自动轮转到 `.1`） |
 | `yzvibe stop` / `restart [flags]` | 停止 / 用上次的参数（或新参数）重启 |
@@ -195,3 +195,13 @@ APNs JWT 与载荷、推送环境回退与失效清理、实时活动载荷、`/
 ## OMP（Oh My Pi）
 
 支持第三方 OpenAI 兼容供应商、原生会话恢复和手机工具审批。安装、模型配置及能力边界见 [OMP 接入说明](../docs/OMP.md)。
+
+## 0.1.4 更新
+
+- 新增手机 HTML 页面预览资源接口，支持 HTML 所在目录内的 CSS、JavaScript、图片与字体，配合新版 iOS / Android 客户端使用。
+- 修复 npx 注入的 PATH 可能优先选中过期 Agent CLI 的问题。
+- 已运行的连接器不会因下载新版自动替换；任务结束后执行 `npx yzvibe@latest restart` 生效。
+
+### 状态里的设备数量
+
+`status` 的当前在线数按有 WebSocket 连接的配对身份去重；App 进入后台或断开后可能不在线，异常断网最多约一分钟后清理。已保存配对数包含过去的扫码、重装和测试记录，不代表物理手机数量；推送注册记录也不代表在线。`devices` 可逐条查看在线状态，需要时再用 `revoke` 撤销旧记录。运行中版本来自该进程所用包的 package.json；升级 CLI 后，需结束运行中的任务并 `restart` 才能替换后台进程。

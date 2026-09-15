@@ -2,6 +2,7 @@
 // 三个选项在两种 Agent 上的语义不同，这里集中映射，Claude / Codex 驱动只负责把结果拼进命令行。
 import { ompCapabilities, OMP_EFFORTS } from './omp-catalog.js';
 import { execFile } from 'node:child_process';
+import { resolveAgentBin, agentEnv } from './bin.js';
 
 export const MODES = ['plan', 'normal', 'trust'];
 
@@ -86,7 +87,7 @@ const CATALOG_TTL = 10 * 60_000;
 export async function codexModels() {
   if (codexCatalog && Date.now() - codexCatalog.at < CATALOG_TTL) return codexCatalog.models;
   const models = await new Promise((resolve) => {
-    execFile('codex', ['debug', 'models'], { timeout: 8000, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+    execFile(resolveAgentBin('codex'), ['debug', 'models'], { timeout: 8000, maxBuffer: 8 * 1024 * 1024, env: agentEnv() }, (err, stdout) => {
       if (err) return resolve(null);
       try {
         const list = (JSON.parse(stdout).models ?? [])

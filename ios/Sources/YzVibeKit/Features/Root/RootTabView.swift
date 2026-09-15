@@ -6,6 +6,7 @@ public struct RootTabView: View {
     @State private var store: AppStore
     @State private var tab: Tab = .sessions
     @State private var pairingFromLink = false
+    @State private var showingWelcome = true
     @AppStorage("yz.didWelcomePomelo.v2") private var didWelcome = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -45,9 +46,9 @@ public struct RootTabView: View {
             .preferredColorScheme(appearance.colorScheme)
             .overlay(alignment: .top) { ToastView(text: $store.toast) }
             .overlay {
-                if !didWelcome {
-                    PomeloWelcomeView {
-                        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { didWelcome = true }
+                if showingWelcome {
+                    PomeloWelcomeView(isFirstLaunch: !didWelcome) {
+                        finishWelcome()
                     }.transition(.opacity)
                 }
             }
@@ -64,6 +65,7 @@ public struct RootTabView: View {
             .onChange(of: store.pendingApprovals.count) { _, n in PushCenter.shared.setBadge(n) }
             .task {
                 PushCenter.shared.onOpen = { payload in
+                    finishWelcome()
                     switch payload.kind {
                     case .approval, .approvalResolved: tab = .approvals
                     case .reply:
@@ -75,6 +77,14 @@ public struct RootTabView: View {
                 }
                 await store.start()
             }
+        }
+    }
+
+    private func finishWelcome() {
+        guard showingWelcome else { return }
+        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.25)) {
+            showingWelcome = false
+            didWelcome = true
         }
     }
 
@@ -93,6 +103,7 @@ public struct RootTabView: View {
 
     /// 处理 `yzvibe://pair?…` 深链：直接配对并跳到设备页。
     private func handle(_ url: URL) async {
+        finishWelcome()
         if url.scheme == "yzvibe", ["tasks", "session"].contains(url.host ?? "") {
             didWelcome = true
             let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []

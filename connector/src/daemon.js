@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HOME } from './store.js';
+import { VERSION } from './version.js';
 import { printQR } from './pairing.js';
 
 export const DAEMON_FILE = path.join(HOME, 'daemon.json');
@@ -46,9 +47,9 @@ async function internal(info, pathname, { timeoutMs = 3000, method = 'GET' } = {
 export async function printDevices(info) {
   const { body: devices } = await internal(info, '/internal/devices');
   if (!devices.length) { console.log('还没有配对的手机。运行 yzvibe qr 出示配对方式。'); return; }
-  console.log(`已配对 ${devices.length} 台手机：`);
+  console.log(`已保存 ${devices.length} 条配对记录（含历史记录）：`);
   for (const d of devices) {
-    console.log(`  ${d.id.slice(0, 8)}  ${d.name.padEnd(16)} 配对于 ${fmtAge(d.createdAt)}前  推送 ${d.push ? `已注册（${d.push.environment}）` : '未注册'}`);
+    console.log(`  ${d.id.slice(0, 8)}  ${d.name.padEnd(16)} ${d.online === true ? '在线' : d.online === false ? '离线' : '在线状态未知'} 配对于 ${fmtAge(d.createdAt)}前  推送 ${d.push ? `已注册（${d.push.environment}）` : '未注册'}`);
   }
   console.log('\n撤销某台：yzvibe revoke <id 前 8 位或名字>');
 }
@@ -163,12 +164,15 @@ export async function printStatus(info) {
   const host = st?.host ?? info.host, mode = st?.mode ?? info.mode;
   const modeLabel = { tunnel: 'Cloudflare Tunnel', relay: '自定义 Relay', local: '局域网', tailscale: 'Tailscale' }[mode] ?? mode;
   console.log(`YzVibe 连接器：${st ? '运行中' : '进程在但未响应'}${info.managed ? `（${info.managed} 托管，开机自启）` : ''}`);
+  console.log(`  版本     运行中 ${st?.version ?? info.version ?? '未知'} · 当前 CLI ${VERSION}`);
+  if (st && st.version !== VERSION) console.log('           运行中版本与 CLI 不一致；结束正在执行的任务后，用 yzvibe restart 更新后台进程。');
   console.log(`  PID      ${info.pid}   已运行 ${fmtAge(info.startedAt)}`);
   console.log(`  地址     ${host}${String(host).includes('://') ? '' : `:${info.port}`}   （${modeLabel}，本机端口 ${info.port}）`);
   console.log(`  Agent    ${info.agent}${info.flags?.length ? `   启动参数 ${info.flags.join(' ')}` : ''}`);
   console.log(`  日志     ${LOG_FILE}`);
-  if (st) console.log(`  会话     ${st.stats.sessions} 个（运行中 ${st.stats.running}，待审批 ${st.stats.pendingApprovals}），已配对手机 ${st.stats.devices} 台，审批规则 ${st.stats.rules ?? 0} 条`);
-  if (st) console.log(`  推送     ${st.push?.ready ? `已就绪，${st.push.registeredDevices} 台手机已注册` : `未配置（yzvibe push 看怎么开）`}`);
+  if (st) console.log(`  会话     ${st.stats.sessions} 个（运行中 ${st.stats.running}，待审批 ${st.stats.pendingApprovals}），审批规则 ${st.stats.rules ?? 0} 条`);
+  if (st) console.log(`  手机     当前在线 ${st.stats.onlineDevices ?? '未知（旧版连接器未提供）'} · 已保存配对 ${st.stats.devices} 条（含历史记录）`);
+  if (st) console.log(`  推送     ${st.push?.ready ? `已就绪，${st.push.registeredDevices} 条推送注册记录（不代表在线）` : `未配置（yzvibe push 看怎么开）`}`);
 }
 
 /** 三种配对方式：扫码 / 手机浏览器打开外链 / 复制 JSON 粘贴进 App。`only` 可指定 'json' | 'link' 只输出一项（便于管道）。 */

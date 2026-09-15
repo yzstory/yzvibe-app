@@ -13,6 +13,24 @@ struct DevicesView: View {
     var body: some View {
         NavigationStack {
             List {
+                VStack(alignment: .leading, spacing: 12) {
+                    Link(destination: URL(string: "https://vibe.yzcloud.icu/")!) {
+                        HStack(spacing: 12) {
+                            BrandLogo(size: 40)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("柚子Vibe · 使用指南").font(.yzSubhead)
+                                Text("安装连接器，扫码开始使用").font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "arrow.up.right").foregroundStyle(p.labelSecondary)
+                        }.padding(14).background(p.fill, in: RoundedRectangle(cornerRadius: 18))
+                    }.buttonStyle(.plain)
+                    Text("App \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—") (\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"))")
+                        .font(.yzFootnote).foregroundStyle(p.labelSecondary)
+                }
+                .listRowInsets(EdgeInsets(top: 8, leading: Spacing.page, bottom: 12, trailing: Spacing.page))
+                .listRowSeparator(.hidden).listRowBackground(Color.clear)
+
                 if store.devices.isEmpty {
                     emptyState
                         .listRowInsets(EdgeInsets(top: 8, leading: Spacing.page, bottom: 8, trailing: Spacing.page))
@@ -116,6 +134,7 @@ struct DeviceCard: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
     let device: Device
+    @State private var connectorVersion = "读取中…"
 
     var body: some View {
         PaperCard(padding: 14) {
@@ -136,6 +155,7 @@ struct DeviceCard: View {
                     Spacer(minLength: 4)
                     Image(systemName: "chevron.right").font(.system(.footnote, weight: .semibold)).foregroundStyle(p.labelTertiary)
                 }
+                Text("连接器 \(connectorVersion)").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                 HStack(spacing: 8) {
                     Chip.mode(device.mode)
                     if device.online { Chip("在线", tone: .sage) } else { Chip((store.recoveryStates[device.id] ?? .reconnecting).title, tone: .fill) }
@@ -146,6 +166,16 @@ struct DeviceCard: View {
                     Text("\(device.sessionCount) 个会话").font(.yzFootnote).foregroundStyle(p.labelSecondary)
                 }
             }
+        }
+        .task(id: "\(device.id)-\(device.endpoint)-\(device.online)") {
+            connectorVersion = "读取中…"
+            do {
+                let health = try await store.client.health(device: device)
+                try Task.checkCancellation()
+                if let id = health.connectorId, id != device.id { connectorVersion = "设备身份不符" }
+                else { connectorVersion = health.version.isEmpty ? "版本未知" : health.version }
+            } catch is CancellationError { }
+            catch { connectorVersion = "暂不可获取" }
         }
     }
 }

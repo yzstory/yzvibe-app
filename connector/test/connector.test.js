@@ -100,15 +100,17 @@ test('权限分类', () => {
   assert.equal(classifyPermission('mcp__foo__bar', { a: 1 }).kind, 'other');
 });
 
-test('默认端口被占用时自动后移', async () => {
+test('默认端口被占用时自动后移', async (t) => {
   const net = await import('node:net');
   const blocker = net.createServer(); await new Promise((r) => blocker.listen(0, '0.0.0.0', r));
+  t.after(() => new Promise((resolve) => blocker.close(resolve)));
   const busy = blocker.address().port;
   const c = await createConnector({ port: busy, name: 'T', defaultAgent: 'mock', home: fs.mkdtempSync(path.join(os.tmpdir(), 'yzvibe-port-')), log: () => {} });
+  t.after(() => c.close());
   const got = await c.listen();
-  assert.equal(got, busy + 1);
-  assert.equal(c.port, busy + 1);
-  await c.close(); blocker.close();
+  // Adjacent ephemeral ports may also belong to other parallel tests.
+  assert.ok(got > busy && got <= busy + 20);
+  assert.equal(c.port, got);
 });
 
 test('会话选项：新建 / PATCH / WS 切换 / 能力表', async () => {

@@ -97,6 +97,46 @@ class ConnectorApi(private val tokenProvider: (Device) -> String) {
             }
         }
 
+    suspend fun webResource(
+        d: Device,
+        sid: String,
+        entry: String,
+        resource: String,
+    ): Pair<ByteArray, String> =
+        withContext(Dispatchers.IO) {
+            http
+                .newCall(
+                    request(
+                            d,
+                            d.base,
+                            "/files/web-preview",
+                            mapOf("sessionId" to sid, "entry" to entry, "resource" to resource),
+                        )
+                        .build()
+                )
+                .execute()
+                .use { response ->
+                    response.checked()
+                    val bytes =
+                        response.body!!.byteStream().use { input ->
+                            val out = java.io.ByteArrayOutputStream()
+                            val buffer = ByteArray(8192)
+                            while (true) {
+                                val count = input.read(buffer)
+                                if (count < 0) break
+                                require(out.size() + count <= 20 * 1024 * 1024) { "页面资源超过 20 MB" }
+                                out.write(buffer, 0, count)
+                            }
+                            out.toByteArray()
+                        }
+                    require(bytes.size <= 20 * 1024 * 1024) { "页面资源超过 20 MB" }
+                    bytes to
+                        response
+                            .header("Content-Type", "application/octet-stream")!!
+                            .substringBefore(';')
+                }
+        }
+
     suspend fun upload(d: Device, file: File, name: String, mime: String): String =
         withContext(Dispatchers.IO) {
             require(file.length() <= 20 * 1024 * 1024) { "单个附件最多 20 MB" }

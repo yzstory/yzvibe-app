@@ -6,7 +6,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parent
 FILES = ["index.html", "styles.css", "app.js", "assets/logo.png",
-         "assets/sessions.png", "assets/chat.png", "assets/approvals.png"]
+         "assets/sessions.png", "assets/chat.png", "assets/changes.jpg", "assets/android-qr.jpg"]
 
 def main():
     destination = ROOT / "dist"

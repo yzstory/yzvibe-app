@@ -4,7 +4,7 @@ import AVKit
 import Combine
 
 /// 单个远程文件的查看器：标题是文件名、副标题是完整路径，右上角「下载」与「复制」。
-/// 从文件列表点进来，或在聊天正文里点文件路径唤起。手机只读取内容，不执行任何文件。
+/// 从文件列表点进来，或在聊天正文里点文件路径唤起。HTML 在隔离网页视图中预览，其余文件按类型只读展示。
 struct FileViewerView: View {
     @Environment(AppStore.self) private var store
     @Environment(\.palette) private var p
@@ -24,11 +24,14 @@ struct FileViewerView: View {
     @State private var player: AVPlayer?
     @State private var showSource = false
     @State private var showImage = false
+    @State private var htmlError: String?
     @State private var openedFile: FileRef?
 
     private struct ShareItem: Identifiable { let id = UUID(); let url: URL }
 
     private var fileName: String { info?.name ?? path.split(separator: "/").last.map(String.init) ?? path }
+
+    private var isHTML: Bool { ["html", "htm"].contains(((info?.name ?? path) as NSString).pathExtension.lowercased()) }
 
     var body: some View {
         ZStack {
@@ -64,7 +67,17 @@ struct FileViewerView: View {
                         }
                         }.buttonStyle(.plain).accessibilityLabel("全屏查看图片")
                     } else if let content {
-                        if info?.kind == .markdown && !showSource {
+                        if isHTML && !showSource, let session, let device = store.device(session.deviceId) {
+                            if let htmlError { Text(htmlError).font(.yzFootnote).foregroundStyle(p.danger) }
+                            let client = store.client
+                            let entry = info?.path ?? path
+                            HTMLPreview(entry: entry, resource: { resource in
+                                try await client.webResource(device: device, sessionId: session.id, entry: entry, resource: resource)
+                            }, onError: { htmlError = $0 })
+                            .frame(height: 560)
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .id(entry)
+                        } else if info?.kind == .markdown && !showSource {
                             PaperCard {
                                 MarkdownText(text: content, onOpenFile: { openedFile = FileRef(path: $0) },
                                              onCopy: { _ in store.toast = "已复制" }, sessionId: session?.id,
@@ -86,9 +99,9 @@ struct FileViewerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if info?.kind == .markdown, content != nil {
+                if (info?.kind == .markdown || isHTML), content != nil {
                     Button { showSource.toggle() } label: { Image(systemName: showSource ? "doc.richtext" : "chevron.left.forwardslash.chevron.right") }
-                        .accessibilityLabel(showSource ? "查看渲染结果" : "查看 Markdown 源码")
+                        .accessibilityLabel(showSource ? "查看渲染结果" : "查看源码")
                 }
                 Button { Task { await download() } } label: {
                     if downloading { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.down.to.line") }
@@ -127,7 +140,7 @@ struct FileViewerView: View {
     private var footer: some View {
         HStack(spacing: 6) {
             Image(systemName: "lock").font(.system(.caption2))
-            Text("只读取内容，手机不会执行任何文件").font(.yzFootnote)
+            Text(isHTML ? "隔离预览页面 · 支持同目录资源和页面交互" : "只读取内容，手机不会执行任何文件").font(.yzFootnote)
         }
         .foregroundStyle(p.labelTertiary).frame(maxWidth: .infinity)
     }
@@ -135,7 +148,7 @@ struct FileViewerView: View {
     // MARK: 数据
 
     private func load() async {
-        loading = true; error = nil; content = nil; image = nil; info = nil
+        loading = true; error = nil; htmlError = nil; showSource = false; content = nil; image = nil; info = nil
         player?.pause(); player = nil; removeLocalFile()
         defer { loading = false }
         guard let session, let device = store.device(session.deviceId) else {

@@ -1,1 +1,7 @@
-<resources><style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowLightStatusBar">false</item><item name="android:statusBarColor">#0B0B0D</item><item name="android:navigationBarColor">#0B0B0D</item><item name="android:windowActionModeOverlay">true</item></style></resources>
+<resources>
+ <!-- 系统栏颜色交给 enableEdgeToEdge + YzTheme，这里不再写死，否则浅色主题下顶部会留一条黑边。 -->
+ <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+  <item name="android:fontFamily">sans</item>
+  <item name="android:windowActionModeOverlay">true</item>
+ </style>
+</resources>

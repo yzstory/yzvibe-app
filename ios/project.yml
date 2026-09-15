@@ -28,8 +28,8 @@ targets:
       path: App/YzVibe/Info.plist
       properties:
         CFBundleDisplayName: 柚子Vibe
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "35"
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "39"
         # 仅使用 Apple 系统提供的加密（URLSession HTTPS/WSS、Keychain）。
         ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
@@ -71,8 +71,8 @@ targets:
       path: Widgets/YzVibeWidgets/Info.plist
       properties:
         CFBundleDisplayName: 柚子Vibe 实时活动
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "35"
+        CFBundleShortVersionString: "0.2.0"
+        CFBundleVersion: "39"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

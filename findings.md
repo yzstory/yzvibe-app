@@ -180,3 +180,21 @@ android 仅 .gitkeep。iOS 使用 Swift 原生状态层，REST/WS 可复用。�
 - Markwon 的可选择 TextView 需要同时处理短按链接，才能兼顾逐字复制与远程文档打开；已在模拟器确认。
 - 本地草稿使用 AtomicFile 小文档，未引入 Room；大规模离线历史仍属后续工作。
 - 现有推送接口只接受 APNs 十六进制 token，不能直接复用给 Android。
+
+## 2026-09-15 用户反馈复核
+- iOS FileViewer 将 HTML 作为 code，Android FilePreview 把所有 text/* 交给 Markdown，因此都没有页面渲染。
+- Android SessionPanel 的改动/交付/上下文仍依赖原始 JSON 文本，需要原生结构化展示。
+- Android 初始滚动依赖 atBottom 的布局观测，长消息历史首次加载存在竞争；工具按消息逐条展示未聚合。
+- HTML 采用隔离 origin 与 native 认证资源传输；新增 /files/web-preview 将资源限制在所打开 HTML 的目录，拒绝越界与符号链接逃逸。不会把设备 Token 注入网页。
+- 官方 Android 文档建议虚拟 HTTPS origin 而非 file://；iOS 使用 WKURLSchemeHandler。页面脚本可交互，外部网络/iframe/表单与本地文件权限关闭。
+
+## 发布体系调查
+- Android versionCode=1，iOS build=37；需统一移动端发布编号。npm 独立语义化版本为 0.1.4。
+- 网站为 html/build.py 固定 7 文件白名单；网站 README 域名与现有本地运维 skill 不一致，发布时须以实时 HTTPS/服务器配置核实，不能盲用旧说明。
+- docs 当前为 GitHub Markdown 文档，网站产物明确不含 docs；没有独立文档站构建/部署工作流。
+- CI 当前为校验，不执行生产部署。项目已有 .claude/skills 项目技能；deploy 需同时提供 Codex 项目发现入口并定向忽略。
+
+## 官网更新依据
+- 现有官网仍写仅 iPhone，截图为9月12日，iOS build28/connector0.1.3说明已旧。
+- SSH核对现有入口为 vibe.yzcloud.icu，当前release为20260914-164657。
+- 本次新增Android二维码及双端新截图，需要同时扩充本地与远端明确资源白名单。纯静态资源更新，不改nginx/Compose。

@@ -9,7 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { Store, HOME, describeRule } from './store.js';
 import { Pairing, lanAddresses, pairURL, pairLink, pairConfig, pairPageHTML, printQR } from './pairing.js';
 import { startCloudflareTunnel, retryTunnel, loadRelay, saveRelay } from './tunnel.js';
-import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf } from './files.js';
+import { listDir, previewFile, resolveInside, resolveReadable, statFile, mimeOf, webPreviewResource } from './files.js';
 import { ClaudeAgent, classifyPermission } from './agents/claude.js';
 import { CodexAgent } from './agents/codex-app-server.js';
 import { OmpAgent } from './agents/omp.js';
@@ -30,7 +30,8 @@ import { sessionCommands } from './commands.js';
 import { readBody, readJSON, messageInput, badRequest, JSON_LIMIT, UPLOAD_LIMIT } from './requests.js';
 import { diagnostics } from './diagnostics.js';
 
-export const VERSION = '0.1.3';
+import { VERSION } from './version.js';
+export { VERSION } from './version.js';
 
 export const DEFAULT_PORT = 19876;
 
@@ -43,6 +44,10 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
   const agents = new Map();            // sessionId → agent 实例
   const sockets = new Set();           // 每个 ws 上挂了 ws.deviceId
 
+  // Count authenticated device identities, not sockets or historical pairings.
+  const onlineDeviceIds = () => new Set([...sockets]
+    .filter(ws => ws.readyState === WebSocket.OPEN && store.devices.some(d => d.id === ws.deviceId))
+    .map(ws => ws.deviceId));
   const deviceName = name;
   const pusher = new Pusher({
     home, log,
@@ -284,13 +289,13 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
           pairing: currentPairing(),
           endpoints: api.endpoints(),
           push: pusher.status(store.devices),
-          stats: { devices: store.devices.length, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length, rules: rules.all().length },
+          stats: { devices: store.devices.length, onlineDevices: onlineDeviceIds().size, sessions: sessions.filter((x) => x.status !== 'closed').length, running: sessions.filter((x) => x.status === 'running').length, pendingApprovals: store.listApprovals('pending').length, rules: rules.all().length },
         });
       }
       // 内部：本机 CLI 管理已配对的手机（yzvibe devices / revoke）与推送自检（yzvibe push）
       if (p === '/internal/devices' || p.startsWith('/internal/devices/') || p === '/internal/push-test') {
         if (req.headers['x-yzvibe-secret'] !== internalSecret) return json(res, 403, { error: 'forbidden' });
-        if (req.method === 'GET' && p === '/internal/devices') return json(res, 200, store.listDevices());
+        if (req.method === 'GET' && p === '/internal/devices') return json(res, 200, store.listDevices().map(d => ({ ...d, online: onlineDeviceIds().has(d.id) })));
         const dm = p.match(/^\/internal\/devices\/([^/]+)$/);
         if (dm && req.method === 'DELETE') {
           const target = store.devices.find((d) => d.id === dm[1] || d.id.startsWith(dm[1]) || d.name === dm[1]);
@@ -494,6 +499,14 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
         if (!['allow', 'deny', 'allow_once'].includes(decision)) return json(res, 400, { error: 'decision 不合法' });
         return json(res, store.resolveApproval(m[1], decision, 'phone', remember ?? null, answers ?? null) ? 200 : 409, { ok: true });
       }
+      // Authenticated resource transport for isolated native HTML previews.
+      if (p === '/files/web-preview' && req.method === 'GET') {
+        const s = resolveSession(url.searchParams.get('sessionId') ?? '');
+        if (!s) return json(res, 400, { error: '需要 sessionId' });
+        const { mime, body } = webPreviewResource(s.cwd, url.searchParams.get('entry') ?? '', url.searchParams.get('resource') ?? '');
+        res.writeHead(200, { 'content-type': mime, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+        return res.end(body);
+      }
       // 文件
       if (p === '/files' || p === '/files/preview' || p === '/files/download' || p === '/files/stat') {
         const s = resolveSession(url.searchParams.get('sessionId') ?? ''); if (!s) return json(res, 400, { error: '需要 sessionId' });
@@ -597,12 +610,24 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
 
   // ---------- WebSocket ----------
   const wss = new WebSocketServer({ noServer: true, maxPayload: JSON_LIMIT });
+  // Detect dead mobile connections after network loss (within about 60 seconds).
+  const heartbeat = setInterval(() => {
+    for (const ws of sockets) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (!ws.alive) { sockets.delete(ws); ws.terminate(); continue; }
+      ws.alive = false;
+      ws.ping();
+    }
+  }, 30_000);
+  heartbeat.unref();
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const wsDevice = authed(req, url);
     if (url.pathname !== '/ws' || !wsDevice) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, (ws) => {
       ws.deviceId = wsDevice.id;
+      ws.alive = true;
+      ws.on('pong', () => { ws.alive = true; });
       sockets.add(ws);
       ws.on('error', () => {}); // Invalid/oversized frames close this socket, not the connector.
       ws.send(JSON.stringify({ type: 'connected', protocolVersion: 2 }));
@@ -654,7 +679,7 @@ export async function createConnector({ port = DEFAULT_PORT, name = os.hostname(
     endpoints: () => collectEndpoints({ host: api.access.host, port: api.port, mode: api.access.mode }),
     listen: listenWithFallback,
     rules, pusher,
-    close: () => new Promise((resolve) => { closing = true; clearTimeout(overviewTimer); stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
+    close: () => new Promise((resolve) => { closing = true; clearInterval(heartbeat); clearTimeout(overviewTimer); stopCleanup(); pusher.close(); api.stopBonjour?.(); for (const a of agents.values()) a.dispose(); for (const ws of sockets) ws.close(); wss.close(); server.close(() => resolve()); }),
     setAnnounce: (fn) => { announce = fn; },
   };
   return api;

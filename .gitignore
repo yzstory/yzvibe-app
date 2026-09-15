@@ -49,3 +49,7 @@ id_ed25519
 # 本机服务器运维资料（不提交连接信息）
 .claude/skills/test-server/
 html/dist/
+
+# 本项目本地发布 skill（Codex + Claude Code 入口）
+/.agents/skills/deploy/
+/.claude/skills/deploy

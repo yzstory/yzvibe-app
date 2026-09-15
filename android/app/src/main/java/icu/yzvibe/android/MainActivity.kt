@@ -3,6 +3,7 @@ package icu.yzvibe.android
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.fragment.app.FragmentActivity
 import icu.yzvibe.android.core.AppModel
@@ -12,7 +13,10 @@ class MainActivity : FragmentActivity() {
     private val model: AppModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // 底部是 NavigationBar / NavigationRail，自己就画到底；关掉系统补的半透明蒙版。
+        window.isNavigationBarContrastEnforced = false
         setContent { App(model) }
         if (savedInstanceState == null) handle(intent)
     }

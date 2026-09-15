@@ -30,10 +30,12 @@ struct PomeloLoadingView: View {
     }
 }
 
-/// First-launch hello: arrive, sparkle, pause long enough to read, then fade out.
+/// Cold-launch greeting. Timing starts only while the scene is active.
 struct PomeloWelcomeView: View {
     @Environment(\.palette) private var p
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    var isFirstLaunch = false
     let finish: () -> Void
     @State private var arrived = false
     @State private var spark = false
@@ -44,9 +46,9 @@ struct PomeloWelcomeView: View {
             VStack(spacing: 22) {
                 ZStack(alignment: .topTrailing) {
                     BrandLogo(size: 112)
-                        .scaleEffect(arrived || reduceMotion ? 1 : 0.65)
-                        .rotationEffect(.degrees(arrived || reduceMotion ? 0 : -12))
-                        .offset(y: arrived || reduceMotion ? 0 : 20)
+                        .scaleEffect(arrived || reduceMotion ? 1 : 0.92)
+                        .rotationEffect(.degrees(arrived || reduceMotion ? 0 : -4))
+                        .offset(y: arrived || reduceMotion ? 0 : 10)
                     Image(systemName: "sparkle").font(.system(size: 24, weight: .semibold)).foregroundStyle(p.brand)
                         .offset(x: 15, y: -12).scaleEffect(spark ? 1 : 0.4).opacity(spark ? 1 : 0)
                 }
@@ -59,13 +61,17 @@ struct PomeloWelcomeView: View {
         .contentShape(Rectangle()).onTapGesture(perform: finish)
         .accessibilityElement(children: .combine).accessibilityAddTraits(.isButton)
         .accessibilityHint("轻点进入")
-        .task {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.5, dampingFraction: 0.75)) { arrived = true }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            // A cancelled foreground interval must not dismiss a later launch frame.
+            withAnimation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.35, dampingFraction: 0.85)) { arrived = true }
             do {
-                try await Task.sleep(for: .milliseconds(500))
+                try await Task.sleep(for: .milliseconds(350))
                 withAnimation(.easeOut(duration: 0.25)) { spark = true }
                 // Preserve reading time with Reduce Motion too; only the movement changes.
-                try await Task.sleep(for: .milliseconds(1700))
+                try await Task.sleep(for: .milliseconds(isFirstLaunch ? 1300 : 900))
+                try Task.checkCancellation()
+                guard scenePhase == .active else { return }
                 finish()
             } catch { }
         }

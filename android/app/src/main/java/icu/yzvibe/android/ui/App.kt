@@ -9,14 +9,25 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.TextView
-import androidx.activity.compose.BackHandler
+import androidx.activity.BackEventCompat
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,15 +35,26 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.navigationsuite.ExperimentalMaterial3AdaptiveNavigationSuiteApi
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.*
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.*
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
@@ -46,16 +68,41 @@ import io.noties.markwon.Markwon
 import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-val Orange = Color(0xFFFF9D50)
+/**
+ * `NavigationSuiteScaffold` 不会把系统栏 inset 传进内容区（官方 adaptive 指南明确要求各屏自己处理），
+ * 所以这里统一下发：导航区占用的那条边已经由导航区自己吃掉，剩下几边留给页面。
+ */
+val LocalScreenInsets = compositionLocalOf { WindowInsets(0, 0, 0, 0) }
 
+/** 底部 inset，给列表的 contentPadding 用，避免把 Modifier.padding 加到滚动容器上裁掉内容。 */
+@Composable
+fun screenBottomInset(): androidx.compose.ui.unit.Dp =
+    with(LocalDensity.current) { LocalScreenInsets.current.getBottom(this).toDp() }
+
+private val TabItems =
+    listOf(
+        "设备" to Icons.Default.Computer,
+        "会话" to Icons.AutoMirrored.Filled.Chat,
+        "审批" to Icons.Default.VerifiedUser,
+        "我" to Icons.Default.Person,
+    )
+
+@OptIn(
+    ExperimentalMaterial3AdaptiveApi::class,
+    ExperimentalMaterial3AdaptiveNavigationSuiteApi::class,
+    ExperimentalLayoutApi::class,
+)
 @Composable
 fun App(model: AppModel) {
     val state by model.state.collectAsStateWithLifecycle()
-    var tab by remember { mutableIntStateOf(1) }
+    val preferences = rememberPreferences()
+    var tab by rememberSaveable { mutableIntStateOf(1) }
     var pair by remember { mutableStateOf(false) }
     var create by remember { mutableStateOf(false) }
     var welcome by rememberSaveable { mutableStateOf(true) }
@@ -63,123 +110,286 @@ fun App(model: AppModel) {
         kotlinx.coroutines.delay(1600)
         welcome = false
     }
-    MaterialTheme(
-        colorScheme =
-            darkColorScheme(
-                primary = Orange,
-                background = Color(0xFF0B0B0D),
-                surface = Color(0xFF1C1C20),
-            )
-    ) {
-        Scaffold(
-            bottomBar = {
-                if (state.sessionId == null)
-                    NavigationBar {
-                        listOf(
-                                "设备" to Icons.Default.Computer,
-                                "会话" to Icons.AutoMirrored.Filled.Chat,
-                                "审批" to Icons.Default.VerifiedUser,
-                                "我" to Icons.Default.Person,
-                            )
-                            .forEachIndexed { i, p ->
-                                NavigationBarItem(
-                                    selected = tab == i,
-                                    onClick = { tab = i },
-                                    icon = { Icon(p.second, p.first) },
-                                    label = { Text(p.first) },
-                                )
-                            }
-                    }
-            }
-        ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                if (state.sessionId != null) Chat(model, state)
-                else {
-                    Row(
-                        Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            state.device?.name ?: "柚子Vibe",
-                            Modifier.weight(1f),
-                            fontWeight = FontWeight.Bold,
-                        )
-                        IconButton(onClick = { model.connect() }) {
-                            Icon(Icons.Default.Refresh, "重连")
-                        }
-                        IconButton(
-                            onClick = {
-                                if (tab == 0 || state.device == null) pair = true else create = true
-                            }
-                        ) {
-                            Icon(Icons.Default.Add, "添加")
-                        }
-                    }
-                    Text(
-                        state.connection,
-                        Modifier.padding(horizontal = 20.dp),
-                        color = if (state.connection == "在线") Color(0xFF65CD99) else Orange,
-                        style = MaterialTheme.typography.labelMedium,
+    CompositionLocalProvider(LocalPreferences provides preferences) {
+        YzTheme(preferences.appearance) {
+            val chatting = state.sessionId != null
+            val keyboard = WindowInsets.isImeVisible
+            // 会话内和打字时让出整屏；其余按窗口宽度在底部栏（手机）和侧边栏（平板 / 展开的折叠屏 / 桌面）之间切换。
+            val layout =
+                if (chatting || keyboard) NavigationSuiteType.None
+                else
+                    NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(
+                        currentWindowAdaptiveInfo()
                     )
-                    if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-                    when (tab) {
-                        0 -> Devices(model, state) { pair = true }
-                        1 -> Sessions(model, state) { create = true }
-                        2 -> Approvals(model, state.snapshot.approvals)
-                        else -> Settings(model)
+            val itemColors =
+                NavigationSuiteDefaults.itemColors(
+                    navigationBarItemColors =
+                        NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    navigationRailItemColors =
+                        NavigationRailItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                )
+            val approvals = state.snapshot.approvals.size
+            Box(Modifier.fillMaxSize()) {
+                NavigationSuiteScaffold(
+                    layoutType = layout,
+                    containerColor = MaterialTheme.colorScheme.background,
+                    contentColor = MaterialTheme.colorScheme.onBackground,
+                    navigationSuiteColors =
+                        NavigationSuiteDefaults.colors(
+                            navigationBarContainerColor = MaterialTheme.colorScheme.surface,
+                            navigationRailContainerColor = MaterialTheme.colorScheme.surface,
+                        ),
+                    navigationSuiteItems = {
+                        TabItems.forEachIndexed { i, (label, icon) ->
+                            item(
+                                selected = tab == i,
+                                onClick = { tab = i },
+                                icon = { Icon(icon, null) },
+                                label = { Text(label) },
+                                badge =
+                                    if (i == 2 && approvals > 0) {
+                                        { Text(approvals.toString()) }
+                                    } else null,
+                                colors = itemColors,
+                            )
+                        }
+                    },
+                ) {
+                    val insets =
+                        when (layout) {
+                            NavigationSuiteType.NavigationBar ->
+                                WindowInsets.safeDrawing.only(
+                                    WindowInsetsSides.Horizontal + WindowInsetsSides.Top
+                                )
+                            NavigationSuiteType.NavigationRail,
+                            NavigationSuiteType.NavigationDrawer ->
+                                WindowInsets.safeDrawing.only(
+                                    WindowInsetsSides.End + WindowInsetsSides.Vertical
+                                )
+                            else -> WindowInsets.safeDrawing
+                        }
+                    CompositionLocalProvider(LocalScreenInsets provides insets) {
+                        if (chatting) Chat(model, state)
+                        else
+                            Home(
+                                model,
+                                state,
+                                tab,
+                                pair = { pair = true },
+                                create = { create = true },
+                            )
                     }
                 }
+                Toast(state.toast, model::dismissToast, Modifier.align(Alignment.TopCenter))
+            }
+            if (welcome)
+                androidx.compose.ui.window.Dialog(
+                    onDismissRequest = { welcome = false },
+                    properties =
+                        androidx.compose.ui.window.DialogProperties(
+                            usePlatformDefaultWidth = false,
+                            decorFitsSystemWindows = false,
+                        ),
+                ) {
+                    var arrived by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { arrived = true }
+                    val scale by
+                        animateFloatAsState(
+                            if (arrived) 1f else .75f,
+                            spring(dampingRatio = .65f),
+                            label = "柚子开场",
+                        )
+                    Surface(
+                        Modifier.fillMaxSize().clickable { welcome = false },
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        Column(
+                            Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Image(
+                                painterResource(R.drawable.brand_logo),
+                                "柚子Vibe",
+                                Modifier.size((100 * scale).dp),
+                            )
+                            Spacer(Modifier.height(18.dp))
+                            Text("灵感在手，随时开工", color = Orange)
+                        }
+                    }
+                }
+            if (pair) PairSheet(model) { pair = false }
+            if (create) NewSession(model, state) { create = false }
+            state.error?.let {
+                AlertDialog(
+                    onDismissRequest = model::dismissError,
+                    title = { Text("提示") },
+                    text = { Text(it) },
+                    confirmButton = { TextButton(onClick = model::dismissError) { Text("知道了") } },
+                )
             }
         }
-        if (welcome)
-            androidx.compose.ui.window.Dialog(
-                onDismissRequest = { welcome = false },
-                properties =
-                    androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-            ) {
-                var arrived by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) { arrived = true }
-                val scale by
-                    animateFloatAsState(
-                        if (arrived) 1f else .75f,
-                        spring(dampingRatio = .65f),
-                        label = "柚子开场",
+    }
+}
+
+/** 顶部胶囊 Toast，3 秒自动消失，对齐 iOS 的 `ToastView`：一过性提示不抢走当前操作。 */
+@Composable
+internal fun Toast(text: String?, dismiss: () -> Unit, modifier: Modifier = Modifier) {
+    var shown by remember { mutableStateOf("") }
+    LaunchedEffect(text) {
+        if (text == null) return@LaunchedEffect
+        shown = text
+        kotlinx.coroutines.delay(3000)
+        dismiss()
+    }
+    AnimatedVisibility(
+        visible = text != null,
+        modifier = modifier,
+        enter = slideInVertically { -it } + fadeIn(),
+        exit = slideOutVertically { -it } + fadeOut(),
+    ) {
+        Surface(
+            Modifier.windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(
+                        WindowInsetsSides.Top + WindowInsetsSides.Horizontal
                     )
-                Surface(
-                    Modifier.fillMaxSize().clickable { welcome = false },
-                    color = MaterialTheme.colorScheme.background,
-                ) {
-                    Column(
-                        Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
+                )
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(percent = 50),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shadowElevation = 8.dp,
+        ) {
+            Text(
+                shown,
+                Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+/** 四个顶层页签共用的页头（设备切换 + 大标题 + 连接状态），对齐 iOS 的导航栏大标题。 */
+@Composable
+private fun Home(
+    model: AppModel,
+    state: AppModel.State,
+    tab: Int,
+    pair: () -> Unit,
+    create: () -> Unit,
+) {
+    var devicesMenu by remember { mutableStateOf(false) }
+    Column(
+        Modifier.fillMaxSize()
+            .windowInsetsPadding(LocalScreenInsets.current.only(WindowInsetsSides.Horizontal))
+    ) {
+        Column(
+            Modifier.windowInsetsPadding(LocalScreenInsets.current.only(WindowInsetsSides.Top))
+                .padding(start = 20.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.weight(1f)) {
+                    TextButton(
+                        onClick = { devicesMenu = true },
+                        contentPadding = PaddingValues(0.dp),
                     ) {
-                        Image(
-                            painterResource(R.drawable.brand_logo),
-                            "柚子Vibe",
-                            Modifier.size((100 * scale).dp),
+                        Text(
+                            state.device?.name ?: "选择你的电脑",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Spacer(Modifier.height(18.dp))
-                        Text("灵感在手，随时开工", color = Orange)
+                        Icon(
+                            Icons.Default.ExpandMore,
+                            null,
+                            Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    DropdownMenu(devicesMenu, { devicesMenu = false }) {
+                        state.devices.forEach { device ->
+                            DropdownMenuItem(
+                                text = { Text(device.name) },
+                                onClick = {
+                                    model.selectDevice(device)
+                                    devicesMenu = false
+                                },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text("添加设备") },
+                            onClick = {
+                                devicesMenu = false
+                                pair()
+                            },
+                        )
                     }
                 }
+                IconButton(onClick = { model.connect() }) {
+                    Icon(
+                        Icons.Default.Refresh,
+                        "重连",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        if (pair) PairSheet(model) { pair = false }
-        if (create) NewSession(model, state) { create = false }
-        state.error?.let {
-            AlertDialog(
-                onDismissRequest = model::dismissError,
-                title = { Text("提示") },
-                text = { Text(it) },
-                confirmButton = { TextButton(onClick = model::dismissError) { Text("知道了") } },
-            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    TabItems[tab].first,
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.headlineLarge,
+                )
+                if (tab == 0 || tab == 1)
+                    FilledTonalIconButton(
+                        onClick = {
+                            if (tab == 0 || state.device == null) pair() else create()
+                        },
+                        colors =
+                            IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                contentColor = Orange,
+                            ),
+                    ) {
+                        Icon(
+                            if (tab == 0) Icons.Default.Add else Icons.Default.Edit,
+                            if (tab == 0) "添加设备" else "新建会话",
+                        )
+                    }
+            }
+            StatusMark(state.connection)
+        }
+        if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
+        when (tab) {
+            0 -> Devices(model, state, pair)
+            1 -> Sessions(model, state, create)
+            2 -> Approvals(model, state.snapshot.approvals)
+            else -> Settings(model)
         }
     }
 }
 
 @Composable
 fun Devices(model: AppModel, state: AppModel.State, add: () -> Unit) {
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val appContext = LocalContext.current
+    val appVersion = remember {
+        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        "${info.versionName} (${info.longVersionCode})"
+    }
     var edit by remember { mutableStateOf<Device?>(null) }
+    var diagnostics by remember { mutableStateOf<Device?>(null) }
     var discovery by remember { mutableStateOf(false) }
     var found by remember { mutableStateOf(mapOf<String, String>()) }
     val discoveryContext = LocalContext.current
@@ -192,28 +402,91 @@ fun Devices(model: AppModel, state: AppModel.State, add: () -> Unit) {
         if (discovery) finder.start()
         onDispose { finder.close() }
     }
-    LazyColumn(
-        Modifier.fillMaxSize().padding(16.dp),
+    // 平板 / 展开的折叠屏上排成多列，卡片不会被拉成一条难读的长条。
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(320.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 16.dp + screenBottomInset()),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Card(onClick = { uriHandler.openUri("https://vibe.yzcloud.icu/") }) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Image(painterResource(R.drawable.brand_logo), null, Modifier.size(40.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("柚子Vibe · 使用指南", style = MaterialTheme.typography.titleSmall)
+                            Text("安装连接器，扫码开始使用", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, "打开官网", Modifier.size(20.dp))
+                    }
+                }
+                Text("App $appVersion", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         items(state.devices, key = { it.id }) { d ->
-            Card(onClick = { model.selectDevice(d) }) {
+            Card(
+                onClick = { model.selectDevice(d) },
+                colors =
+                    CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border =
+                    if (d.id == state.device?.id)
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = .45f))
+                    else null,
+            ) {
                 Row(
                     Modifier.fillMaxWidth().padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(d.name, fontWeight = FontWeight.Bold)
-                        Text(d.base, style = MaterialTheme.typography.bodySmall)
+                    Icon(
+                        Icons.Default.Computer,
+                        null,
+                        Modifier.padding(end = 14.dp).size(28.dp),
+                        tint =
+                            if (d.id == state.device?.id) Orange
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(d.name, style = MaterialTheme.typography.titleMedium)
+                        ConnectorVersionLabel(model, d)
+                        Text(
+                            d.base,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (d.id == state.device?.id)
+                            Text(
+                                "当前设备",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = Orange,
+                            )
                     }
-                    IconButton(onClick = { edit = d }) { Icon(Icons.Default.Edit, "编辑连接配置") }
+                    Column {
+                        TextButton(onClick = { edit = d }) {
+                            Icon(Icons.Default.Settings, null, Modifier.size(18.dp))
+                            Text("配置")
+                        }
+                        TextButton(onClick = { diagnostics = d }) {
+                            Icon(Icons.Default.NetworkCheck, null, Modifier.size(18.dp))
+                            Text("诊断")
+                        }
+                    }
                 }
             }
         }
-        item {
-            Button(onClick = add) { Text("扫码配对 / 手动添加") }
-            TextButton(onClick = { discovery = !discovery }) {
-                Text(if (discovery) "停止局域网查找" else "在局域网里找")
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(onClick = add) { Text("扫码配对 / 手动添加") }
+                TextButton(onClick = { discovery = !discovery }) {
+                    Text(if (discovery) "停止局域网查找" else "在局域网里找")
+                }
             }
         }
         items(found.toList()) { (address, name) ->
@@ -227,32 +500,8 @@ fun Devices(model: AppModel, state: AppModel.State, add: () -> Unit) {
             }
         }
     }
-    edit?.let { d ->
-        var name by remember(d.id) { mutableStateOf(d.name) }
-        var base by remember(d.id) { mutableStateOf(d.base) }
-        AlertDialog(
-            onDismissRequest = { edit = null },
-            title = { Text("编辑设备") },
-            text = {
-                Column {
-                    Field(name, "显示名称") { name = it }
-                    Field(base, "连接地址") { base = it }
-                    Text("更换地址时会先核对电脑身份。", style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        model.editDevice(d, name, base)
-                        edit = null
-                    }
-                ) {
-                    Text("保存")
-                }
-            },
-            dismissButton = { TextButton(onClick = { edit = null }) { Text("取消") } },
-        )
-    }
+    edit?.let { d -> DeviceConfigurationPanel(model, d) { edit = null } }
+    diagnostics?.let { d -> DeviceDiagnosticsPanel(model, d) { diagnostics = null } }
 }
 
 @Composable
@@ -298,104 +547,133 @@ fun PairSheet(model: AppModel, close: () -> Unit) {
 
 @Composable
 fun Sessions(model: AppModel, state: AppModel.State, create: () -> Unit) {
+    val preferences = LocalPreferences.current
     var search by remember { mutableStateOf("") }
-    var active by remember { mutableStateOf(false) }
     var collapsed by remember { mutableStateOf(setOf<String>()) }
     var rename by remember { mutableStateOf<JSONObject?>(null) }
-    val groups =
+    val active = preferences.activeOnly
+    val matched =
         state.snapshot.sessions
             .filter {
-                (!active || recent(it)) && (it.str("title") + it.str("cwd")).contains(search, true)
+                (!active || recent(it)) &&
+                    (preferences.showTerminalSessions || it.str("source") != "terminal") &&
+                    (it.str("title") + it.str("cwd")).contains(search, true)
             }
             .sortedByDescending { it.str("updatedAt") }
-            .groupBy { it.str("cwd") }
-    Column(Modifier.padding(horizontal = 16.dp)) {
-        Field(search, "搜索会话或路径") { search = it }
+    // 关掉「按目录分组」时全部放进一个空标题的组，页面结构不变，只是不再出现分组头。
+    val groups = if (preferences.groupByFolder) matched.groupBy { it.str("cwd") } else mapOf("" to matched)
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        OutlinedTextField(
+            search,
+            { search = it },
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("搜索会话或路径") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = {
+                if (search.isNotEmpty())
+                    IconButton(onClick = { search = "" }) { Icon(Icons.Default.Close, "清除搜索") }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(18.dp),
+            colors =
+                OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedBorderColor = Orange,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                ),
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
-            FilterChip(active, { active = !active }, label = { Text("近七天") })
+            FilterChip(
+                active,
+                { preferences.activeOnly(!active) },
+                label = { Text("近七天") },
+                colors =
+                    FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = Orange,
+                    ),
+            )
             Spacer(Modifier.weight(1f))
-            IconButton(
-                onClick = {
-                    collapsed = if (collapsed.containsAll(groups.keys)) emptySet() else groups.keys
+            Text(
+                "${groups.values.sumOf { it.size }} 个会话",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (preferences.groupByFolder)
+                IconButton(
+                    onClick = {
+                        collapsed =
+                            if (collapsed.containsAll(groups.keys)) emptySet() else groups.keys
+                    }
+                ) {
+                    Icon(
+                        if (collapsed.containsAll(groups.keys)) Icons.Default.UnfoldMore
+                        else Icons.Default.UnfoldLess,
+                        "展开或收拢全部",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-            ) {
-                Icon(
-                    if (collapsed.containsAll(groups.keys)) Icons.Default.UnfoldMore
-                    else Icons.Default.UnfoldLess,
-                    "展开或收拢全部",
-                )
-            }
-            IconButton(onClick = create) { Icon(Icons.Default.Edit, "新建会话") }
         }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(340.dp),
+            contentPadding = PaddingValues(bottom = 24.dp + screenBottomInset()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             groups.forEach { (cwd, sessions) ->
-                item(key = "group:$cwd") {
-                    TextButton(
-                        onClick = {
-                            collapsed = if (cwd in collapsed) collapsed - cwd else collapsed + cwd
+                if (cwd.isNotEmpty())
+                    item(key = "group:$cwd", span = { GridItemSpan(maxLineSpan) }) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable {
+                                    collapsed =
+                                        if (cwd in collapsed) collapsed - cwd else collapsed + cwd
+                                }
+                                .heightIn(min = 48.dp)
+                                .padding(top = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                if (cwd in collapsed) Icons.Default.ChevronRight
+                                else Icons.Default.ExpandMore,
+                                null,
+                                Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                cwd.substringAfterLast('/').ifBlank { cwd },
+                                Modifier.weight(1f),
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                sessions.size.toString(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                    ) {
-                        Text(
-                            "${if (cwd in collapsed) "›" else "⌄"} ${cwd.substringAfterLast('/')}  ·  ${sessions.size}"
+                    }
+                if (cwd !in collapsed)
+                    items(sessions, key = { it.str("id") }) { session ->
+                        SessionCard(
+                            session,
+                            search.isNotEmpty(),
+                            { model.openSession(session.str("id")) },
+                            { rename = session },
+                            { model.action("/sessions/${session.str("id")}", "DELETE") },
                         )
                     }
-                }
-                if (cwd !in collapsed)
-                    items(sessions, key = { it.str("id") }) { s ->
-                        Card(onClick = { model.openSession(s.str("id")) }) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Agent(s.str("agent"))
-                                    if (s.str("status") in listOf("running", "waiting_approval")) {
-                                        Spacer(Modifier.width(8.dp))
-                                        CircularProgressIndicator(
-                                            Modifier.size(12.dp),
-                                            strokeWidth = 2.dp,
-                                        )
-                                    }
-                                    Spacer(Modifier.weight(1f))
-                                    var menu by remember { mutableStateOf(false) }
-                                    Box {
-                                        IconButton(onClick = { menu = true }) {
-                                            Icon(Icons.Default.MoreHoriz, "会话操作")
-                                        }
-                                        DropdownMenu(menu, { menu = false }) {
-                                            DropdownMenuItem(
-                                                text = { Text("重命名") },
-                                                onClick = {
-                                                    rename = s
-                                                    menu = false
-                                                },
-                                            )
-                                            DropdownMenuItem(
-                                                text = { Text("删除 / 隐藏") },
-                                                onClick = {
-                                                    model.action(
-                                                        "/sessions/${s.str("id")}",
-                                                        "DELETE",
-                                                    )
-                                                    menu = false
-                                                },
-                                            )
-                                        }
-                                    }
-                                }
-                                Text(
-                                    s.str("title", "新会话"),
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 2,
-                                )
-                                Text(
-                                    cwd,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = Color.Gray,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    }
             }
-            if (groups.isEmpty()) item { Text("暂无会话，点击右上角新建。", Modifier.padding(24.dp)) }
+            if (groups.values.all { it.isEmpty() })
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    EmptyState(
+                        if (search.isBlank()) "从一个想法开始" else "没有找到会话",
+                        if (search.isBlank()) "连接电脑后，点右上角新建会话。" else "试试其他标题或目录关键词。",
+                    )
+                }
         }
     }
     rename?.let { s ->
@@ -422,6 +700,98 @@ fun Sessions(model: AppModel, state: AppModel.State, create: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun SessionCard(
+    session: JSONObject,
+    showsPath: Boolean,
+    open: () -> Unit,
+    rename: () -> Unit,
+    delete: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Card(
+        onClick = open,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Column(
+            Modifier.padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    session.str("title", "新会话"),
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = if (LocalDensity.current.fontScale > 1.3f) 4 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Box {
+                    IconButton(onClick = { menu = true }) {
+                        Icon(
+                            Icons.Default.MoreHoriz,
+                            "会话操作",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("重命名") },
+                            onClick = {
+                                menu = false
+                                rename()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("删除 / 隐藏") },
+                            onClick = {
+                                menu = false
+                                delete()
+                            },
+                        )
+                    }
+                }
+            }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Agent(session.str("agent"))
+                StatusMark(session.str("status"))
+            }
+            val branch = session.str("branch")
+            if (branch.isNotBlank() || session.str("source") == "terminal") {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (session.str("source") == "terminal")
+                        Text(
+                            "终端会话",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    if (branch.isNotBlank())
+                        Text(
+                            branch,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 2,
+                        )
+                }
+            }
+            if (showsPath)
+                Text(
+                    session.str("cwd"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+        }
+    }
+}
+
 @Composable
 fun Agent(name: String) {
     Row(
@@ -437,11 +807,17 @@ fun Agent(name: String) {
                 }
             ),
             null,
-            Modifier.size(17.dp),
+            Modifier.size(17.dp)
+                .then(
+                    if (name == "omp")
+                        Modifier.background(Color(0xFF242428), RoundedCornerShape(3.dp))
+                            .padding(1.dp)
+                    else Modifier
+                ),
         )
         Text(
             when (name) {
-                "claude" -> "Claude Code"
+                "claude" -> "Claude"
                 "omp" -> "OMP"
                 else -> "Codex"
             },
@@ -630,23 +1006,63 @@ fun Chat(model: AppModel, state: AppModel.State) {
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
             if (it) camera.launch(cameraUri)
         }
-    BackHandler { model.openSession(null) }
-    Column(Modifier.fillMaxSize()) {
+    // 预测式返回：手势推进时会话页跟着缩放淡出，对齐 iOS 的边缘滑动返回；
+    // Android 13 及以下拿不到进度，等价于过去的 BackHandler。
+    var back by remember(sid) { mutableFloatStateOf(0f) }
+    var backFromLeft by remember(sid) { mutableStateOf(true) }
+    PredictiveBackHandler { events ->
+        try {
+            events.collect {
+                back = it.progress
+                backFromLeft = it.swipeEdge == BackEventCompat.EDGE_LEFT
+            }
+            model.openSession(null)
+        } catch (cancelled: CancellationException) {
+            back = 0f
+            throw cancelled
+        }
+    }
+    Column(
+        Modifier.fillMaxSize()
+            .graphicsLayer {
+                val shrink = 1f - .08f * back
+                scaleX = shrink
+                scaleY = shrink
+                translationX = 40.dp.toPx() * back * if (backFromLeft) 1f else -1f
+                alpha = 1f - .25f * back
+                shape = RoundedCornerShape(28.dp * back)
+                clip = back > 0f
+            }
+            .windowInsetsPadding(LocalScreenInsets.current.only(WindowInsetsSides.Horizontal))
+    ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(LocalScreenInsets.current.only(WindowInsetsSides.Top))
+                .padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { model.openSession(null) }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
             }
             Column(Modifier.weight(1f)) {
-                Text(session.str("title", "会话"), maxLines = 1, fontWeight = FontWeight.Bold)
-                Agent(session.str("agent"))
                 Text(
-                    "${state.connection} · ${statusLabel(session.str("status"))}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray,
+                    session.str("title", "会话"),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
                 )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Agent(session.str("agent"))
+                    Text(
+                        statusLabel(session.str("status")),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
             }
             if (session.str("status") == "running")
                 IconButton(onClick = { model.action("/sessions/$sid/stop") }) {
@@ -667,101 +1083,135 @@ fun Chat(model: AppModel, state: AppModel.State) {
         }
         if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
         val messages = state.snapshot.messages[sid].orEmpty()
+        val rows = chatTimeline(messages)
         val follow by remember { derivedStateOf { !list.canScrollForward } }
         var followLatest by remember(sid) { mutableStateOf(true) }
+        var positioned by remember(sid) { mutableStateOf(false) }
         LaunchedEffect(list, sid) {
-            snapshotFlow { list.isScrollInProgress }
-                .collect { scrolling -> if (!scrolling) followLatest = !list.canScrollForward }
+            list.interactionSource.interactions.collect { interaction ->
+                if (interaction is DragInteraction.Start) followLatest = false
+                if (interaction is DragInteraction.Stop) {
+                    snapshotFlow { list.isScrollInProgress }.first { !it }
+                    followLatest = !list.canScrollForward
+                }
+            }
         }
-        LaunchedEffect(messages.lastOrNull()?.toString(), session.items("queue").size) {
-            if (followLatest && !list.isScrollInProgress && messages.isNotEmpty())
-                list.scrollToItem(messages.lastIndex)
+        LaunchedEffect(
+            sid,
+            state.loading,
+            rows.size,
+            messages.lastOrNull()?.toString(),
+            session.items("queue").size,
+            state.outbox.size,
+        ) {
+            if (!state.loading && (!positioned || followLatest) && rows.isNotEmpty()) {
+                // Anchor a bottom sentinel, not the top of a potentially very tall final message.
+                withFrameNanos {}
+                list.scrollToItem(
+                    rows.size +
+                        session.items("queue").size +
+                        (if (session.optBoolean("queuePaused")) 1 else 0) +
+                        state.outbox.count { it.str("sessionId") == sid }
+                )
+                positioned = true
+            }
         }
         Box(Modifier.weight(1f)) {
             LazyColumn(
                 state = list,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().testTag("chat-timeline"),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                items(messages, key = { it.str("id") }) { m ->
-                    val user = m.str("role") == "user"
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
-                    ) {
-                        Card(
-                            Modifier.fillMaxWidth(if (user) .9f else 1f),
-                            colors =
-                                CardDefaults.cardColors(
-                                    containerColor =
-                                        if (user) Color(0xFF623D22)
-                                        else MaterialTheme.colorScheme.surface
-                                ),
+                items(rows, key = { it.id }) { row ->
+                    if (row.activity) ActivityGroup(row, file = { filePath = it })
+                    else {
+                        val m = row.messages.first()
+                        val user = m.str("role") == "user"
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
                         ) {
-                            Column(Modifier.padding(14.dp)) {
-                                Markdown(m.str("text")) { link ->
-                                    if (link.startsWith("https://") || link.startsWith("http://"))
-                                        context.startActivity(
-                                            Intent(Intent.ACTION_VIEW, Uri.parse(link))
+                            Surface(
+                                Modifier.fillMaxWidth(if (user) .9f else 1f),
+                                shape =
+                                    if (user) RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                                    else RoundedCornerShape(0.dp),
+                                color =
+                                    if (user) MaterialTheme.colorScheme.primary
+                                    else Color.Transparent,
+                                contentColor =
+                                    if (user) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurface,
+                            ) {
+                                Column(
+                                    Modifier.padding(
+                                        horizontal = if (user) 16.dp else 4.dp,
+                                        vertical = 12.dp,
+                                    )
+                                ) {
+                                    Markdown(m.str("text")) { link ->
+                                        if (
+                                            link.startsWith("https://") ||
+                                                link.startsWith("http://")
                                         )
-                                    else
-                                        filePath =
-                                            Uri.decode(
-                                                link.removePrefix("file://").substringBefore('#')
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(link))
                                             )
-                                }
-                                localImageReferences(m.str("text")).forEach { path ->
-                                    InlineImage(model, sid, path) { filePath = path }
-                                }
-                                m.optJSONArray("attachments")?.let { a ->
-                                    (0 until a.length()).forEach { i ->
-                                        val attachment = a.optJSONObject(i)
-                                        val id = attachment?.str("id") ?: a.optString(i)
-                                        TextButton(onClick = { filePath = "upload:$id" }) {
-                                            Icon(Icons.Default.AttachFile, null)
-                                            Text(attachment?.str("filename", "附件") ?: "查看附件")
+                                        else
+                                            filePath =
+                                                Uri.decode(
+                                                    link
+                                                        .removePrefix("file://")
+                                                        .substringBefore('#')
+                                                )
+                                    }
+                                    localImageReferences(m.str("text")).forEach { path ->
+                                        InlineImage(model, sid, path) { filePath = path }
+                                    }
+                                    m.optJSONArray("attachments")?.let { a ->
+                                        (0 until a.length()).forEach { i ->
+                                            val attachment = a.optJSONObject(i)
+                                            val id = attachment?.str("id") ?: a.optString(i)
+                                            TextButton(onClick = { filePath = "upload:$id" }) {
+                                                Icon(Icons.Default.AttachFile, null)
+                                                Text(attachment?.str("filename", "附件") ?: "查看附件")
+                                            }
                                         }
                                     }
-                                }
-                                m.items("toolCalls").forEach { t ->
-                                    var expanded by remember { mutableStateOf(false) }
-                                    TextButton(onClick = { expanded = !expanded }) {
-                                        Icon(Icons.Default.Terminal, null)
-                                        Text("${t.str("name")} · ${t.str("state")}")
-                                    }
-                                    if (expanded)
-                                        Markdown(
-                                            t.str(
-                                                "detail",
-                                                t.optJSONObject("input")?.toString(2).orEmpty(),
-                                            ) + "\n\n```\n${t.str("output")}\n```"
+                                    if (m.items("toolCalls").isNotEmpty())
+                                        ToolGroup(
+                                            m.items("toolCalls"),
+                                            "tools:${m.str("id")}",
+                                            file = { filePath = it },
+                                        )
+                                    Row {
+                                        if (!user)
+                                            IconButton(onClick = { reader.read(m.str("text")) }) {
+                                                Icon(
+                                                    Icons.AutoMirrored.Filled.VolumeUp,
+                                                    "朗读正文",
+                                                    Modifier.size(20.dp),
+                                                )
+                                            }
+                                        IconButton(
+                                            onClick = {
+                                                (context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                                        as ClipboardManager)
+                                                    .setPrimaryClip(
+                                                        ClipData.newPlainText("消息", m.str("text"))
+                                                    )
+                                                haptic.performHapticFeedback(
+                                                    HapticFeedbackType.LongPress
+                                                )
+                                            }
                                         ) {
-                                            filePath = it
-                                        }
-                                }
-                                Row {
-                                    if (!user)
-                                        IconButton(onClick = { reader.read(m.str("text")) }) {
                                             Icon(
-                                                Icons.AutoMirrored.Filled.VolumeUp,
-                                                "朗读正文",
+                                                Icons.Default.ContentCopy,
+                                                "复制",
                                                 Modifier.size(20.dp),
                                             )
                                         }
-                                    IconButton(
-                                        onClick = {
-                                            (context.getSystemService(Context.CLIPBOARD_SERVICE)
-                                                    as ClipboardManager)
-                                                .setPrimaryClip(
-                                                    ClipData.newPlainText("消息", m.str("text"))
-                                                )
-                                            haptic.performHapticFeedback(
-                                                HapticFeedbackType.LongPress
-                                            )
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.ContentCopy, "复制", Modifier.size(20.dp))
                                     }
                                 }
                             }
@@ -813,6 +1263,9 @@ fun Chat(model: AppModel, state: AppModel.State) {
                         }
                     }
                 }
+                item(key = "timeline-bottom") {
+                    Spacer(Modifier.fillMaxWidth().height(1.dp).testTag("timeline-bottom"))
+                }
             }
             if (!follow)
                 SmallFloatingActionButton(
@@ -847,8 +1300,12 @@ fun Chat(model: AppModel, state: AppModel.State) {
                 }
             }
         Card(
-            Modifier.fillMaxWidth().padding(10.dp).imePadding(),
+            Modifier.fillMaxWidth()
+                .windowInsetsPadding(LocalScreenInsets.current.only(WindowInsetsSides.Bottom))
+                .padding(10.dp),
             shape = RoundedCornerShape(26.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         ) {
             Column(Modifier.padding(12.dp)) {
                 state.draft.items("attachments").forEach { a ->
@@ -874,6 +1331,8 @@ fun Chat(model: AppModel, state: AppModel.State) {
                         TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent,
                         ),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -906,31 +1365,58 @@ fun Chat(model: AppModel, state: AppModel.State) {
                         }
                     }
                     Spacer(Modifier.weight(1f))
-                    IconButton(
+                    FilledIconButton(
                         onClick = { model.send() },
                         enabled =
                             state.draft.str("text").isNotBlank() ||
                                 state.draft.items("attachments").isNotEmpty(),
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = Orange)
+                        Icon(Icons.AutoMirrored.Filled.Send, "发送")
                     }
                 }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
                 ) {
-                    TextButton(onClick = { panel = "模式" }, modifier = Modifier.weight(1f)) {
-                        Text(session.str("mode", "默认"), maxLines = 1)
+                    TextButton(
+                        onClick = { panel = "模式" },
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                    ) {
+                        Text(
+                            when (val mode = session.str("mode", "默认")) {
+                                "normal" -> "按需审批"
+                                "plan" -> "只读规划"
+                                "trust" -> "信任模式"
+                                else -> mode
+                            },
+                            maxLines = 1,
+                        )
                     }
-                    TextButton(onClick = { panel = "模型" }, modifier = Modifier.weight(1.6f)) {
+                    TextButton(
+                        onClick = { panel = "模型" },
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                    ) {
                         Text(session.str("model", "默认模型").substringAfterLast('/'), maxLines = 1)
                     }
-                    TextButton(onClick = { panel = "思考强度" }, modifier = Modifier.weight(.8f)) {
+                    TextButton(
+                        onClick = { panel = "思考强度" },
+                        colors =
+                            ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                    ) {
                         Text(session.str("effort", "默认"), maxLines = 1)
                     }
                     Surface(
                         shape = RoundedCornerShape(22.dp),
-                        color = Color(0xFF29292D),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
                         modifier =
                             Modifier.width(76.dp).height(44.dp).pointerInput(sid) {
                                 detectDragGesturesAfterLongPress(
@@ -1018,13 +1504,29 @@ fun Chat(model: AppModel, state: AppModel.State) {
 fun Markdown(text: String, link: (String) -> Unit = {}) {
     val currentLink by rememberUpdatedState(link)
     val context = LocalContext.current
+    val ink = LocalContentColor.current.toArgb()
+    val linkInk =
+        if (LocalContentColor.current == MaterialTheme.colorScheme.onPrimary) ink
+        else MaterialTheme.colorScheme.primary.toArgb()
+    val codeInk = MaterialTheme.colorScheme.onSurface.toArgb()
+    val codeBackground = MaterialTheme.colorScheme.surfaceContainerHigh.toArgb()
+    val fontScale = LocalDensity.current.fontScale
     val markwon =
-        remember(context) {
+        remember(context, codeBackground, linkInk, codeInk) {
             Markwon.builder(context)
                 .usePlugin(TablePlugin.create(context))
                 .usePlugin(StrikethroughPlugin.create())
                 .usePlugin(
                     object : io.noties.markwon.AbstractMarkwonPlugin() {
+                        override fun configureTheme(
+                            builder: io.noties.markwon.core.MarkwonTheme.Builder
+                        ) {
+                            builder
+                                .linkColor(linkInk)
+                                .codeBackgroundColor(codeBackground)
+                                .codeTextColor(codeInk)
+                        }
+
                         override fun configureConfiguration(
                             builder: io.noties.markwon.MarkwonConfiguration.Builder
                         ) {
@@ -1037,8 +1539,9 @@ fun Markdown(text: String, link: (String) -> Unit = {}) {
     AndroidView(
         factory = {
             TextView(it).apply {
-                setTextColor(android.graphics.Color.WHITE)
+                setTextColor(ink)
                 textSize = 16f
+                setLineSpacing(4f * resources.displayMetrics.density, 1.12f)
                 setTextIsSelectable(true)
                 setPadding(0, 0, 0, 0)
                 var touchTime = 0L
@@ -1084,9 +1587,13 @@ fun Markdown(text: String, link: (String) -> Unit = {}) {
             }
         },
         update = {
-            if (it.tag != text) {
+            it.setTextColor(ink)
+            it.setLinkTextColor(linkInk)
+            it.textSize = 16f
+            val renderKey = listOf(text, ink, linkInk, codeBackground, fontScale)
+            if (it.tag != renderKey) {
                 markwon.setMarkdown(it, linkLocalFiles(text))
-                it.tag = text
+                it.tag = renderKey
             }
         },
         modifier = Modifier.fillMaxWidth(),
@@ -1127,5 +1634,24 @@ fun Choice(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ConnectorVersionLabel(model: AppModel, device: Device) {
+    var version by remember(device.id, device.base) { mutableStateOf("读取中…") }
+    var revision by remember { mutableIntStateOf(0) }
+    LaunchedEffect(device.id, device.base, revision) {
+        version = "读取中…"
+        try {
+            val health = model.api.json(null, "/health", base = device.base) as JSONObject
+            version = if (health.str("connectorId") != device.id) "设备身份不符"
+                else health.str("version").ifBlank { "版本未知" }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { version = "暂不可获取" }
+    }
+    TextButton(onClick = { revision++ }, contentPadding = PaddingValues(0.dp)) {
+        Text("连接器 $version", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

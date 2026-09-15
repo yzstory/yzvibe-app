@@ -3,13 +3,14 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveAgentBin, agentEnv } from './bin.js';
 
 export const ompChildPids = new Set();
 
 export function ompExecutable() {
   if (process.env.YZVIBE_OMP_BIN) return process.env.YZVIBE_OMP_BIN;
   const local = path.join(os.homedir(), '.local/bin/omp');
-  return fs.existsSync(local) ? local : 'omp';
+  return fs.existsSync(local) ? local : resolveAgentBin('omp');
 }
 
 /** OMP's NDJSON protocol is not JSON-RPC. Never reuse the Codex transport. */
@@ -20,7 +21,7 @@ export class OmpRPC extends EventEmitter {
     this.ready.catch(() => {});
     this.readyTimer = setTimeout(() => this.close(new Error('OMP 启动超时')), timeout);
     this.readyTimer.unref?.();
-    this.proc = spawnProcess(ompExecutable(), ['--mode', 'rpc', ...args], { cwd, env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.proc = spawnProcess(ompExecutable(), ['--mode', 'rpc', ...args], { cwd, env: agentEnv(env), stdio: ['pipe', 'pipe', 'pipe'] });
     if (this.proc.pid) ompChildPids.add(this.proc.pid);
     this.proc.on('close', () => ompChildPids.delete(this.proc.pid));
     this.proc.stdout.setEncoding('utf8');

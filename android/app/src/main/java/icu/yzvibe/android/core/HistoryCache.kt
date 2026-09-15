@@ -40,7 +40,12 @@ class HistoryCache(private val root: File, private val budget: Long = 100L * 102
             val tmp = File(root, target.name + ".tmp")
             tmp.writeBytes(data)
             check(tmp.renameTo(target))
-            val files = root.listFiles().orEmpty().sortedBy { it.lastModified() }
+            // Rapid writes can share an mtime. Always retain the entry just saved.
+            val files =
+                root
+                    .listFiles()
+                    .orEmpty()
+                    .sortedWith(compareBy<File> { it == target }.thenBy { it.lastModified() })
             var total = files.sumOf { it.length() }
             for (entry in files) if (total > budget) {
                 val size = entry.length()

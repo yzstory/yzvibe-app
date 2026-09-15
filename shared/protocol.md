@@ -43,6 +43,7 @@ yzvibe://pair?host=<host>&port=19876&token=<one-time-token>&mode=tunnel|local|p2
 | POST | /approvals/:id | `{ decision, remember? }`（WS 之外的审批方式）；`remember` 见下 |
 | POST | /approvals/:id/trust | Connector 0.1.2：校验待审批卡后切换其会话到 Trust，并允许该会话所有待处理操作（保留提问）。返回 `{session, approvals}`；过期、已处理或提问卡返回 409，不改变模式 |
 | GET | /files?sessionId=&path= | 目录列表 `{ path, entries:[{name,path,kind,size,modifiedAt}] }`，path 相对会话 cwd，越界 403 |
+| GET | /files/web-preview?sessionId=&entry=&resource= | 手机隔离 HTML 预览的认证资源传输；entry 为所打开 HTML 路径，resource 为其目录内相对路径。限定静态网页资源类型、禁止符号链接/路径越界，单资源 20 MB，上送正确 MIME，禁止缓存；旧连接器返回 404 |
 | GET | /files/stat?sessionId=&path= | 单个文件元信息 `{ name, path, displayPath, kind, size, modifiedAt, mime, textual, inCwd }`，文件查看器用 |
 | GET | /files/preview?sessionId=&path= | 文本/图片预览（≤ 2MB） |
 | GET | /files/download?sessionId=&path= | 下载，带 content-length 与 content-disposition |
