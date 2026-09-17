@@ -274,7 +274,7 @@ test('额度：OAuth usage 归一 / rate_limit_event 兜底 / Codex 不可用', 
   rememberRateLimit({ unifiedWindows: { five_hour: { utilization: 0.5 } } });
   const fb = await agentQuota('claude', { fetchImpl: async () => ({ ok: false, status: 503 }), force: true });
   assert.equal(fb.source, 'rate_limit_event'); assert.equal(fb.limits[0].percent, 50); assert.ok(fb.warning);
-  const cx = await agentQuota('codex');   // 本机有 Codex 记录时给额度，否则给 unavailable
+  const cx = await agentQuota('codex', { codexRPCFactory: () => { throw new Error('offline'); } });   // 本机有 Codex 记录时给额度，否则给 unavailable
   assert.ok(cx.limits.length > 0 ? cx.source === 'codex_session' : cx.unavailable);
   resetQuotaCache();
 });

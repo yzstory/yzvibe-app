@@ -256,20 +256,23 @@ export function parseCodexTranscript(file, sessionId) {
 
 /** 最近一次 Codex 会话里的 token_count.rate_limits → 额度结构。 */
 export function codexRateLimits({ codexHome = CODEX_HOME } = {}) {
+  let latest = null;
   for (const { file } of recentFiles(codexDirs(codexHome), /^rollout-.*\.jsonl$/).slice(0, 10)) {
     const tail = lines(readTail(file, 256 * 1024)).filter((l) => l.includes('"token_count"'));
     for (let k = tail.length - 1; k >= 0; k--) {
-      const rl = parse(tail[k])?.payload?.rate_limits; if (!rl) continue;
+      const event = parse(tail[k]);
+      const rl = event?.payload?.rate_limits; if (!rl || (rl.limit_id != null && rl.limit_id !== 'codex')) continue;
       const limits = [];
       const label = (w) => (w?.window_minutes >= 10000 ? '本周' : w?.window_minutes >= 240 ? '当前会话（5 小时）' : `${Math.round((w?.window_minutes ?? 0) / 60)} 小时`);
       for (const [k2, w] of [['primary', rl.primary], ['secondary', rl.secondary]]) {
-        if (!w || w.used_percent == null) continue;
+        if (!w || typeof w.used_percent !== 'number' || !Number.isFinite(w.used_percent) || w.used_percent < 0 || w.used_percent > 100) continue;
         limits.push({ id: w.window_minutes >= 10000 ? 'weekly_all' : 'session', label: label(w), percent: Math.round(Number(w.used_percent)), resetsAt: w.resets_at ? new Date(Number(w.resets_at) * 1000).toISOString() : null, window: k2 });
       }
-      if (limits.length) return { limits, file, at: fs.statSync(file).mtimeMs };
+      const at = Date.parse(event.timestamp);
+      if (limits.length && Number.isFinite(at) && (!latest || at > latest.at)) latest = { limits, file, at };
     }
   }
-  return null;
+  return latest;
 }
 
 function summarize(input = {}) {

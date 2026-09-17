@@ -1,9 +1,10 @@
 // 账号额度（剩余用量）。Claude：优先调 Claude Code 自己用的 api/oauth/usage（本机钥匙串里的 OAuth token），
-// 拿不到时退回最近一次流式输出里的 rate_limit_event。Codex 非交互模式暂无额度接口。
+// 拿不到时退回最近一次流式输出里的 rate_limit_event。Codex：通过 App Server 查询当前账号额度，失败时回退历史。
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { CodexRPC } from './agents/codex-rpc.js';
 import { codexRateLimits } from './transcripts.js';
 
 const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
@@ -74,12 +75,38 @@ export function quotaFromRateLimit(info) {
   return { agent: 'claude', source: 'rate_limit_event', fetchedAt: new Date(info.at ?? Date.now()).toISOString(), limits, extraUsage: null };
 }
 
+/** Only the general Codex bucket belongs in the account quota card. */
+export function normalizeCodexQuota(response = {}) {
+  const rate = response.rateLimitsByLimitId?.codex ?? response.rateLimits;
+  const limits = [];
+  if (rate && (rate.limitId == null || rate.limitId === 'codex')) {
+    for (const w of [rate.primary, rate.secondary]) {
+      if (!w || typeof w.usedPercent !== 'number' || !Number.isFinite(w.usedPercent) || w.usedPercent < 0 || w.usedPercent > 100) continue;
+      const weekly = w.windowDurationMins >= 10000;
+      const reset = typeof w.resetsAt === 'number' ? new Date(w.resetsAt * 1000) : null;
+      limits.push({ id: weekly ? 'weekly_all' : 'session', label: weekly ? '本周' : '当前会话（5 小时）',
+        percent: Math.round(w.usedPercent), resetsAt: reset && Number.isFinite(reset.getTime()) ? reset.toISOString() : null });
+    }
+  }
+  return { agent: 'codex', source: 'codex_app_server', fetchedAt: new Date().toISOString(), limits, extraUsage: null };
+}
+
 /** GET /quota?agent=claude|codex 的实现。失败时返回 { error } 而不是抛，方便手机端展示。 */
-export async function agentQuota(agent = 'claude', { fetchImpl = fetch, force = false } = {}) {
+export async function agentQuota(agent = 'claude', { fetchImpl = fetch, force = false, codexRPCFactory = options => new CodexRPC(options), readCodexRateLimits = codexRateLimits } = {}) {
   if (agent === 'omp') return { agent, source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: 'OMP 使用所配置供应商的额度；当前没有统一账号余额接口。Token 用量见会话上下文。' };
   if (agent === 'codex') {
-    let rl = null; try { rl = codexRateLimits(); } catch {}
-    if (!rl) return { agent: 'codex', source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: '本机还没有 Codex 会话记录，先在终端或手机上跑一轮 Codex 后这里会显示额度' };
+    let rpc;
+    try {
+      rpc = codexRPCFactory({ cwd: os.tmpdir(), timeout: 12_000 });
+      rpc.on('disconnect', () => {});
+      await rpc.request('initialize', { clientInfo: { name: 'yzvibe_quota', version: '0.1.0' }, capabilities: { experimentalApi: true } });
+      rpc.notify('initialized', {});
+      const quota = normalizeCodexQuota(await rpc.request('account/rateLimits/read', {}));
+      if (quota.limits.length) return quota;
+    } catch { /* History is explicitly marked stale below. */ }
+    finally { rpc?.close(); }
+    let rl = null; try { rl = readCodexRateLimits(); } catch {}
+    if (!rl) return { agent: 'codex', source: 'none', fetchedAt: new Date().toISOString(), limits: [], extraUsage: null, unavailable: '未能读取 Codex 账号额度，请确认电脑端 Codex 已登录后重试' };
     return { agent: 'codex', source: 'codex_session', fetchedAt: new Date(rl.at).toISOString(), limits: rl.limits.map(({ window, ...l }) => l), extraUsage: null, warning: '来自最近一次 Codex 对话时记录的额度，不是实时值' };
   }
   if (!force && cache && Date.now() - cache.at < CACHE_TTL) return cache.quota;

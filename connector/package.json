@@ -1,6 +1,6 @@
 {
   "name": "yzvibe",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "柚子Vibe 桌面连接器：通过手机连接 Claude Code、Codex 和 OMP，管理会话、文件与远程审批",
   "type": "module",
   "bin": {
