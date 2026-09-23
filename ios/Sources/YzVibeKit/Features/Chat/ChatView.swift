@@ -9,10 +9,7 @@ struct ChatView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var followsLatest = true
-    @State private var nearBottom = true
-    @GestureState private var draggingMessages = false
-    private let bottomAnchor = "chat-bottom"
+    @State private var latestRequest = 0
     let sessionId: String
     private var draft: String {
         get { store.chatDrafts[sessionId]?.text ?? "" }
@@ -38,81 +35,12 @@ struct ChatView: View {
 
     private var session: Session? { store.session(sessionId) }
     private var messages: [Message] { store.messages[sessionId] ?? [] }
-    @State private var historyLimit = 80
-    @State private var historyAnchor: String?
-    private var timeline: [ChatTimelineRow] { ChatTimelineRow.make(Array(messages.suffix(historyLimit)), groupsMixedContent: session?.agent == .omp) }
-    private var runProgress: ChatRunProgress? {
-        guard let session, busy else { return nil }
-        let start = messages.lastIndex(where: { $0.role == .user }) ?? messages.startIndex
-        let current = messages.suffix(from: start)
-        return ChatRunProgress(status: session.status, connected: store.device(session.deviceId)?.online == true,
-            startedAt: current.first?.createdAt ?? session.updatedAt, calls: current.flatMap(\.toolCalls),
-            streamingText: current.contains { $0.streaming && !$0.text.isEmpty })
-    }
 
     var body: some View {
         ZStack {
             AmbientBackground()
-            GeometryReader { viewport in
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(spacing: 0) {
-                            messageList
-                                .padding(.horizontal, 16)
-                                .padding(.top, 8)
-                                .padding(.bottom, 24)
-                            Color.clear.frame(height: 1).id(bottomAnchor)
-                        }
-                        .onGeometryChange(for: CGFloat.self) { geometry in
-                            geometry.frame(in: .named("chat-scroll")).maxY
-                        } action: { bottom in
-                            nearBottom = bottom <= viewport.size.height + 60
-                            if nearBottom && !draggingMessages { followsLatest = true }
-                        }
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
-                            if followsLatest { scrollToBottom(proxy, animated: false) }
-                        }
-                    }
-                    .coordinateSpace(name: "chat-scroll")
-                    .scrollDismissesKeyboard(.immediately)
-                    .simultaneousGesture(DragGesture().updating($draggingMessages) { _, state, _ in state = true })
-                    .onChange(of: draggingMessages) { _, dragging in
-                        if dragging { followsLatest = false }
-                        else if nearBottom { followsLatest = true }
-                    }
-                    .onTapGesture { hideKeyboard() }
-                    .onChange(of: historyLimit) { _, _ in
-                        if let historyAnchor { proxy.scrollTo(historyAnchor, anchor: .top); self.historyAnchor = nil }
-                    }
-                    .onChange(of: messages.count) { oldCount, newCount in
-                        if followsLatest { scrollToBottom(proxy, animated: false) }
-                        else if oldCount > 0 && newCount > oldCount {
-                            // Keep the beginning of the visible window stable while reading history.
-                            historyLimit += newCount - oldCount
-                        }
-                    }
-                    .onChange(of: queued.count) { _, _ in
-                        if followsLatest { scrollToBottom(proxy, animated: false) }
-                    }
-                    .onAppear { scrollToBottom(proxy, animated: false) }
-                    .overlay(alignment: .bottomTrailing) {
-                        if !nearBottom && !followsLatest {
-                            Button {
-                                followsLatest = true
-                                scrollToBottom(proxy)
-                            } label: {
-                                Label("回到最新", systemImage: "arrow.down")
-                                    .font(.yzFootnoteStrong)
-                                    .padding(.horizontal, 16).frame(height: 44)
-                                    .foregroundStyle(p.brand)
-                                    .liquidGlass(in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.trailing, 16).padding(.bottom, 10)
-                        }
-                    }
-                }
-            }
+            ChatTimelineView(sessionId: sessionId, latestRequest: latestRequest, openFile: $openFile)
+                .equatable()
         }
         .overlay {
             if store.loadingMessages.contains(sessionId), messages.isEmpty {
@@ -226,67 +154,13 @@ struct ChatView: View {
         Binding(get: { session?.effort }, set: { e in Task { await store.setEffort(e, for: sessionId) } })
     }
 
-    @ViewBuilder
-    private var messageList: some View {
-        LazyVStack(spacing: 14) {
-            if messages.count > historyLimit {
-                Button("加载更早的消息（还有 \(messages.count - historyLimit) 条）") {
-                    followsLatest = false
-                    historyAnchor = timeline.first?.id
-                    historyLimit += 80
-                }.font(.yzFootnote)
-            }
-            if store.loadingMessages.contains(sessionId), !messages.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("正在同步历史…").font(.yzFootnote).foregroundStyle(p.labelSecondary)
-                }
-            }
-            let rows = timeline
-            ForEach(rows) { row in
-                switch row {
-                case .message(let m):
-                    MessageRow(message: m, onOpenFile: { openFile = FileRef(path: $0) }).id(m.id)
-                case .activity(let group):
-                    HStack {
-                        ChatActivityCard(activity: group, progress: row.id == rows.last?.id ? runProgress : nil,
-                            live: busy && store.device(session?.deviceId ?? "")?.online == true,
-                            onOpenFile: { openFile = FileRef(path: $0) })
-                        Spacer(minLength: 24)
-                    }
-                }
-            }
-            if let progress = runProgress {
-                if case .activity = rows.last {} else {
-                    HStack { ChatWaitingView(progress: progress); Spacer(minLength: 24) }
-                }
-            }
-            ForEach(store.outbox.filter { $0.sessionId == sessionId }) { item in
-                OutgoingMessageCard(item: item,
-                                    retry: { Task { await store.transmit(item.id) } },
-                                    restore: { store.restoreOutgoing(item.id) })
-            }
-            // 正忙时发的消息排在这里，本轮结束会自动接上
-            if session?.queuePaused == true, !queued.isEmpty {
-                VStack(spacing: 8) {
-                    Text("队列已暂停，请检查会话后继续").font(.yzFootnote)
-                    Button("继续队列") { Task { await store.resumeQueue(in: sessionId) } }
-                }
-            }
-            ForEach(queued) { item in
-                QueuedBubble(item: item, onSendNow: { await store.sendQueuedNow(item.id, in: sessionId) }, onCancel: { Task { await store.cancelQueued(item.id, in: sessionId) } })
-                    .id("queued-" + item.id)
-            }
-        }
-    }
-
-    private var queued: [QueuedMessage] { session?.queue ?? [] }
     private var busy: Bool { session?.status == .running || session?.status == .waitingApproval }
 
     /// 发出去（或排队）。图片在选择时已经缩过，这里逐张上传拿 id。
     private func submit(_ mode: SendMode) {
         guard !store.voiceInput.active else { return }
         guard let id = store.stageDraft(in: sessionId, mode: mode) else { return }
+        latestRequest += 1
         Task { await store.transmit(id) }
     }
 
@@ -306,14 +180,6 @@ struct ChatView: View {
         case "rules": store.toast = "在「我 › 安全 › 审批规则」里管理"
         case "model", "effort", "mode": store.toast = "在输入框上面那排胶囊里切换"
         default: store.toast = "这个命令还没实现"
-        }
-    }
-
-    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        if animated && !reduceMotion {
-            withAnimation(Motion.quick) { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
-        } else {
-            proxy.scrollTo(bottomAnchor, anchor: .bottom)
         }
     }
 
